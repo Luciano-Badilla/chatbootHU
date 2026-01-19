@@ -55,7 +55,9 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   }, [selectedChatId])
 
   useEffect(() => {
-    const client = mqtt.connect("ws://127.0.0.1:9001")
+    const mosquitto_host = (import.meta.env.VITE_MOSQUITTO_HOST);
+
+    const client = mqtt.connect("ws://" + mosquitto_host + ":9001")
 
     client.on("connect", () => {
       client.subscribe("sidebar/chat")
@@ -114,6 +116,8 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
 
     return () => client.end()
   }, [selectedChatId])
+
+  console.log(selectedChat);
 
 
   return (

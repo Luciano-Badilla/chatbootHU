@@ -97,7 +97,9 @@ export default function ChatMain({ chat }: ChatMainProps) {
   useEffect(() => {
     if (!chat) return
 
-    const client = mqtt.connect("ws://127.0.0.1:9001")
+    const mosquitto_host = (import.meta.env.VITE_MOSQUITTO_HOST);
+
+    const client = mqtt.connect("ws://"+mosquitto_host+":9001")
 
     client.on("connect", () => {
       const topic = `chat/${chat.id}`

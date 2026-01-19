@@ -32,6 +32,7 @@ class ChatController extends Controller
                         : 0,
                     'online' => false, // placeholder
                     'avatar' => $contact->profile_pic,
+                    'bot_enabled' => $chat->bot_enabled
                 ];
             });
 

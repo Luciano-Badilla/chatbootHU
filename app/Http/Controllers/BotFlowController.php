@@ -6,13 +6,14 @@ namespace App\Http\Controllers;
 use App\Models\BotFlow;
 use App\Models\BotNode;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 
 class BotFlowController extends Controller
 {
     public function index()
     {
-        $flows = BotFlow::select('id', 'name', 'is_active')->get();
+        $flows = BotFlow::all();
 
         return Inertia::render('BotFlowBuilder', [
             'flows' => $flows
@@ -21,7 +22,7 @@ class BotFlowController extends Controller
 
     public function apiIndex()
     {
-        $flows = BotFlow::select('id', 'name', 'is_active')->get();
+        $flows = BotFlow::all();
 
         return response()->json([
             'flows' => $flows
@@ -61,10 +62,10 @@ class BotFlowController extends Controller
         ]);
 
         $node = BotNode::create([
-            'flow_id'  => $flow->id,
-            'key'      => $data['key'] ?? null,
-            'type'     => $data['type'],
-            'body'     => $data['body'] ?? null,
+            'flow_id' => $flow->id,
+            'key' => $data['key'] ?? null,
+            'type' => $data['type'],
+            'body' => $data['body'] ?? null,
             'settings' => $data['settings'] ?? [],
         ]);
 
@@ -92,15 +93,29 @@ class BotFlowController extends Controller
         }
 
         $data = validator($payload, [
-            'key'          => 'nullable|string',
-            'type'         => 'required|string',
-            'body'         => 'nullable|string',
-            'settings'     => 'array',            // <- ya no nullable
+            'key' => 'nullable|string',
+            'type' => 'required|string',
+            'body' => 'nullable|string',
+            'settings' => 'array',            // <- ya no nullable
             'next_node_id' => 'nullable|integer',
         ])->validate();
 
         $node->update($data);
 
         return response()->json($node);
+    }
+
+    public function makeDefault(BotFlow $flow)
+    {
+        if (!$flow->is_active) {
+            return response()->json(['error' => 'No podés marcar como default un flow inactivo'], 422);
+        }
+
+        DB::transaction(function () use ($flow) {
+            BotFlow::where('is_default', true)->update(['is_default' => false]);
+            $flow->update(['is_default' => true]);
+        });
+
+        return response()->json(['ok' => true, 'default_flow_id' => $flow->id]);
     }
 }

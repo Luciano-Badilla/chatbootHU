@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class BotFlow extends Model
 {
-    protected $fillable = ['name', 'description', 'start_node_id', 'is_active'];
+    protected $fillable = ['name', 'description', 'start_node_id', 'is_active', 'is_default'];
 
     public function nodes()
     {
@@ -18,4 +18,10 @@ class BotFlow extends Model
     {
         return $this->belongsTo(BotNode::class, 'start_node_id');
     }
+
+    public function scopeDefault($query)
+    {
+        return $query->where('is_default', true);
+    }
+
 }

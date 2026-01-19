@@ -5,6 +5,8 @@ import { Plus, RefreshCcw, ChevronRight, Zap } from "lucide-react"
 import { Button } from "shadcn/components/ui/button"
 import { Input } from "shadcn/components/ui/input"
 import { Textarea } from "shadcn/components/ui/textarea"
+import { Checkbox } from "shadcn/components/ui/checkbox"
+
 import {
   Select,
   SelectContent,
@@ -29,6 +31,7 @@ interface BotFlow {
   description?: string | null
   start_node_id?: number | null
   is_active: boolean
+  is_default?: boolean
 }
 
 interface BotNode {
@@ -45,7 +48,6 @@ const API_BASE = (import.meta.env.VITE_APP_URL || "").replace(/\/$/, "")
 
 const MAX_BUTTONS = 2 // si querés 3 (lo que permite WhatsApp), poné 3
 const MAX_LIST_ROWS = 10
-
 
 export default function BotFlowBuilder() {
   const [flows, setFlows] = useState<BotFlow[]>([])
@@ -85,8 +87,10 @@ export default function BotFlowBuilder() {
         const data = await res.json()
         const list: BotFlow[] = data.flows ?? data
         setFlows(list)
+
         if (!selectedFlowId && list.length > 0) {
-          setSelectedFlowId(list[0].id)
+          const def = list.find((f) => f.is_default)
+          setSelectedFlowId(def?.id ?? list[0].id)
         }
       } catch (err) {
         console.error("Error de red al cargar flows:", err)
@@ -96,6 +100,7 @@ export default function BotFlowBuilder() {
     }
 
     loadFlows()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // 🔹 Cargar nodes cuando cambia el flow seleccionado
@@ -110,9 +115,7 @@ export default function BotFlowBuilder() {
     const loadNodes = async () => {
       try {
         setLoadingNodes(true)
-        const res = await fetch(
-          `${API_BASE}/api/bot/flows/${selectedFlowId}/nodes`,
-        )
+        const res = await fetch(`${API_BASE}/api/bot/flows/${selectedFlowId}/nodes`)
         if (!res.ok) {
           console.error("Error al cargar nodes", await res.text())
           return
@@ -122,10 +125,8 @@ export default function BotFlowBuilder() {
         setNodes(list)
 
         if (list.length > 0) {
-          const startId = flows.find((f) => f.id === selectedFlowId)
-            ?.start_node_id
-          const startNode =
-            (startId && list.find((n) => n.id === startId)) ?? list[0]
+          const startId = flows.find((f) => f.id === selectedFlowId)?.start_node_id
+          const startNode = (startId && list.find((n) => n.id === startId)) ?? list[0]
           setSelectedNodeId(startNode.id)
         } else {
           setSelectedNodeId(null)
@@ -177,6 +178,25 @@ export default function BotFlowBuilder() {
     }
   }
 
+  const handleMakeDefault = async (flowId: number) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/bot/flows/${flowId}/make-default`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      })
+
+      if (!res.ok) {
+        console.error("Error al setear default", await res.text())
+        return
+      }
+
+      // actualizar estado local: solo uno default
+      setFlows((prev) => prev.map((f) => ({ ...f, is_default: f.id === flowId })))
+    } catch (err) {
+      console.error("Error de red seteando default:", err)
+    }
+  }
+
   // 🔹 Crear nodo nuevo
   const handleCreateNode = async () => {
     if (!selectedFlowId) return
@@ -185,19 +205,16 @@ export default function BotFlowBuilder() {
 
     setCreatingNode(true)
     try {
-      const res = await fetch(
-        `${API_BASE}/api/bot/flows/${selectedFlowId}/nodes`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            key,
-            type: "text",
-            body: "",
-            settings: {},
-          }),
-        },
-      )
+      const res = await fetch(`${API_BASE}/api/bot/flows/${selectedFlowId}/nodes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          key,
+          type: "text",
+          body: "",
+          settings: {},
+        }),
+      })
       if (!res.ok) {
         console.error("Error al crear node", await res.text())
         return
@@ -228,9 +245,7 @@ export default function BotFlowBuilder() {
         return
       }
       const updated: BotNode = await res.json()
-      setNodes((prev) =>
-        prev.map((n) => (n.id === updated.id ? updated : n)),
-      )
+      setNodes((prev) => prev.map((n) => (n.id === updated.id ? updated : n)))
     } catch (err) {
       console.error("Error de red al guardar node:", err)
     } finally {
@@ -239,9 +254,7 @@ export default function BotFlowBuilder() {
   }
 
   // Helpers para settings según tipo
-  // Reemplazá este helper por este:
   const ensureSettings = <T,>(defaults: T): T => {
-    // defaults primero, y luego lo que ya tenga el nodo
     return {
       ...defaults,
       ...(editNode?.settings ?? {}),
@@ -253,11 +266,30 @@ export default function BotFlowBuilder() {
       .filter((n) => n.id !== editNode?.id)
       .map((n) => ({
         id: n.id,
-        label: `${n.key || `node_${n.id}`} (ID: ${n.id})`,
+        label: `${n.key}`,
       }))
   }, [nodes, editNode?.id])
 
+  const nodesById = useMemo(() => {
+    return new Map(nodes.map((n) => [n.id, n]))
+  }, [nodes])
 
+  const nodesWithNextKey = useMemo(() => {
+    return nodes.map((node) => {
+      const next = node.next_node_id ? nodesById.get(node.next_node_id) : undefined
+
+      return {
+        ...node,
+        nextNodeKey: next?.key ?? (next ? `node_${next.id}` : null),
+      }
+    })
+  }, [nodes, nodesById])
+
+  const startNodeLabel = useMemo(() => {
+    if (!selectedFlow?.start_node_id) return "no definido"
+    const n = nodes.find((x) => x.id === selectedFlow.start_node_id)
+    return n?.key || (n ? `node_${n.id}` : `Cargando...`)
+  }, [selectedFlow?.start_node_id, nodes])
 
   // 🔹 Inputs de settings específicos
   const renderSettingsFields = () => {
@@ -271,7 +303,7 @@ export default function BotFlowBuilder() {
       })
       const buttons = settings.buttons ?? []
 
-      const updateButton = (index: number, field: string, value: string) => {
+      const updateButton = (index: number, field: string, value: any) => {
         const newButtons = buttons.map((b: any, i: number) =>
           i === index ? { ...b, [field]: value } : b,
         )
@@ -294,22 +326,14 @@ export default function BotFlowBuilder() {
         ]
 
         setEditNode((prev) =>
-          prev
-            ? { ...prev, settings: { ...settings, buttons: newButtons } }
-            : prev,
+          prev ? { ...prev, settings: { ...settings, buttons: newButtons } } : prev,
         )
       }
-
 
       const removeButton = (index: number) => {
         const newButtons = buttons.filter((_: any, i: number) => i !== index)
         setEditNode((prev) =>
-          prev
-            ? {
-              ...prev,
-              settings: { ...settings, buttons: newButtons },
-            }
-            : prev,
+          prev ? { ...prev, settings: { ...settings, buttons: newButtons } } : prev,
         )
       }
 
@@ -333,8 +357,8 @@ export default function BotFlowBuilder() {
                 Límite alcanzado: máximo {MAX_BUTTONS} botones.
               </p>
             )}
-
           </div>
+
           <div className="space-y-3">
             {buttons.map((btn: any, index: number) => (
               <div
@@ -350,17 +374,18 @@ export default function BotFlowBuilder() {
                   />
                   <Input
                     value={btn.title ?? ""}
-                    onChange={(e) =>
-                      updateButton(index, "title", e.target.value)
-                    }
+                    onChange={(e) => updateButton(index, "title", e.target.value)}
                     placeholder="Texto del botón"
                     className="text-xs"
                   />
                 </div>
+
                 <div className="flex gap-2 items-center">
                   <Select
                     value={btn.next_node_id ? String(btn.next_node_id) : "none"}
-                    onValueChange={(val) => updateButton(index, "next_node_id", val === "none" ? null : Number(val))}
+                    onValueChange={(val) =>
+                      updateButton(index, "next_node_id", val === "none" ? null : Number(val))
+                    }
                   >
                     <SelectTrigger className="h-8 text-xs">
                       <SelectValue placeholder="Ir a..." />
@@ -409,17 +434,12 @@ export default function BotFlowBuilder() {
       })
       const rows = settings.rows ?? []
 
-      const updateRow = (index: number, field: string, value: string) => {
+      const updateRow = (index: number, field: string, value: any) => {
         const newRows = rows.map((r: any, i: number) =>
           i === index ? { ...r, [field]: value } : r,
         )
         setEditNode((prev) =>
-          prev
-            ? {
-              ...prev,
-              settings: { ...settings, rows: newRows },
-            }
-            : prev,
+          prev ? { ...prev, settings: { ...settings, rows: newRows } } : prev,
         )
       }
 
@@ -433,26 +453,18 @@ export default function BotFlowBuilder() {
             title: "Opción lista",
             description: "",
             next_node_id: null,
-
           },
         ]
 
         setEditNode((prev) =>
-          prev
-            ? { ...prev, settings: { ...settings, rows: newRows } }
-            : prev,
+          prev ? { ...prev, settings: { ...settings, rows: newRows } } : prev,
         )
       }
 
       const removeRow = (index: number) => {
         const newRows = rows.filter((_: any, i: number) => i !== index)
         setEditNode((prev) =>
-          prev
-            ? {
-              ...prev,
-              settings: { ...settings, rows: newRows },
-            }
-            : prev,
+          prev ? { ...prev, settings: { ...settings, rows: newRows } } : prev,
         )
       }
 
@@ -470,10 +482,7 @@ export default function BotFlowBuilder() {
                     prev
                       ? {
                         ...prev,
-                        settings: {
-                          ...settings,
-                          button_text: e.target.value,
-                        },
+                        settings: { ...settings, button_text: e.target.value },
                       }
                       : prev,
                   )
@@ -481,6 +490,7 @@ export default function BotFlowBuilder() {
                 className="text-xs"
               />
             </div>
+
             <div>
               <label className="text-xs mb-1 block text-muted-foreground">
                 Título de la sección
@@ -492,10 +502,7 @@ export default function BotFlowBuilder() {
                     prev
                       ? {
                         ...prev,
-                        settings: {
-                          ...settings,
-                          section_title: e.target.value,
-                        },
+                        settings: { ...settings, section_title: e.target.value },
                       }
                       : prev,
                   )
@@ -523,7 +530,6 @@ export default function BotFlowBuilder() {
                 Límite alcanzado: máximo {MAX_LIST_ROWS} opciones en una lista.
               </p>
             )}
-
           </div>
 
           <div className="space-y-3">
@@ -541,25 +547,25 @@ export default function BotFlowBuilder() {
                   />
                   <Input
                     value={row.title ?? ""}
-                    onChange={(e) =>
-                      updateRow(index, "title", e.target.value)
-                    }
+                    onChange={(e) => updateRow(index, "title", e.target.value)}
                     placeholder="Título visible"
                     className="text-xs"
                   />
                 </div>
+
                 <Input
                   value={row.description ?? ""}
-                  onChange={(e) =>
-                    updateRow(index, "description", e.target.value)
-                  }
+                  onChange={(e) => updateRow(index, "description", e.target.value)}
                   placeholder="Descripción (opcional)"
                   className="text-xs mt-1"
                 />
+
                 <div className="flex gap-2 items-center mt-1">
                   <Select
                     value={row.next_node_id ? String(row.next_node_id) : "none"}
-                    onValueChange={(val) => updateRow(index, "next_node_id", val === "none" ? null : Number(val))}
+                    onValueChange={(val) =>
+                      updateRow(index, "next_node_id", val === "none" ? null : Number(val))
+                    }
                   >
                     <SelectTrigger className="h-8 text-xs">
                       <SelectValue placeholder="Ir a..." />
@@ -597,18 +603,15 @@ export default function BotFlowBuilder() {
     }
 
     if (t === "input") {
+      // ✅ Unificamos "Siguiente nodo" en la columna next_node_id (no en settings)
       const settings = ensureSettings<{
         variable: string
         validation_regex: string
         error_message: string
-        next_node_id: number
       }>({
         variable: "",
         validation_regex: "",
-        error_message:
-          "Valor inválido, por favor revisá el formato e intentá de nuevo.",
-        next_node_id: null as number | null,
-
+        error_message: "Valor inválido, por favor revisá el formato e intentá de nuevo.",
       })
 
       const update = (field: keyof typeof settings, value: string) => {
@@ -662,42 +665,6 @@ export default function BotFlowBuilder() {
               className="text-xs"
             />
           </div>
-
-          <div>
-            <label className="text-xs mb-1 block text-muted-foreground">
-              Siguiente nodo (next_node_id)
-            </label>
-
-            <Select
-              value={settings.next_node_id ? String(settings.next_node_id) : "none"}
-              onValueChange={(val) =>
-                setEditNode((prev) =>
-                  prev
-                    ? {
-                      ...prev,
-                      settings: {
-                        ...settings,
-                        next_node_id: val === "none" ? null : Number(val),
-                      },
-                    }
-                    : prev,
-                )
-              }
-            >
-              <SelectTrigger className="h-8 text-xs">
-                <SelectValue placeholder="Seleccionar..." />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">Finalizar flujo</SelectItem>
-                {nextNodeOptions.map((opt) => (
-                  <SelectItem key={opt.id} value={String(opt.id)}>
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-          </div>
         </div>
       )
     }
@@ -705,6 +672,8 @@ export default function BotFlowBuilder() {
     // handoff no tiene settings extra
     return null
   }
+
+  const isLinearType = (t: NodeType) => t === "text" || t === "input"
 
   // 🔹 Render: layout general
   return (
@@ -714,30 +683,21 @@ export default function BotFlowBuilder() {
         <div>
           <h1 className="font-semibold text-lg flex items-center gap-2">
             Constructor de flujo de bot
-            <span className="text-xs font-normal opacity-80">
-              (árbol de decisiones)
-            </span>
+            <span className="text-xs font-normal opacity-80">(árbol de decisiones)</span>
           </h1>
           {selectedFlow ? (
             <p className="text-xs mt-1 opacity-80">
-              Editando flujo:{" "}
-              <span className="font-semibold">{selectedFlow.name}</span>
+              Editando flujo: <span className="font-semibold">{selectedFlow.name}</span>
             </p>
           ) : (
-            <p className="text-xs mt-1 opacity-80">
-              Selecciona un flujo o crea uno nuevo.
-            </p>
+            <p className="text-xs mt-1 opacity-80">Selecciona un flujo o crea uno nuevo.</p>
           )}
         </div>
-
         {selectedFlow && (
           <div className="inline-flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-full text-xs">
             <Zap className="h-3 w-3 text-yellow-300" />
             <span>
-              Nodo inicial ID:{" "}
-              <span className="font-semibold">
-                {selectedFlow.start_node_id ?? "no definido"}
-              </span>
+              Nodo inicial: <span className="font-semibold">{startNodeLabel ?? "no definido"}</span>
             </span>
           </div>
         )}
@@ -748,9 +708,7 @@ export default function BotFlowBuilder() {
         {/* Sidebar de Flows */}
         <div className="w-64 flex flex-col border rounded-xl bg-white p-3 gap-3 shadow-sm">
           <div className="flex items-center justify-between">
-            <h2 className="font-semibold text-sm text-[#013765]">
-              Flujos del bot
-            </h2>
+            <h2 className="font-semibold text-sm text-[#013765]">Flujos del bot</h2>
             <Button
               size="icon"
               variant="ghost"
@@ -763,41 +721,62 @@ export default function BotFlowBuilder() {
 
           <div className="space-y-2 flex-1 overflow-y-auto">
             {loadingFlows ? (
-              <p className="text-xs text-muted-foreground">
-                Cargando flujos...
-              </p>
+              <p className="text-xs text-muted-foreground">Cargando flujos...</p>
             ) : flows.length === 0 ? (
-              <p className="text-xs text-muted-foreground">
-                No hay flujos creados aún.
-              </p>
+              <p className="text-xs text-muted-foreground">No hay flujos creados aún.</p>
             ) : (
               flows.map((flow) => (
-                <button
+                <div
                   key={flow.id}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setSelectedFlowId(flow.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault()
+                      setSelectedFlowId(flow.id)
+                    }
+                  }}
                   className={cn(
-                    "w-full text-left px-3 py-2 rounded-lg text-xs border flex items-center justify-between transition-colors",
+                    "w-full text-left px-3 py-2 rounded-lg text-xs border flex items-center justify-between transition-colors cursor-pointer select-none",
                     selectedFlowId === flow.id
                       ? "bg-[#013765] text-white border-[#013765]"
                       : "bg-white hover:bg-slate-100 border-slate-200",
                   )}
                 >
                   <span className="truncate">{flow.name}</span>
-                  {flow.is_active && (
-                    <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full ml-2">
-                      activo
-                    </span>
-                  )}
-                </button>
+
+                  <div className="flex items-center gap-2 ml-2 shrink-0">
+                    {flow.is_default ? (
+                      <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full">
+                        Activo
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className={cn(
+                          "text-[10px] px-2 py-0.5 rounded-full border",
+                          selectedFlowId === flow.id
+                            ? "border-white/30 bg-white/10 text-white hover:bg-white/15"
+                            : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100",
+                        )}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleMakeDefault(flow.id)
+                        }}
+                      >
+                        Activar
+                      </button>
+                    )}
+                  </div>
+                </div>
               ))
             )}
           </div>
 
           {/* Crear flujo */}
           <div className="border-t pt-2 mt-2">
-            <p className="text-[11px] text-muted-foreground mb-1">
-              Crear nuevo flujo
-            </p>
+            <p className="text-[11px] text-muted-foreground mb-1">Crear nuevo flujo</p>
             <div className="flex gap-1">
               <Input
                 value={newFlowName}
@@ -823,9 +802,7 @@ export default function BotFlowBuilder() {
             {/* Lista de nodos */}
             <div className="w-80 border rounded-xl bg-white p-3 flex flex-col shadow-sm">
               <div className="flex items-center justify-between mb-2">
-                <h3 className="font-medium text-sm text-[#013765]">
-                  Nodos del flujo
-                </h3>
+                <h3 className="font-medium text-sm text-[#013765]">Nodos del flujo</h3>
                 <Button
                   size="icon"
                   variant="outline"
@@ -839,9 +816,7 @@ export default function BotFlowBuilder() {
                           const list: BotNode[] = data.nodes ?? data
                           setNodes(list)
                         })
-                        .catch((err) =>
-                          console.error("Error recargando nodes:", err),
-                        )
+                        .catch((err) => console.error("Error recargando nodes:", err))
                         .finally(() => setLoadingNodes(false))
                     }
                   }}
@@ -852,15 +827,11 @@ export default function BotFlowBuilder() {
 
               <div className="space-y-2 flex-1 overflow-y-auto">
                 {loadingNodes ? (
-                  <p className="text-xs text-muted-foreground">
-                    Cargando nodos...
-                  </p>
+                  <p className="text-xs text-muted-foreground">Cargando nodos...</p>
                 ) : nodes.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">
-                    No hay nodos para este flujo.
-                  </p>
+                  <p className="text-xs text-muted-foreground">No hay nodos para este flujo.</p>
                 ) : (
-                  nodes.map((node) => (
+                  nodesWithNextKey.map((node) => (
                     <button
                       key={node.id}
                       onClick={() => setSelectedNodeId(node.id)}
@@ -876,33 +847,6 @@ export default function BotFlowBuilder() {
                           <span className="font-medium truncate">
                             {node.key || `node_${node.id}`}
                           </span>
-
-                          {/* ID visible + clic para copiar */}
-                          <span
-                            role="button"
-                            tabIndex={0}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              navigator.clipboard.writeText(String(node.id))
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === " ") {
-                                e.preventDefault()
-                                e.stopPropagation()
-                                navigator.clipboard.writeText(String(node.id))
-                              }
-                            }}
-                            className={cn(
-                              "text-[10px] px-1.5 py-0.5 rounded border cursor-pointer select-none inline-flex items-center",
-                              selectedNodeId === node.id
-                                ? "border-white/30 bg-white/10 text-white"
-                                : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100",
-                            )}
-                            title="Click para copiar ID"
-                          >
-                            ID: {node.id}
-                          </span>
-
                         </div>
 
                         <span className="text-[10px] uppercase tracking-wide shrink-0">
@@ -913,7 +857,7 @@ export default function BotFlowBuilder() {
                       {node.next_node_id && (
                         <div className="flex items-center text-[10px] opacity-80">
                           <ChevronRight className="h-3 w-3 mr-1" />
-                          Siguiente ID: {node.next_node_id}
+                          Siguiente: {node.nextNodeKey}
                         </div>
                       )}
                     </button>
@@ -924,9 +868,7 @@ export default function BotFlowBuilder() {
               {/* Crear nodo */}
               {selectedFlowId && (
                 <div className="border-t pt-2 mt-2">
-                  <p className="text-[11px] text-muted-foreground mb-1">
-                    Nuevo nodo
-                  </p>
+                  <p className="text-[11px] text-muted-foreground mb-1">Nuevo nodo</p>
                   <div className="flex gap-1">
                     <Input
                       value={newNodeKey}
@@ -950,20 +892,19 @@ export default function BotFlowBuilder() {
             {/* Editor del nodo seleccionado */}
             <div className="flex-1">
               <Card className="h-full flex flex-col shadow-sm">
-                <CardHeader className="pb-2 border-b border-slate-200 bg-slate-50">
+                <CardHeader className="pb-2 border-b border-slate-200 bg-slate-50 bg-white rounded-t-xl">
                   <CardTitle className="text-sm text-[#013765]">
                     Editor de nodo seleccionado
                   </CardTitle>
                   <CardDescription className="text-xs">
-                    Configurá el contenido y el comportamiento de este paso del
-                    bot.
+                    Configurá el contenido y el comportamiento de este paso del bot.
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="flex-1 flex flex-col gap-4 overflow-y-auto pt-4">
+
+                <CardContent className="flex-1 flex flex-col gap-4 overflow-y-auto pt-4 bg-white rounded-b-xl">
                   {!editNode ? (
                     <p className="text-xs text-muted-foreground">
-                      Selecciona un nodo en la lista de la izquierda para
-                      editarlo.
+                      Selecciona un nodo en la lista de la izquierda para editarlo.
                     </p>
                   ) : (
                     <>
@@ -983,6 +924,7 @@ export default function BotFlowBuilder() {
                             className="text-xs"
                           />
                         </div>
+
                         <div>
                           <label className="text-xs mb-1 block text-muted-foreground">
                             Tipo de nodo
@@ -990,10 +932,36 @@ export default function BotFlowBuilder() {
                           <Select
                             value={editNode.type}
                             onValueChange={(val: NodeType) =>
-                              setEditNode((prev) =>
-                                prev ? { ...prev, type: val } : prev,
-                              )
+                              setEditNode((prev) => {
+                                if (!prev) return prev
+
+                                const linear = val === "text" || val === "input"
+
+                                const cleanedSettings = (() => {
+                                  const s = { ...(prev.settings ?? {}) }
+
+                                  // si el nuevo tipo NO es lineal, borramos auto-advance
+                                  if (!linear) {
+                                    delete s.auto_advance
+                                    delete s.auto_advance_delay_ms
+                                    delete s.auto_advance_max_hops
+                                  }
+
+                                  // opcional: si querés, al pasar a buttons/list/handoff también podés limpiar otras cosas
+                                  return s
+                                })()
+
+                                return {
+                                  ...prev,
+                                  type: val,
+                                  // limpiar next_node_id si el nuevo tipo NO es lineal
+                                  ...(linear ? {} : { next_node_id: null }),
+                                  // aplicar settings limpiados
+                                  settings: cleanedSettings,
+                                }
+                              })
                             }
+
                           >
                             <SelectTrigger className="h-8 text-xs">
                               <SelectValue />
@@ -1002,12 +970,8 @@ export default function BotFlowBuilder() {
                               <SelectItem value="text">Texto</SelectItem>
                               <SelectItem value="buttons">Botones</SelectItem>
                               <SelectItem value="list">Lista</SelectItem>
-                              <SelectItem value="input">
-                                Input (capturar dato)
-                              </SelectItem>
-                              <SelectItem value="handoff">
-                                Handoff a operador
-                              </SelectItem>
+                              <SelectItem value="input">Input (capturar dato)</SelectItem>
+                              <SelectItem value="handoff">Handoff a operador</SelectItem>
                             </SelectContent>
                           </Select>
                         </div>
@@ -1016,7 +980,7 @@ export default function BotFlowBuilder() {
                       {/* Texto principal */}
                       <div>
                         <label className="text-xs mb-1 block text-muted-foreground">
-                          Mensaje (body)
+                          Mensaje
                         </label>
                         <Textarea
                           value={editNode.body ?? ""}
@@ -1034,42 +998,127 @@ export default function BotFlowBuilder() {
                       {/* Settings específicos según tipo */}
                       {renderSettingsFields()}
 
-                      {/* Siguiente nodo lineal (opcional) */}
-                      <div>
-                        <label className="text-xs mb-1 block text-muted-foreground">
-                          Siguiente nodo (next_node_id)
-                        </label>
+                      {/* ✅ Siguiente nodo lineal (solo para text + input) */}
+                      {isLinearType(editNode.type) && (
+                        <div>
+                          <label className="text-xs mb-1 block text-muted-foreground">
+                            Siguiente nodo
+                          </label>
 
-                        <Select
-                          value={editNode.next_node_id ? String(editNode.next_node_id) : "none"}
-                          onValueChange={(val) =>
-                            setEditNode((prev) =>
-                              prev
-                                ? { ...prev, next_node_id: val === "none" ? null : Number(val) }
-                                : prev,
-                            )
-                          }
-                        >
-                          <SelectTrigger className="h-8 text-xs">
-                            <SelectValue placeholder="Seleccionar siguiente nodo..." />
-                          </SelectTrigger>
+                          <Select
+                            value={editNode.next_node_id ? String(editNode.next_node_id) : "none"}
+                            onValueChange={(val) =>
+                              setEditNode((prev) =>
+                                prev
+                                  ? {
+                                    ...prev,
+                                    next_node_id: val === "none" ? null : Number(val),
+                                  }
+                                  : prev,
+                              )
+                            }
+                          >
+                            <SelectTrigger className="h-8 text-xs">
+                              <SelectValue placeholder="Seleccionar siguiente nodo..." />
+                            </SelectTrigger>
 
-                          <SelectContent>
-                            <SelectItem value="none">Finalizar flujo</SelectItem>
+                            <SelectContent>
+                              <SelectItem value="none">Finalizar flujo</SelectItem>
+                              {nextNodeOptions.map((opt) => (
+                                <SelectItem key={opt.id} value={String(opt.id)}>
+                                  {opt.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
 
-                            {nextNodeOptions.map((opt) => (
-                              <SelectItem key={opt.id} value={String(opt.id)}>
-                                {opt.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                          <p className="text-[10px] text-muted-foreground mt-1">
+                            Para avanzar al próximo nodo (lineal).
+                          </p>
+                        </div>
+                      )}
 
-                        <p className="text-[10px] text-muted-foreground mt-1">
-                          Se usa para avanzar automáticamente después de un nodo de texto.
-                        </p>
-                      </div>
+                      {/* ✅ Auto-disparo (solo para text + input) */}
+                      {isLinearType(editNode.type) && (
+                        <div className="border rounded-lg p-3 bg-muted/20 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <Checkbox
+                              checked={Boolean((editNode.settings ?? {}).auto_advance)}
+                              onCheckedChange={(checked) =>
+                                setEditNode((prev) =>
+                                  prev
+                                    ? {
+                                      ...prev,
+                                      settings: {
+                                        ...(prev.settings ?? {}),
+                                        auto_advance: Boolean(checked),
+                                      },
+                                    }
+                                    : prev,
+                                )
+                              }
+                            />
+                            <div className="min-w-0">
+                              <p className="text-xs font-medium">
+                                Auto-disparar siguiente mensaje
+                              </p>
+                              <p className="text-[10px] text-muted-foreground">
+                                Si está activo, el bot enviará el próximo nodo automáticamente (sin esperar respuesta).
+                              </p>
+                            </div>
+                          </div>
 
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="text-xs mb-1 block text-muted-foreground">
+                                Delay (ms)
+                              </label>
+                              <Input
+                                value={String((editNode.settings ?? {}).auto_advance_delay_ms ?? 0)}
+                                onChange={(e) =>
+                                  setEditNode((prev) =>
+                                    prev
+                                      ? {
+                                        ...prev,
+                                        settings: {
+                                          ...(prev.settings ?? {}),
+                                          auto_advance_delay_ms: Number(e.target.value || 0),
+                                        },
+                                      }
+                                      : prev,
+                                  )
+                                }
+                                className="text-xs"
+                                placeholder="0"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="text-xs mb-1 block text-muted-foreground">
+                                Máx saltos (anti-loop)
+                              </label>
+                              <Input
+                                value={String((editNode.settings ?? {}).auto_advance_max_hops ?? 5)}
+                                onChange={(e) =>
+                                  setEditNode((prev) =>
+                                    prev
+                                      ? {
+                                        ...prev,
+                                        settings: {
+                                          ...(prev.settings ?? {}),
+                                          auto_advance_max_hops: Number(e.target.value || 5),
+                                        },
+                                      }
+                                      : prev,
+                                  )
+                                }
+                                className="text-xs"
+                                placeholder="5"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Botón guardar */}
                       <div className="mt-2">

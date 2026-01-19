@@ -11,14 +11,19 @@ class Chat extends Model
 
     protected $fillable = [
         'contact_id',
+        'bot_flow_id',
+        'bot_node_id',
         'title',
         'status',
-
+        'bot_enabled',
+        'bot_step',
+        'bot_state'
     ];
+
 
     protected $casts = [
         'bot_enabled' => 'boolean',
-        'bot_state'   => 'array',
+        'bot_state' => 'array',
     ];
 
     public function contact()

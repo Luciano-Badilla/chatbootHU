@@ -26,6 +26,7 @@ Route::post('/chats/{chat}/bot', [WhatsAppController::class, 'updateBotStatus'])
 
 Route::get('/bot/flows', [BotFlowController::class, 'apiIndex']);
 Route::post('/bot/flows', [BotFlowController::class, 'store']);
+Route::post('/bot/flows/{flow}/make-default', [BotFlowController::class, 'makeDefault']);
 
 Route::get('/bot/flows/{flow}/nodes', [BotFlowController::class, 'nodes']);
 Route::post('/bot/flows/{flow}/nodes', [BotFlowController::class, 'storeNode']);
