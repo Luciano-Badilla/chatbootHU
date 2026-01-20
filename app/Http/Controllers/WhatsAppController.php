@@ -192,20 +192,16 @@ class WhatsAppController extends Controller
         // 5) Crear / obtener chat
         // --------------------------------
 
-        $flow = $this->getDefaultFlow();
-        if (!$flow || !$flow->start_node_id) {
-            Log::error('No hay bot flow default activo o no tiene start_node_id.');
-            return response('EVENT_RECEIVED', 200);
-        }
-
+        $flow = $this->getDefaultFlow() ?? null;
+        
         // Ideal: lock para evitar doble webhook avanzando el puntero 2 veces
         $chat = Chat::where('contact_id', $contact->id)->lockForUpdate()->first();
 
         if (!$chat) {
             $chat = Chat::create([
                 'contact_id' => $contact->id,
-                'bot_flow_id' => $flow->id,
-                'bot_node_id' => $flow->start_node_id,
+                'bot_flow_id' => $flow->id ?? null,
+                'bot_node_id' => $flow->start_node_id ?? null,
                 'status' => 'open',
                 'bot_enabled' => true,
                 'bot_state' => [],
@@ -225,7 +221,7 @@ class WhatsAppController extends Controller
 
             // Si por algún motivo quedó sin nodo, iniciamos
             if (!$chat->bot_node_id) {
-                $chat->bot_node_id = $flow->start_node_id;
+                $chat->bot_node_id = $flow->start_node_id ?? null;
             }
 
             $chat->save();

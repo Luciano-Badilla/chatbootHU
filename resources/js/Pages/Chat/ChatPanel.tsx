@@ -117,9 +117,6 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     return () => client.end()
   }, [selectedChatId])
 
-  console.log(selectedChat);
-
-
   return (
     // Antes: <div className="flex flex-1">
     <div className="flex h-[calc(100vh-64px)] min-h-0">
