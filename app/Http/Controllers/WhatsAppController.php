@@ -193,7 +193,7 @@ class WhatsAppController extends Controller
         // --------------------------------
 
         $flow = $this->getDefaultFlow() ?? null;
-        
+
         // Ideal: lock para evitar doble webhook avanzando el puntero 2 veces
         $chat = Chat::where('contact_id', $contact->id)->lockForUpdate()->first();
 
@@ -353,15 +353,20 @@ class WhatsAppController extends Controller
                 // Reset si el nodo enviado fue terminal
                 $flowForRuntime = $this->getDefaultFlow();
                 if ($flowForRuntime) {
-                    $this->maybeResetAfterSendingNode($chat, $flowForRuntime, $nextNode);
+                    $didReset = $this->maybeResetAfterSendingNode($chat, $flowForRuntime, $nextNode);
 
-                    // ✅ AUTO-DISPARO: después de enviar el nodo, seguir solos si corresponde
                     $this->runAutoAdvance($chat, $flowForRuntime, $nextNode);
+
+                    /* if ($didReset && $this->shouldAutoAdvance($nextNode) && $flowForRuntime->start_node_id) {
+                        $start = BotNode::find($flowForRuntime->start_node_id);
+                        if ($start) {
+                            $this->sendBotNode($chat, $start);
+                            // opcional: si el start también tiene auto_advance, lo corrés
+                            $this->runAutoAdvance($chat, $flowForRuntime, $start);
+                        }
+                    }*/
                 }
             }
-
-
-
         } catch (\Throwable $e) {
             Log::error('Error en bot DB: ' . $e->getMessage());
         }
@@ -572,6 +577,67 @@ class WhatsAppController extends Controller
 
     private function handleBotFromDb(Chat $chat, Message $incoming, ?string $interactiveReplyId = null): ?BotNode
     {
+        $pending = $this->getPendingInput($chat);
+
+        if ($pending) {
+            $value = trim((string) ($incoming->body ?? ''));
+
+            if ($value === '') {
+                $state = $this->getState($chat);
+                $state['pending_input']['last_error'] = $pending['error_message'] ?? 'Valor inválido, intentá de nuevo.';
+                $this->setState($chat, $state);
+
+                return BotNode::find($pending['node_id']);
+            }
+
+
+            $regex = trim((string) ($pending['validation_regex'] ?? ''));
+
+            if ($regex !== '') {
+                $pattern = $regex;
+                $hasDelimiters = str_starts_with($pattern, '/') && strrpos($pattern, '/') !== 0;
+
+                if (!$hasDelimiters) {
+                    $pattern = '/' . str_replace('/', '\/', $pattern) . '/';
+                }
+
+                if (@preg_match($pattern, '') !== false && !preg_match($pattern, $value)) {
+                    $state = $this->getState($chat);
+                    $state['pending_input']['last_error'] = $pending['error_message'] ?? 'Valor inválido, intentá de nuevo.';
+                    $this->setState($chat, $state);
+
+                    return BotNode::find($pending['node_id']);
+                }
+            }
+
+            // ✅ guardar variable
+            $varName = trim((string) ($pending['variable'] ?? ''));
+            if ($varName !== '') {
+                $this->setVar($chat, $varName, $value); // este ya guarda en DB
+            }
+
+            $nextId = $pending['next_node_id'] ?? null;
+
+            // ✅ SIEMPRE limpiamos pending_input
+            $this->clearPendingInput($chat);
+
+            // ✅ CASO: finalizar flujo
+            if (!$nextId) {
+                $flow = $this->getDefaultFlow();
+                if ($flow) {
+                    $this->resetChatToStartFromFlow($chat, $flow, 'input_terminal');
+                }
+                return null;
+            }
+
+            // ✅ CASO: seguir al siguiente nodo
+            $chat->bot_node_id = $nextId;
+            $chat->save();
+
+            return BotNode::find($nextId);
+        }
+
+        // ✅ 1) Si el bot está apagado, no respondemos
         if (!$chat->bot_enabled) {
             return null;
         }
@@ -588,14 +654,15 @@ class WhatsAppController extends Controller
             return null;
         }
 
-        $text = trim($incoming->body ?? '');
-        $state = $chat->bot_state ?? [];
+        $text = trim((string) ($incoming->body ?? ''));
 
         switch ($currentNode->type) {
-            // 1) Nodos con botones / listas: se avanza por id del botón/lista
+
+            // 1) Botones / listas
             case 'buttons':
             case 'list':
                 if (!$interactiveReplyId) {
+                    // si el user no eligió nada, reenviamos el mismo nodo
                     return $currentNode;
                 }
 
@@ -603,27 +670,21 @@ class WhatsAppController extends Controller
                 $options = $settings['buttons'] ?? $settings['rows'] ?? [];
 
                 $nextNodeId = null;
-                $nextKey = null;
 
                 foreach ($options as $opt) {
                     if (($opt['id'] ?? null) === $interactiveReplyId) {
-                        $nextNodeId = $opt['next_node_id'] ?? null; // ✅ NUEVO
-                        $nextKey = $opt['next_key'] ?? null;     // fallback viejo
+                        $nextNodeId = $opt['next_node_id'] ?? null;
                         break;
                     }
                 }
 
-                if ($nextNodeId) {
-                    $nextNode = BotNode::where('flow_id', $currentNode->flow_id)
-                        ->where('id', $nextNodeId)
-                        ->first();
-                } elseif ($nextKey) {
-                    $nextNode = BotNode::where('flow_id', $currentNode->flow_id)
-                        ->where('key', $nextKey)
-                        ->first();
-                } else {
+                if (!$nextNodeId) {
                     return $currentNode;
                 }
+
+                $nextNode = BotNode::where('flow_id', $currentNode->flow_id)
+                    ->where('id', $nextNodeId)
+                    ->first();
 
                 if (!$nextNode) {
                     return null;
@@ -641,83 +702,17 @@ class WhatsAppController extends Controller
 
                 return $nextNode;
 
-
-            // 2) Nodos de input (captura de variable, ej: DNI)
+                // ✅ 2) INPUT: ya NO se procesa acá
+                // se procesa por pending_input arriba
             case 'input':
-                $settings = $currentNode->settings ?? [];
-                $variable = $settings['variable'] ?? null;
-                $regex = $settings['validation_regex'] ?? null;
-                $errorMsg = $settings['error_message'] ?? 'Valor inválido, intentá de nuevo.';
+                // devolvemos el mismo nodo (para que el bot lo envíe)
+                // y sendBotNode va a setear pending_input
+                return $currentNode;
 
-                if ($regex && !preg_match('/' . $regex . '/u', $text)) {
-                    // no avanzamos, devolvemos el mismo nodo pero cambiando el body al mensaje de error
-                    $currentNode->body = $errorMsg;
-                    return $currentNode;
-                }
-
-                if ($variable) {
-                    $state[$variable] = $text;
-                    $chat->bot_state = $state;
-                }
-
-                $nextNodeId = $settings['next_node_id'] ?? null; // ✅ NUEVO
-                $nextKey = $settings['next_key'] ?? null;     // fallback viejo
-
-                if ($nextNodeId) {
-                    $nextNode = BotNode::where('flow_id', $currentNode->flow_id)
-                        ->where('id', $nextNodeId)
-                        ->first();
-                } elseif ($nextKey) {
-                    $nextNode = BotNode::where('flow_id', $currentNode->flow_id)
-                        ->where('key', $nextKey)
-                        ->first();
-                } else {
-                    $chat->bot_state = $state;
-                    $chat->save();
-                    return null;
-                }
-
-                if (!$nextNode) {
-                    $chat->bot_state = $state;
-                    $chat->save();
-                    return null;
-                }
-
-                $chat->bot_node_id = $nextNode->id;
-                $chat->bot_state = $state;
-                $chat->save();
-
-                // placeholders {variable}
-                if ($variable && isset($state[$variable])) {
-                    $value = $state[$variable];
-                    $nextNode->body = str_replace('{' . $variable . '}', $value, $nextNode->body ?? '');
-                }
-
-                return $nextNode;
-
-
-                if (!$nextNode) {
-                    $chat->bot_state = $state;
-                    $chat->save();
-                    return null;
-                }
-
-                $chat->bot_node_id = $nextNode->id;
-                $chat->bot_state = $state;
-                $chat->save();
-
-                // caso especial: usamos la variable en el texto (ej: {dni})
-                if ($variable && isset($state[$variable])) {
-                    $value = $state[$variable];
-                    $nextNode->body = str_replace('{' . $variable . '}', $value, $nextNode->body ?? '');
-                }
-
-                return $nextNode;
-
-            // 3) Nodos de texto plano
+                // 3) Texto plano
             case 'text':
                 // comando "menú" de emergencia
-                if (strtolower($text) === 'menú' || strtolower($text) === 'menu') {
+                if (in_array(mb_strtolower($text), ['menú', 'menu'], true)) {
                     $menuNode = BotNode::where('flow_id', $currentNode->flow_id)
                         ->where('key', 'menu_principal')
                         ->first();
@@ -729,9 +724,7 @@ class WhatsAppController extends Controller
                     }
                 }
 
-                // 🚀 NUEVA LÓGICA:
-                // Enviamos SIEMPRE el nodo de texto actual
-                // y, si tiene next_node_id, solo movemos el puntero.
+                // mover puntero al próximo (pero devolvemos el actual para enviarlo)
                 if ($currentNode->next_node_id) {
                     $chat->bot_node_id = $currentNode->next_node_id;
                     $chat->save();
@@ -740,7 +733,6 @@ class WhatsAppController extends Controller
                 return $currentNode;
 
             case 'handoff':
-                // en handoff ya desactivamos el bot; no respondemos más
                 return null;
 
             default:
@@ -749,36 +741,69 @@ class WhatsAppController extends Controller
     }
 
 
-
     private function sendBotNode(Chat $chat, BotNode $node): void
     {
-        // handoff no envía nada extra (ya mandamos su body como texto si queremos)
+        // handoff
         if ($node->type === 'handoff') {
-            // mensaje de texto simple al usuario
             if ($node->body) {
                 $this->sendWhatsAppText($chat, $node->body, 'user');
             }
             return;
         }
 
-        if ($node->type === 'text' || $node->type === 'input') {
-            // input también es solo texto (la pregunta)
+        if ($node->type === 'input') {
+
+            // 1) Si ya había pending_input, lo leemos para ver si hay error
+            $pending = $this->getPendingInput($chat);
+            $errorToSend = is_array($pending) ? ($pending['last_error'] ?? null) : null;
+
+            // 2) Mandamos primero el error si existe, sino el body normal
+            if ($errorToSend) {
+                $this->sendWhatsAppText($chat, $errorToSend, 'user');
+
+                // limpiamos last_error para que no se repita infinitamente
+                $state = $this->getState($chat);
+                if (isset($state['pending_input'])) {
+                    unset($state['pending_input']['last_error']);
+                    $this->setState($chat, $state);
+                }
+            } else {
+                if ($node->body) {
+                    $this->sendWhatsAppText($chat, $node->body, 'user');
+                }
+            }
+
+            // 3) Asegurar que pending_input exista (si no existía)
+            $this->setPendingInput($chat, $node);
+
+            $chat->bot_node_id = $node->id;
+            $chat->save();
+
+            return;
+        }
+
+
+        // text
+        if ($node->type === 'text') {
             if ($node->body) {
                 $this->sendWhatsAppText($chat, $node->body, 'user');
             }
             return;
         }
 
+        // buttons
         if ($node->type === 'buttons') {
             $this->sendWhatsAppButtons($chat, $node);
             return;
         }
 
+        // list
         if ($node->type === 'list') {
             $this->sendWhatsAppList($chat, $node);
             return;
         }
     }
+
 
     private function sendWhatsAppButtons(Chat $chat, BotNode $node): void
     {
@@ -951,17 +976,21 @@ class WhatsAppController extends Controller
 
     private function resetChatToStartFromFlow(Chat $chat, BotFlow $flow, string $reason = null): void
     {
-        if (!$flow->start_node_id)
-            return;
+        if (!$flow->start_node_id) return;
+
+        // ✅ preservar variables ya capturadas
+        $state = $this->getState($chat);
+        $vars  = is_array($state['vars'] ?? null) ? $state['vars'] : [];
 
         $chat->bot_flow_id = $flow->id;
         $chat->bot_node_id = $flow->start_node_id;
 
-        // arrancar "de cero"
-        $chat->bot_state = [];
+        // ✅ limpiamos solo lo que rompe el próximo ciclo
+        $chat->bot_state = [
+            'vars' => $vars,
+            // pending_input se elimina al reset
+        ];
         $chat->bot_step = null;
-
-        // no tocamos last_user_message_at acá; eso se actualiza con el mensaje entrante
         $chat->bot_enabled = true;
 
         $chat->save();
@@ -969,16 +998,18 @@ class WhatsAppController extends Controller
         Log::info("Chat {$chat->id} reset to start_node_id={$flow->start_node_id}. reason={$reason}");
     }
 
-    private function maybeResetAfterSendingNode(Chat $chat, BotFlow $flow, BotNode $sentNode): void
-    {
-        // si el bot quedó deshabilitado por handoff, no reiniciamos
-        if (!$chat->bot_enabled)
-            return;
 
-        // Nodo terminal: para tu regla, consideramos terminal a text/input sin next_node_id
-        if (in_array($sentNode->type, ['text', 'input'], true) && empty($sentNode->next_node_id)) {
-            $this->resetChatToStartFromFlow($chat, $flow, 'terminal_node');
+    private function maybeResetAfterSendingNode(Chat $chat, BotFlow $flow, BotNode $sentNode): bool
+    {
+        if (!$chat->bot_enabled) return false;
+
+        // ✅ SOLO text puede ser terminal automático
+        if ($sentNode->type === 'text' && empty($sentNode->next_node_id)) {
+            $this->resetChatToStartFromFlow($chat, $flow, 'terminal_text');
+            return true;
         }
+
+        return false;
     }
 
     private function nodeSettings(BotNode $node): array
@@ -1069,6 +1100,61 @@ class WhatsAppController extends Controller
         }
     }
 
+    private function getState(Chat $chat): array
+    {
+        return is_array($chat->bot_state) ? $chat->bot_state : [];
+    }
+
+    private function setState(Chat $chat, array $state): void
+    {
+        $chat->bot_state = $state;
+        $chat->save();
+    }
 
 
+    private function getVars(Chat $chat): array
+    {
+        $state = $this->getState($chat);
+        return is_array($state['vars'] ?? null) ? $state['vars'] : [];
+    }
+
+    private function setVar(Chat $chat, string $key, $value): void
+    {
+        $state = $this->getState($chat);
+        $state['vars'] = is_array($state['vars'] ?? null) ? $state['vars'] : [];
+        $state['vars'][$key] = $value;
+
+        $chat->bot_state = $state;
+        $chat->save(); // ✅ ESTE ERA EL BUG
+    }
+
+
+    private function setPendingInput(Chat $chat, BotNode $node): void
+    {
+        $settings = is_array($node->settings) ? $node->settings : [];
+
+        $state = $this->getState($chat);
+        $state['pending_input'] = [
+            'node_id' => $node->id,
+            'variable' => (string)($settings['variable'] ?? ''),
+            'validation_regex' => (string)($settings['validation_regex'] ?? ''),
+            'error_message' => (string)($settings['error_message'] ?? 'Valor inválido, intentá de nuevo.'),
+            'next_node_id' => $node->next_node_id, // clave: a dónde avanzar cuando capture OK
+        ];
+        $this->setState($chat, $state);
+    }
+
+    private function clearPendingInput(Chat $chat): void
+    {
+        $state = $this->getState($chat);
+        unset($state['pending_input']);
+        $this->setState($chat, $state);
+    }
+
+    private function getPendingInput(Chat $chat): ?array
+    {
+        $state = $this->getState($chat);
+        $pending = $state['pending_input'] ?? null;
+        return is_array($pending) ? $pending : null;
+    }
 }
