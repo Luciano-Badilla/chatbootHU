@@ -213,8 +213,13 @@ class WhatsAppController extends Controller
 
             // 2) Reset por timeout 24hs (ANTES de procesar el bot)
             if ($this->shouldResetByTimeout($chat, 24)) {
-                $this->resetChatToStartFromFlow($chat, $flow, 'timeout_24h');
+
+                // si estaba en handoff, con este reset también se reactiva (bot_enabled=true)
+                $reason = $chat->bot_enabled ? 'timeout_24h' : 'handoff_timeout_24h';
+
+                $this->resetChatToStartFromFlow($chat, $flow, $reason);
             }
+
 
             // 3) Actualizar última interacción del usuario (entrante)
             $chat->last_user_message_at = now();
@@ -691,11 +696,18 @@ class WhatsAppController extends Controller
                 }
 
                 if ($nextNode->type === 'handoff') {
-                    $chat->bot_enabled = false;
+
                     $chat->bot_node_id = $nextNode->id;
+
+                    $chat->bot_enabled = false;
+
+                    $this->clearPendingInput($chat);
+
                     $chat->save();
+
                     return $nextNode;
                 }
+
 
                 $chat->bot_node_id = $nextNode->id;
                 $chat->save();
@@ -732,24 +744,45 @@ class WhatsAppController extends Controller
 
                 return $currentNode;
 
-            case 'handoff':
-                return null;
-
             default:
                 return null;
         }
     }
 
-
     private function sendBotNode(Chat $chat, BotNode $node): void
     {
         // handoff
         if ($node->type === 'handoff') {
+
+            // enviar mensaje del handoff (si tiene)
             if ($node->body) {
                 $this->sendWhatsAppText($chat, $node->body, 'user');
             }
+
+            // apagar bot
+            $chat->bot_enabled = false;
+
+            // por seguridad (por si venía de un input)
+            $this->clearPendingInput($chat);
+
+            // ✅ preparar puntero para cuando se reactive
+            $flow = $this->ensureChatUsesDefaultFlow($chat) ?? $this->getDefaultFlow();
+            if ($flow && $flow->start_node_id) {
+                $chat->bot_node_id = $flow->start_node_id;
+            }
+
+            // ✅ marcar que está/estuvo en handoff (para UI)
+            $state = $this->getState($chat);
+            $state['handoff'] = [
+                'node_id' => $node->id,
+                'at' => now()->toIso8601String(),
+            ];
+            $this->setState($chat, $state);
+
+            $chat->save();
             return;
         }
+
 
         if ($node->type === 'input') {
 
@@ -1083,6 +1116,11 @@ class WhatsAppController extends Controller
 
             // enviamos el nodo
             $this->sendBotNode($chat, $nextNode);
+
+            // ✅ si el nodo apagó el bot (handoff), cortar acá
+            if (!$chat->bot_enabled) {
+                break;
+            }
 
             // si el nodo enviado fue terminal, se resetea y se corta
             $this->maybeResetAfterSendingNode($chat, $flow, $nextNode);
