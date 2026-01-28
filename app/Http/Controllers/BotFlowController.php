@@ -20,6 +20,34 @@ class BotFlowController extends Controller
         ]);
     }
 
+    public function setStartNode(Request $request, BotFlow $flow)
+    {
+        $data = $request->validate([
+            'start_node_id' => 'required|integer',
+        ]);
+
+        if (!empty($data['start_node_id'])) {
+            $exists = BotNode::where('flow_id', $flow->id)
+                ->where('id', $data['start_node_id'])
+                ->exists();
+
+            if (!$exists) {
+                return response()->json([
+                    'ok' => false,
+                    'message' => 'El nodo no pertenece a este flujo.',
+                ], 422);
+            }
+        }
+
+        $flow->start_node_id = $data['start_node_id'] ?? null;
+        $flow->save();
+
+        return response()->json([
+            'ok' => true,
+            'flow' => $flow,
+        ]);
+    }
+
     public function apiIndex()
     {
         $flows = BotFlow::all();

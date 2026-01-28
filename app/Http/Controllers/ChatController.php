@@ -15,24 +15,27 @@ class ChatController extends Controller
         }])
             ->get()
             ->map(function ($contact) {
-                // Tomamos el último chat del contacto (puede haber varios)
                 $chat = $contact->chats->last();
                 $lastMessage = $chat?->messages->first();
 
                 return [
-                    'id' => (string) $chat?->id ?? '',
+                    'id' => (int) ($chat?->id ?? 0),
                     'name' => $contact->name ?? $contact->whatsapp_id,
+                    'number' => '+' . $contact->whatsapp_id,
                     'lastMessage' => $lastMessage?->body ?? '',
-                    'timestamp' => $lastMessage->created_at,
+                    'timestamp' => $lastMessage?->created_at,
                     'unread' => $chat
                         ? $chat->messages()
                         ->where('status', 'received')
                         ->where('status', '!=', 'read')
                         ->count()
                         : 0,
-                    'online' => false, // placeholder
+                    'online' => false,
                     'avatar' => $contact->profile_pic,
-                    'bot_enabled' => $chat->bot_enabled
+                    'bot_enabled' => (bool) ($chat?->bot_enabled ?? true),
+
+                    // ✅ CLAVE: acá van las variables
+                    'bot_state' => $chat?->bot_state ?? [],
                 ];
             });
 
@@ -40,6 +43,7 @@ class ChatController extends Controller
             'chats' => $chats,
         ]);
     }
+
 
     public function markAsReadMessages($chatId)
     {

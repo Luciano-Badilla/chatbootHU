@@ -7,16 +7,30 @@ import ChatInfo from "./ChatInfo"
 import mqtt from "mqtt"
 import { formatDistanceToNow, parseISO } from "date-fns" // (no se usan acá, pero sí en otros componentes)
 
-export interface Chat {
-  // Representa un chat/conversación en el panel.
-  // Esta estructura viene originalmente del backend (Laravel).
-  id: string
+export type Chat = {
+  id: number | string
   name: string
+  number: string
   lastMessage: string
   timestamp: string
   unread: number
   online: boolean
   avatar?: string | null
+  bot_enabled: boolean
+
+  bot_state?: {
+    vars?: Record<string, any>
+    pending_input?: any
+    handoff?: any
+    [k: string]: any
+  }
+}
+
+export type ChatVariable = {
+  name: string
+  type: "string" | "number" | "boolean" | "object" | "array" | "null"
+  value: any
+  description?: string
 }
 
 interface ChatPanelProps {
@@ -137,7 +151,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
 
       {/* Panel derecho */}
       <div className="w-80 border-l border-gray-300 bg-gray-100 flex flex-col min-h-0">
-        <ChatInfo chat={selectedChat} variables={[]} />
+        <ChatInfo chat={selectedChat} />
       </div>
     </div>
   )

@@ -64,10 +64,10 @@ class WhatsAppController extends Controller
         // 2) Variables base
         // --------------------------------
         $body = null;
-        $messageType = 'text';   // para tu enum
-        $mediaUrl = null;     // URL de WhatsApp
-        $mediaName = null;     // id / filename
-        $mime = null;     // mime_type si existe
+        $messageType = 'text';
+        $mediaUrl = null;
+        $mediaName = null;
+        $mime = null;
 
         $interactiveReplyId = null;
 
@@ -86,9 +86,8 @@ class WhatsAppController extends Controller
                 $body = $interactive['list_reply']['title'] ?? null;   // opcional
             }
 
-            // Lo tratamos lógicamente como texto
             $messageType = 'text';
-            $type = 'text'; // 👈 así el switch entra en case 'text'
+            $type = 'text';
         }
 
         // --------------------------------
@@ -96,7 +95,6 @@ class WhatsAppController extends Controller
         // --------------------------------
         switch ($type) {
             case 'text':
-                // Si todavía no se seteó (por interactive), tomamos el text normal
                 if ($body === null) {
                     $body = $messageData['text']['body'] ?? null;
                 }
@@ -138,7 +136,6 @@ class WhatsAppController extends Controller
                 break;
 
             case 'sticker':
-                // Tu ENUM no tiene 'sticker', lo tratamos como image
                 $messageType = 'image';
                 $body = '[Sticker]';
                 $mediaUrl = $messageData['sticker']['url'] ?? null;
@@ -174,7 +171,6 @@ class WhatsAppController extends Controller
                 $contact->save();
             }
         } else {
-            // Fallback si no viene "contacts"
             $contact = Contact::firstOrCreate(
                 ['whatsapp_id' => $from],
                 [
@@ -635,11 +631,15 @@ class WhatsAppController extends Controller
                 return null;
             }
 
-            // ✅ CASO: seguir al siguiente nodo
             $chat->bot_node_id = $nextId;
             $chat->save();
 
-            return BotNode::find($nextId);
+            $nextNode = BotNode::find($nextId);
+            if ($nextNode && $nextNode->type === 'handoff') {
+                return $nextNode;
+            }
+
+            return $nextNode;
         }
 
         // ✅ 1) Si el bot está apagado, no respondemos
@@ -663,19 +663,14 @@ class WhatsAppController extends Controller
 
         switch ($currentNode->type) {
 
-            // 1) Botones / listas
             case 'buttons':
             case 'list':
-                if (!$interactiveReplyId) {
-                    // si el user no eligió nada, reenviamos el mismo nodo
-                    return $currentNode;
-                }
+                if (!$interactiveReplyId) return $currentNode;
 
                 $settings = $currentNode->settings ?? [];
                 $options = $settings['buttons'] ?? $settings['rows'] ?? [];
 
                 $nextNodeId = null;
-
                 foreach ($options as $opt) {
                     if (($opt['id'] ?? null) === $interactiveReplyId) {
                         $nextNodeId = $opt['next_node_id'] ?? null;
@@ -683,39 +678,20 @@ class WhatsAppController extends Controller
                     }
                 }
 
-                if (!$nextNodeId) {
-                    return $currentNode;
-                }
+                if (!$nextNodeId) return $currentNode;
 
                 $nextNode = BotNode::where('flow_id', $currentNode->flow_id)
                     ->where('id', $nextNodeId)
                     ->first();
 
-                if (!$nextNode) {
-                    return null;
-                }
-
-                if ($nextNode->type === 'handoff') {
-
-                    $chat->bot_node_id = $nextNode->id;
-
-                    $chat->bot_enabled = false;
-
-                    $this->clearPendingInput($chat);
-
-                    $chat->save();
-
-                    return $nextNode;
-                }
-
+                if (!$nextNode) return null;
 
                 $chat->bot_node_id = $nextNode->id;
                 $chat->save();
 
                 return $nextNode;
 
-                // ✅ 2) INPUT: ya NO se procesa acá
-                // se procesa por pending_input arriba
+
             case 'input':
                 // devolvemos el mismo nodo (para que el bot lo envíe)
                 // y sendBotNode va a setear pending_input
@@ -723,7 +699,6 @@ class WhatsAppController extends Controller
 
                 // 3) Texto plano
             case 'text':
-                // comando "menú" de emergencia
                 if (in_array(mb_strtolower($text), ['menú', 'menu'], true)) {
                     $menuNode = BotNode::where('flow_id', $currentNode->flow_id)
                         ->where('key', 'menu_principal')
@@ -736,13 +711,17 @@ class WhatsAppController extends Controller
                     }
                 }
 
-                // mover puntero al próximo (pero devolvemos el actual para enviarlo)
+                // mover puntero al próximo (sea handoff o lo que sea)
                 if ($currentNode->next_node_id) {
                     $chat->bot_node_id = $currentNode->next_node_id;
                     $chat->save();
                 }
 
                 return $currentNode;
+
+            case 'handoff':
+                return $currentNode;
+
 
             default:
                 return null;
@@ -1163,8 +1142,28 @@ class WhatsAppController extends Controller
         $state['vars'][$key] = $value;
 
         $chat->bot_state = $state;
-        $chat->save(); // ✅ ESTE ERA EL BUG
+        $chat->save();
+
+        try {
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_vars_' . uniqid());
+            $mqtt->connect();
+
+            $mqtt->publish("chat/{$chat->id}/vars", json_encode([
+                'chat_id' => $chat->id,
+                'var' => [
+                    'name' => $key,
+                    'value' => $value,
+                ],
+                'vars' => $state['vars'],
+                'timestamp' => now()->toIso8601String(),
+            ]), 0);
+
+            $mqtt->disconnect();
+        } catch (\Throwable $e) {
+            Log::error('MQTT Error (setVar vars): ' . $e->getMessage());
+        }
     }
+
 
 
     private function setPendingInput(Chat $chat, BotNode $node): void
@@ -1194,5 +1193,10 @@ class WhatsAppController extends Controller
         $state = $this->getState($chat);
         $pending = $state['pending_input'] ?? null;
         return is_array($pending) ? $pending : null;
+    }
+
+    private function findNodeInFlow(int $flowId, int $nodeId): ?BotNode
+    {
+        return BotNode::where('flow_id', $flowId)->where('id', $nodeId)->first();
     }
 }

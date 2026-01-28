@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { Plus, RefreshCcw, ChevronRight, Zap } from "lucide-react"
+import { Plus, RefreshCcw, ChevronRight, Zap, Loader2 } from "lucide-react"
 import { Button } from "shadcn/components/ui/button"
 import { Input } from "shadcn/components/ui/input"
 import { Textarea } from "shadcn/components/ui/textarea"
@@ -61,6 +61,7 @@ export default function BotFlowBuilder() {
   const [savingNode, setSavingNode] = useState(false)
   const [creatingFlow, setCreatingFlow] = useState(false)
   const [creatingNode, setCreatingNode] = useState(false)
+  const [savingStartNode, setSavingStartNode] = useState(false)
 
   const [newFlowName, setNewFlowName] = useState("")
   const [newNodeKey, setNewNodeKey] = useState("")
@@ -73,6 +74,14 @@ export default function BotFlowBuilder() {
     () => flows.find((f) => f.id === selectedFlowId) ?? null,
     [flows, selectedFlowId],
   )
+
+  const startNodeOptions = useMemo(() => {
+    return nodes.map((n) => ({
+      id: n.id,
+      label: n.key || `node_${n.id}`,
+    }))
+  }, [nodes])
+
 
   // 🔹 Cargar flows al inicio
   useEffect(() => {
@@ -125,7 +134,7 @@ export default function BotFlowBuilder() {
         setNodes(list)
 
         if (list.length > 0) {
-          const startId = flows.find((f) => f.id === selectedFlowId)?.start_node_id
+          const startId = selectedFlow?.start_node_id
           const startNode = (startId && list.find((n) => n.id === startId)) ?? list[0]
           setSelectedNodeId(startNode.id)
         } else {
@@ -178,6 +187,40 @@ export default function BotFlowBuilder() {
     }
   }
 
+  const handleSetStartNode = async (nodeId: number | null) => {
+    if (!selectedFlowId) return
+
+    setSavingStartNode(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/bot/flows/${selectedFlowId}/start-node`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start_node_id: nodeId }),
+      })
+
+      if (!res.ok) {
+        console.error("Error seteando start node", await res.text())
+        return
+      }
+
+      const data = await res.json()
+      const updatedFlow: BotFlow = data.flow ?? data
+
+      // ✅ actualizar flows local
+      setFlows((prev) => prev.map((f) => (f.id === updatedFlow.id ? { ...f, ...updatedFlow } : f)))
+
+      // opcional UX: si el usuario cambia start, seleccionamos ese nodo en el editor
+      if (nodeId) {
+        setSelectedNodeId(nodeId)
+      }
+    } catch (err) {
+      console.error("Error de red seteando start node:", err)
+    } finally {
+      setSavingStartNode(false)
+    }
+  }
+
+
   const handleMakeDefault = async (flowId: number) => {
     try {
       const res = await fetch(`${API_BASE}/api/bot/flows/${flowId}/make-default`, {
@@ -220,6 +263,9 @@ export default function BotFlowBuilder() {
         return
       }
       const node: BotNode = await res.json()
+      const flowRes = await fetch(`${API_BASE}/api/bot/flows`)
+      const flowData = await flowRes.json()
+      setFlows(flowData.flows ?? flowData)
       setNodes((prev) => [...prev, node])
       setSelectedNodeId(node.id)
       setNewNodeKey("")
@@ -695,12 +741,37 @@ export default function BotFlowBuilder() {
         </div>
         {selectedFlow && (
           <div className="inline-flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-full text-xs">
-            <Zap className="h-3 w-3 text-yellow-300" />
-            <span>
-              Nodo inicial: <span className="font-semibold">{startNodeLabel ?? "no definido"}</span>
-            </span>
+            <Zap className="h-6 w-6 text-yellow-300" />
+
+            <span className="opacity-90">Nodo inicial:</span>
+            <div className="relative">
+              <Select
+                value={selectedFlow.start_node_id ? String(selectedFlow.start_node_id) : "none"}
+                onValueChange={(val) => handleSetStartNode(val === "none" ? null : Number(val))}
+                disabled={savingStartNode || nodes.length === 0}
+              >
+                <SelectTrigger className="h-7 text-xs bg-white/10 border-white/20 text-white hover:bg-white/15 pr-8">
+                  <SelectValue placeholder="Elegí nodo..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {startNodeOptions.map((opt) => (
+                    <SelectItem key={opt.id} value={String(opt.id)}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              {savingStartNode && (
+                <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-white/90" />
+                </div>
+              )}
+            </div>
           </div>
+
         )}
+
       </div>
 
       {/* Contenido */}

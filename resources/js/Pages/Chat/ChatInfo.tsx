@@ -1,24 +1,21 @@
 "use client"
 
-import { Settings, Bell, Shield, Code, Database, Zap, User } from "lucide-react"
-import { Button } from "shadcn/components/ui/button"
+import { useEffect, useMemo, useState } from "react"
+import { Code, Database, Zap, User } from "lucide-react"
 import { Avatar } from "shadcn/components/ui/avatar"
 import { Badge } from "shadcn/components/ui/badge"
-import { Separator } from "shadcn/components/ui/separator"
 import type { Chat, ChatVariable } from "./ChatPanel"
+import mqtt from "mqtt"
 
 interface ChatInfoProps {
-  // Chat actualmente seleccionado en el panel.
-  // Viene desde ChatPanel, que gestiona el estado global de chats.
   chat?: Chat
-  // Variables asociadas al chat (contexto, metadata, etc.).
-  // La idea es que esto venga calculado desde el backend o desde otra capa.
-  variables: ChatVariable[]
+  // si viene desde backend lo usamos, si no, lo inferimos del chat.bot_state.vars
+  variables?: ChatVariable[]
 }
 
-// Panel derecho con la información y metadata del chat seleccionado.
-export default function ChatInfo({ chat, variables }: ChatInfoProps) {
-  // Si todavía no se seleccionó ningún chat, mostramos un mensaje vacío.
+type VarType = "string" | "number" | "boolean" | "object" | "array" | "null" | "unknown"
+
+export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
   if (!chat) {
     return (
       <div className="flex items-center justify-center h-full p-4">
@@ -32,48 +29,137 @@ export default function ChatInfo({ chat, variables }: ChatInfoProps) {
     )
   }
 
-  // Devuelve un icono según el tipo de variable (string, object, boolean, etc.)
-  const getVariableIcon = (type: string) => {
+  const detectType = (value: any): VarType => {
+    if (value === null || value === undefined) return "null"
+    if (Array.isArray(value)) return "array"
+    const t = typeof value
+    if (t === "string") return "string"
+    if (t === "number") return "number"
+    if (t === "boolean") return "boolean"
+    if (t === "object") return "object"
+    return "unknown"
+  }
+
+  const getVariableIcon = (type: VarType) => {
     switch (type) {
-      case "string":
-        return <Code className="h-3 w-3" />
-      case "object":
-        return <Database className="h-3 w-3" />
       case "boolean":
         return <Zap className="h-3 w-3" />
+      case "object":
+      case "array":
+        return <Database className="h-3 w-3" />
       default:
         return <Code className="h-3 w-3" />
     }
   }
 
-  // Formatea el valor de la variable para mostrarlo:
-  // si es objeto/array lo mostramos como JSON, sino como string plano.
-  const formatVariableValue = (value: any, type: string) => {
-    if (type === "object") {
-      return Array.isArray(value) ? `[${value.join(", ")}]` : JSON.stringify(value, null, 2)
+  const formatVariableValue = (value: any, type: VarType) => {
+    if (type === "object" || type === "array") {
+      try {
+        return JSON.stringify(value, null, 2)
+      } catch {
+        return String(value)
+      }
     }
+    if (type === "null") return "null"
     return String(value)
   }
 
+  // ✅ estado local “vivo” (se actualiza desde chat.bot_state.vars y MQTT)
+  const [varsState, setVarsState] = useState<Record<string, any>>({})
+
+  // ✅ sync inicial cada vez que cambie el chat seleccionado
+  useEffect(() => {
+    const varsObj =
+      chat?.bot_state?.vars &&
+        typeof chat.bot_state.vars === "object" &&
+        !Array.isArray(chat.bot_state.vars)
+        ? (chat.bot_state.vars as Record<string, any>)
+        : {}
+
+    setVarsState(varsObj)
+  }, [chat.id])
+
+  // ✅ MQTT: escuchar variables en tiempo real del chat actual
+  useEffect(() => {
+    if (!chat) return
+
+    const mosquitto_host = import.meta.env.VITE_MOSQUITTO_HOST
+    const client = mqtt.connect(`ws://${mosquitto_host}:9001`)
+
+    client.on("connect", () => {
+      // 👇 OPCIÓN 1 (recomendada): topic separado para variables
+      const topic = `chat/${chat.id}/vars`
+      client.subscribe(topic)
+    })
+
+    client.on("message", (topic, payload) => {
+      try {
+        const data = JSON.parse(payload.toString())
+
+        // Si publicás con chat_id, filtramos por seguridad
+        if (data?.chat_id && String(data.chat_id) !== String(chat.id)) return
+
+        /**
+         * Soportamos 2 formatos:
+         * A) { chat_id, vars: {dni:"...", ...} }   -> reemplaza todo
+         * B) { chat_id, var: {name:"dni", value:"..."} } -> upsert 1 variable
+         */
+        if (data?.vars && typeof data.vars === "object" && !Array.isArray(data.vars)) {
+          setVarsState(data.vars)
+          return
+        }
+
+        const v = data?.var
+        if (v?.name) {
+          setVarsState((prev) => ({
+            ...prev,
+            [v.name]: v.value,
+          }))
+        }
+      } catch (err) {
+        console.error("Error procesando MQTT vars en ChatInfo:", err)
+      }
+    })
+
+    return () => {
+      client.end()
+    }
+  }, [chat?.id])
+
+  // ✅ Variables a renderizar:
+  // 1) si vienen por props (backend) ganan
+  // 2) si no, usamos varsState (vivo)
+  const derivedVars: ChatVariable[] = useMemo(() => {
+    const varsFromProps = Array.isArray(variables) ? variables : []
+    if (varsFromProps.length > 0) return varsFromProps
+
+    return Object.entries(varsState).map(([name, value]) => ({
+      name,
+      value,
+      type: detectType(value),
+    }))
+  }, [variables, varsState])
+
+  const hasVars = derivedVars.length > 0
+
   return (
     <div className="flex flex-col h-full">
-      {/* Header del panel de información */}
       <div className="p-4 border-b border-gray-300">
         <h2 className="text-lg font-semibold text-foreground">Información del Chat</h2>
       </div>
 
       <div className="flex-1 overflow-y-auto custom-scrollbar">
-        {/* Datos principales del chat */}
         <div className="p-4">
           <div className="flex flex-col items-center text-center mb-6">
             <div className="relative mb-3">
-              {/* Avatar genérico del contacto.
-                 Se podría reemplazar por una imagen real si el backend envía `avatar`. */}
               <Avatar className="h-16 w-16 bg-gray-300 flex items-center justify-center">
                 <User />
               </Avatar>
             </div>
+
             <h3 className="font-semibold text-foreground text-lg">{chat.name}</h3>
+            <h3 className="text-sm text-muted-foreground">{chat.number}</h3>
+
             {chat.unread > 0 && (
               <Badge variant="secondary" className="mt-2 bg-[#013765] text-white">
                 {chat.unread} mensajes sin leer
@@ -81,98 +167,63 @@ export default function ChatInfo({ chat, variables }: ChatInfoProps) {
             )}
           </div>
 
-          {/* Acciones rápidas (actualmente solo UI, no conectadas a lógica real) */}
-          <div className="grid grid-cols-3 gap-2 mb-6">
-            <Button
-              variant="outline"
-              size="sm"
-              className="flex flex-col gap-1 h-auto py-3 bg-transparent"
-            >
-              <Bell className="h-4 w-4" />
-              <span className="text-xs">Silenciar</span>
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="flex flex-col gap-1 h-auto py-3 bg-transparent"
-            >
-              <Shield className="h-4 w-4" />
-              <span className="text-xs">Bloquear</span>
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="flex flex-col gap-1 h-auto py-3 bg-transparent"
-            >
-              <Settings className="h-4 w-4" />
-              <span className="text-xs">Ajustes</span>
-            </Button>
-          </div>
-
-          <Separator className="my-4" />
-
-          {/* Sección de variables del chat (contexto, flags, metadata de IA, etc.) */}
           <div>
             <h4 className="font-medium text-foreground mb-3 flex items-center gap-2">
-              <Database className="h-4 w-4" />
+              <Database className="h-4 w-4 text-muted-foreground" />
               Variables del Chat
             </h4>
 
-            <div className="space-y-3">
-              {variables.map((variable, index) => (
-                <div
-                  key={index}
-                  className="bg-muted/30 rounded-lg p-3 border border-gray-300"
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      {getVariableIcon(variable.type)}
-                      <span className="font-mono text-sm text-foreground">
-                        {variable.name}
-                      </span>
+
+            {!hasVars ? (
+              <div className="bg-muted/30 rounded-lg p-3 border border-gray-300">
+                <p className="text-sm text-muted-foreground">
+                  Todavía no hay variables capturadas en este chat.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {derivedVars.map((variable, index) => {
+                  const t = (variable.type as VarType) ?? detectType(variable.value)
+
+                  return (
+                    <div className="space-y-3">
+                      {derivedVars.map((variable, index) => {
+                        const t = variable.type as VarType
+
+                        return (
+                          <div
+                            key={`${variable.name}-${index}`}
+                            className="
+                              rounded-lg
+                              bg-gray-200
+                              border
+                              border-gray-200
+                              px-3
+                              py-2.5
+                              shadow-sm
+                            "
+                          >
+                            {/* Header: nombre + tipo */}
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                                {variable.name}
+                              </span>
+                              </div>
+
+                            {/* Valor */}
+                            <div className="text-sm font-medium text-foreground break-all">
+                              {formatVariableValue(variable.value, t)}
+                            </div>
+                          </div>
+                        )
+                      })}
                     </div>
-                    <Badge variant="outline" className="text-xs">
-                      {variable.type}
-                    </Badge>
-                  </div>
 
-                  {variable.description && (
-                    <p className="text-xs text-muted-foreground mb-2">
-                      {variable.description}
-                    </p>
-                  )}
 
-                  <div className="bg-background/50 rounded p-2 border">
-                    <pre className="text-xs text-foreground font-mono whitespace-pre-wrap break-all">
-                      {formatVariableValue(variable.value, variable.type)}
-                    </pre>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <Separator className="my-4" />
-
-          {/* Estadísticas del chat.
-             De momento los datos son estáticos/ejemplo, salvo variables.length y chat.timestamp.
-             Se pueden reemplazar por métricas reales si el backend las provee. */}
-          <div>
-            <h4 className="font-medium text-foreground mb-3">Estadísticas</h4>
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Mensajes totales:</span>
-                <span className="text-foreground">247</span>
+                  )
+                })}
               </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Variables generadas:</span>
-                <span className="text-foreground">{variables.length}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Última actividad:</span>
-                <span className="text-foreground">{chat.timestamp}</span>
-              </div>
-            </div>
+            )}
           </div>
         </div>
       </div>

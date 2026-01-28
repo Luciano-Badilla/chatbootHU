@@ -2,7 +2,7 @@
 
 import type React from "react"
 import { useEffect, useRef, useState } from "react"
-import { Send, User, MoreVertical } from "lucide-react"
+import { Send, User, MoreVertical, PowerOff, Power, Loader } from "lucide-react"
 import { Button } from "shadcn/components/ui/button"
 import { Input } from "shadcn/components/ui/input"
 import { Avatar, AvatarFallback } from "shadcn/components/ui/avatar"
@@ -99,7 +99,7 @@ export default function ChatMain({ chat }: ChatMainProps) {
 
     const mosquitto_host = (import.meta.env.VITE_MOSQUITTO_HOST);
 
-    const client = mqtt.connect("ws://"+mosquitto_host+":9001")
+    const client = mqtt.connect("ws://" + mosquitto_host + ":9001")
 
     client.on("connect", () => {
       const topic = `chat/${chat.id}`
@@ -351,45 +351,43 @@ export default function ChatMain({ chat }: ChatMainProps) {
           <div className="flex flex-col gap-1">
             <h2 className="font-semibold text-foreground">{chat.name}</h2>
 
-            {/* Estado del bot */}
-            <div className="flex items-center gap-2">
-              <span
-                className={cn(
-                  "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
-                  botEnabled
-                    ? "bg-emerald-100 text-emerald-800"
-                    : "bg-gray-200 text-gray-700",
-                )}
-              >
-                <span
-                  className={cn(
-                    "mr-1 h-2 w-2 rounded-full",
-                    botEnabled ? "bg-emerald-500" : "bg-gray-400",
-                  )}
-                />
-                {botEnabled ? "Bot activo" : "Bot pausado"}
-              </span>
 
-              <Button
-                variant="outline"
-                size="xs"
-                className="h-6 text-xs px-2 bg-[#013765] text-white rounded-xl"
-                onClick={handleToggleBot}
-                disabled={togglingBot}
-              >
-                {togglingBot
-                  ? "Guardando..."
-                  : botEnabled
-                  ? "Pausar bot"
-                  : "Reanudar bot"}
-              </Button>
-            </div>
           </div>
         </div>
 
-        <Button variant="ghost" size="icon">
-          <MoreVertical className="h-4 w-4" />
-        </Button>
+        {/* Estado del bot */}
+        <div className="flex items-center gap-2">
+          <span
+            className={cn(
+              "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
+              botEnabled
+                ? "bg-emerald-100 text-emerald-800"
+                : "bg-gray-200 text-gray-700",
+            )}
+          >
+            <span
+              className={cn(
+                "mr-1 h-2 w-2 rounded-full",
+                botEnabled ? "bg-emerald-500" : "bg-gray-400",
+              )}
+            />
+            {botEnabled ? "Bot activo" : "Bot pausado"}
+          </span>
+
+          <Button
+            variant="outline"
+            size="xs"
+            className="h-6 text-xs px-2 py-4 bg-gray-300 text-white rounded-xl"
+            onClick={handleToggleBot}
+            disabled={togglingBot}
+          >
+            {togglingBot
+              ? <Loader />
+              : botEnabled
+                ? <PowerOff className="text-red-500 h-2.5 w-2.5" />
+                : <Power className="text-green-500 h-2.5 w-2.5" />}
+          </Button>
+        </div>
       </div>
 
       {/* Área de mensajes */}
