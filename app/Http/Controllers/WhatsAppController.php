@@ -759,6 +759,21 @@ class WhatsAppController extends Controller
             $this->setState($chat, $state);
 
             $chat->save();
+
+            try {
+                $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_status_bot_' . uniqid());
+                $mqtt->connect();
+
+                $mqtt->publish("status_bot/chat/{$chat->id}", json_encode([
+                    'chat_id' => $chat->id,
+                    'status' => $chat->bot_enabled ? 'enabled' : 'disabled',
+                ]), 0);
+
+                $mqtt->disconnect();
+            } catch (\Throwable $e) {
+                Log::error('MQTT Error (handoff status_bot): ' . $e->getMessage());
+            }
+
             return;
         }
 
@@ -945,9 +960,22 @@ class WhatsAppController extends Controller
             'bot_enabled' => 'required|boolean',
         ]);
 
-        $chat->bot_enabled = $data['bot_enabled'];
-        $chat->save();
+        try {
+            $chat->bot_enabled = $data['bot_enabled'];
+            $chat->save();
 
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_status_bot_' . uniqid());
+            $mqtt->connect();
+
+            $mqtt->publish("status_bot/chat/" . $chat->id, json_encode([
+                'chat_id' => $chat->id,
+                'status' => $chat->bot_enabled ? 'enabled' : 'disabled',
+            ]), 0);
+
+            $mqtt->disconnect();
+        } catch (\Throwable $e) {
+            Log::error('MQTT Error (setVar vars): ' . $e->getMessage());
+        }
         return response()->json([
             'ok' => true,
             'chat' => $chat,

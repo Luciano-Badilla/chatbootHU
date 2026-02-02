@@ -1,15 +1,15 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Code, Database, Zap, User } from "lucide-react"
 import { Avatar } from "shadcn/components/ui/avatar"
 import { Badge } from "shadcn/components/ui/badge"
-import type { Chat, ChatVariable } from "./ChatPanel"
 import mqtt from "mqtt"
+import type { Chat, ChatVariable } from "./ChatPanel"
 
 interface ChatInfoProps {
   chat?: Chat
-  // si viene desde backend lo usamos, si no, lo inferimos del chat.bot_state.vars
+  // opcional: si lo mandás por props lo usa, si no deriva de bot_state.vars
   variables?: ChatVariable[]
 }
 
@@ -64,56 +64,79 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
     return String(value)
   }
 
-  // ✅ estado local “vivo” (se actualiza desde chat.bot_state.vars y MQTT)
-  const [varsState, setVarsState] = useState<Record<string, any>>({})
+  // ✅ 1) Variables internas como MAPA: evita duplicados
+  const [varsMap, setVarsMap] = useState<Record<string, any>>(() => {
+    // prioridad: variables por props si vienen (las convertimos a mapa)
+    if (Array.isArray(variables) && variables.length > 0) {
+      const m: Record<string, any> = {}
+      for (const v of variables) m[v.name] = v.value
+      return m
+    }
 
-  // ✅ sync inicial cada vez que cambie el chat seleccionado
+    // fallback: bot_state.vars
+    const initial = (chat?.bot_state as any)?.vars
+    return initial && typeof initial === "object" && !Array.isArray(initial) ? initial : {}
+  })
+
+  // ✅ 2) Cuando cambia el chat, reseteamos varsMap desde bot_state.vars
   useEffect(() => {
-    const varsObj =
-      chat?.bot_state?.vars &&
-        typeof chat.bot_state.vars === "object" &&
-        !Array.isArray(chat.bot_state.vars)
-        ? (chat.bot_state.vars as Record<string, any>)
-        : {}
+    // prioridad: props
+    if (Array.isArray(variables) && variables.length > 0) {
+      const m: Record<string, any> = {}
+      for (const v of variables) m[v.name] = v.value
+      setVarsMap(m)
+      return
+    }
 
-    setVarsState(varsObj)
-  }, [chat.id])
+    const v = (chat?.bot_state as any)?.vars
+    setVarsMap(v && typeof v === "object" && !Array.isArray(v) ? v : {})
+  }, [chat?.id]) // intencional: al cambiar de chat, rehidrata
 
-  // ✅ MQTT: escuchar variables en tiempo real del chat actual
+  // ✅ 3) MQTT: escuchar updates de variables (sin duplicar)
+  const varsClientRef = useRef<any>(null)
+
   useEffect(() => {
-    if (!chat) return
+    if (!chat?.id) return
 
-    const mosquitto_host = import.meta.env.VITE_MOSQUITTO_HOST
-    const client = mqtt.connect(`ws://${mosquitto_host}:9001`)
+    // cerrar cliente anterior (importantísimo)
+    try {
+      varsClientRef.current?.end?.(true)
+    } catch { }
+
+    const host = import.meta.env.VITE_MOSQUITTO_HOST
+    const client = mqtt.connect(`ws://${host}:9001`, {
+      clientId: `front_vars_${chat.id}_${Math.random().toString(16).slice(2)}`,
+      clean: true,
+      reconnectPeriod: 2000,
+    })
+
+    varsClientRef.current = client
+
+    const topic = `chat/${chat.id}/vars`
 
     client.on("connect", () => {
-      // 👇 OPCIÓN 1 (recomendada): topic separado para variables
-      const topic = `chat/${chat.id}/vars`
       client.subscribe(topic)
     })
 
-    client.on("message", (topic, payload) => {
+    client.on("message", (t, payload) => {
+      if (t !== topic) return
+
       try {
         const data = JSON.parse(payload.toString())
+        if (String(data.chat_id) !== String(chat.id)) return
 
-        // Si publicás con chat_id, filtramos por seguridad
-        if (data?.chat_id && String(data.chat_id) !== String(chat.id)) return
-
-        /**
-         * Soportamos 2 formatos:
-         * A) { chat_id, vars: {dni:"...", ...} }   -> reemplaza todo
-         * B) { chat_id, var: {name:"dni", value:"..."} } -> upsert 1 variable
-         */
-        if (data?.vars && typeof data.vars === "object" && !Array.isArray(data.vars)) {
-          setVarsState(data.vars)
+        // ✅ si viene el mapa completo, reemplazamos
+        if (data.vars && typeof data.vars === "object" && !Array.isArray(data.vars)) {
+          setVarsMap(data.vars)
           return
         }
 
-        const v = data?.var
-        if (v?.name) {
-          setVarsState((prev) => ({
+        // ✅ si viene una sola variable, merge por name (pisar, no append)
+        if (data.var?.name) {
+          const k = String(data.var.name)
+          setVarsMap((prev) => ({
             ...prev,
-            [v.name]: v.value,
+            [k]: data.var.value,
           }))
         }
       } catch (err) {
@@ -122,43 +145,42 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
     })
 
     return () => {
-      client.end()
+      try {
+        client.end(true)
+      } catch { }
     }
   }, [chat?.id])
 
-  // ✅ Variables a renderizar:
-  // 1) si vienen por props (backend) ganan
-  // 2) si no, usamos varsState (vivo)
-  const derivedVars: ChatVariable[] = useMemo(() => {
-    const varsFromProps = Array.isArray(variables) ? variables : []
-    if (varsFromProps.length > 0) return varsFromProps
+  // ✅ 4) Lista a render desde el mapa (no duplica nunca)
+  const derivedVars: ChatVariable[] = Object.entries(varsMap).map(([name, value]) => ({
+    name,
+    value,
+    type: detectType(value),
+  }))
 
-    return Object.entries(varsState).map(([name, value]) => ({
-      name,
-      value,
-      type: detectType(value),
-    }))
-  }, [variables, varsState])
+  // orden opcional para que se vea prolijo
+  derivedVars.sort((a, b) => a.name.localeCompare(b.name))
 
   const hasVars = derivedVars.length > 0
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-4 border-b border-gray-300">
+      {/* Header */}
+      <div className="p-4 border-b border-gray-300 bg-gray-50">
         <h2 className="text-lg font-semibold text-foreground">Información del Chat</h2>
       </div>
 
       <div className="flex-1 overflow-y-auto custom-scrollbar">
         <div className="p-4">
+          {/* Contacto */}
           <div className="flex flex-col items-center text-center mb-6">
             <div className="relative mb-3">
               <Avatar className="h-16 w-16 bg-gray-300 flex items-center justify-center">
                 <User />
               </Avatar>
             </div>
-
             <h3 className="font-semibold text-foreground text-lg">{chat.name}</h3>
-            <h3 className="text-sm text-muted-foreground">{chat.number}</h3>
+            <p className="text-sm text-muted-foreground">{chat.number}</p>
 
             {chat.unread > 0 && (
               <Badge variant="secondary" className="mt-2 bg-[#013765] text-white">
@@ -167,12 +189,12 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
             )}
           </div>
 
+          {/* Variables */}
           <div>
             <h4 className="font-medium text-foreground mb-3 flex items-center gap-2">
-              <Database className="h-4 w-4 text-muted-foreground" />
+              <Database className="h-4 w-4" />
               Variables del Chat
             </h4>
-
 
             {!hasVars ? (
               <div className="bg-muted/30 rounded-lg p-3 border border-gray-300">
@@ -182,44 +204,33 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
               </div>
             ) : (
               <div className="space-y-3">
-                {derivedVars.map((variable, index) => {
+                {derivedVars.map((variable) => {
                   const t = (variable.type as VarType) ?? detectType(variable.value)
 
                   return (
-                    <div className="space-y-3">
-                      {derivedVars.map((variable, index) => {
-                        const t = variable.type as VarType
+                    <div
+                      key={variable.name}
+                      className="rounded-lg border border-gray-200 bg-gray-100/80 px-4 py-3 shadow-sm"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          {getVariableIcon(t)}
+                          <span className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                            {variable.name}
+                          </span>
+                        </div>
 
-                        return (
-                          <div
-                            key={`${variable.name}-${index}`}
-                            className="
-                              rounded-lg
-                              bg-gray-200
-                              border
-                              border-gray-200
-                              px-3
-                              py-2.5
-                              shadow-sm
-                            "
-                          >
-                            {/* Header: nombre + tipo */}
-                            <div className="flex items-center justify-between mb-1">
-                              <span className="text-xs uppercase tracking-wide text-muted-foreground">
-                                {variable.name}
-                              </span>
-                              </div>
+                        <span className="text-[11px] text-muted-foreground">
+                          {t}
+                        </span>
+                      </div>
 
-                            {/* Valor */}
-                            <div className="text-sm font-medium text-foreground break-all">
-                              {formatVariableValue(variable.value, t)}
-                            </div>
-                          </div>
-                        )
-                      })}
+                      <div className="mt-1">
+                        <div className="text-sm font-medium text-foreground break-words">
+                          {formatVariableValue(variable.value, t)}
+                        </div>
+                      </div>
                     </div>
-
-
                   )
                 })}
               </div>

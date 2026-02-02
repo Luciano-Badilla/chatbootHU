@@ -180,6 +180,38 @@ export default function ChatMain({ chat }: ChatMainProps) {
     }
   }
 
+  useEffect(() => {
+    if (!chat) return
+
+    const mosquitto_host = import.meta.env.VITE_MOSQUITTO_HOST
+    const client = mqtt.connect(`ws://${mosquitto_host}:9001`)
+
+    const topic = `status_bot/chat/${chat.id}`
+
+    client.on("connect", () => {
+      client.subscribe(topic)
+    })
+
+    client.on("message", (t, payload) => {
+      if (t !== topic) return
+
+      try {
+        const data = JSON.parse(payload.toString())
+
+        if (String(data.chat_id) !== String(chat.id)) return
+
+        setBotEnabled(data.status === "enabled")
+      } catch (err) {
+        console.error("Error procesando MQTT status_bot en ChatMain:", err)
+      }
+    })
+
+    return () => {
+      client.end(true)
+    }
+  }, [chat?.id])
+
+
   // 🔹 Pausar / reanudar bot para este chat
   const handleToggleBot = async () => {
     if (!chat || togglingBot) return

@@ -73,6 +73,8 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
   const handleSelectChat = async (chatId: string) => {
     onSelectChat(chatId)
 
+    window.dispatchEvent(new CustomEvent("chat:read", { detail: { chatId } }))
+
     try {
       await fetch(`${import.meta.env.VITE_APP_URL}/api/message/markAsRead/${chatId}`, {
         method: "POST",
@@ -82,6 +84,7 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
       console.error("Error marcando como leído:", err)
     }
   }
+
 
   return (
     <div className="flex flex-col h-full">
@@ -103,7 +106,7 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
 
       <div className="flex-1 overflow-y-auto custom-scrollbar">
         <div className="p-2">
-          {visibleChats.length > 0 ? (
+          {visibleg.length > 0 ? (
             visibleChats.map((chat) => (
               <div
                 key={chat.id}
