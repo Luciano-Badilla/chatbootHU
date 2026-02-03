@@ -106,7 +106,7 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
 
       <div className="flex-1 overflow-y-auto custom-scrollbar">
         <div className="p-2">
-          {visibleg.length > 0 ? (
+          {visibleChats.length > 0 ? (
             visibleChats.map((chat) => (
               <div
                 key={chat.id}

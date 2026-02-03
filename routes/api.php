@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\BotFlowController;
 use App\Http\Controllers\ChatController;
+use App\Http\Controllers\ChatMediaController;
 use App\Http\Controllers\WhatsAppController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -31,6 +32,7 @@ Route::put('/bot/flows/{flow}/start-node', [BotFlowController::class, 'setStartN
 Route::get('/bot/flows/{flow}/nodes', [BotFlowController::class, 'nodes']);
 Route::post('/bot/flows/{flow}/nodes', [BotFlowController::class, 'storeNode']);
 Route::put('/bot/nodes/{node}', [BotFlowController::class, 'updateNode']);
+Route::get('/chats/{chat}/media', [ChatMediaController::class, 'index']);
 
 
 

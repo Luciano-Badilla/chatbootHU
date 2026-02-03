@@ -665,7 +665,8 @@ class WhatsAppController extends Controller
 
             case 'buttons':
             case 'list':
-                if (!$interactiveReplyId) return $currentNode;
+                if (!$interactiveReplyId)
+                    return $currentNode;
 
                 $settings = $currentNode->settings ?? [];
                 $options = $settings['buttons'] ?? $settings['rows'] ?? [];
@@ -678,13 +679,15 @@ class WhatsAppController extends Controller
                     }
                 }
 
-                if (!$nextNodeId) return $currentNode;
+                if (!$nextNodeId)
+                    return $currentNode;
 
                 $nextNode = BotNode::where('flow_id', $currentNode->flow_id)
                     ->where('id', $nextNodeId)
                     ->first();
 
-                if (!$nextNode) return null;
+                if (!$nextNode)
+                    return null;
 
                 $chat->bot_node_id = $nextNode->id;
                 $chat->save();
@@ -697,7 +700,7 @@ class WhatsAppController extends Controller
                 // y sendBotNode va a setear pending_input
                 return $currentNode;
 
-                // 3) Texto plano
+            // 3) Texto plano
             case 'text':
                 if (in_array(mb_strtolower($text), ['menú', 'menu'], true)) {
                     $menuNode = BotNode::where('flow_id', $currentNode->flow_id)
@@ -735,7 +738,8 @@ class WhatsAppController extends Controller
 
             // enviar mensaje del handoff (si tiene)
             if ($node->body) {
-                $this->sendWhatsAppText($chat, $node->body, 'user');
+                $body = $this->renderTemplate($node->body, $chat, $node);
+                $this->sendWhatsAppText($chat, $body, 'user');
             }
 
             // apagar bot
@@ -777,16 +781,17 @@ class WhatsAppController extends Controller
             return;
         }
 
-
+        // input
         if ($node->type === 'input') {
 
             // 1) Si ya había pending_input, lo leemos para ver si hay error
             $pending = $this->getPendingInput($chat);
             $errorToSend = is_array($pending) ? ($pending['last_error'] ?? null) : null;
 
-            // 2) Mandamos primero el error si existe, sino el body normal
+            // 2) Mandamos primero el error si existe, sino el body normal (renderizado)
             if ($errorToSend) {
-                $this->sendWhatsAppText($chat, $errorToSend, 'user');
+                $err = $this->renderTemplate($errorToSend, $chat, $node);
+                $this->sendWhatsAppText($chat, $err, 'user');
 
                 // limpiamos last_error para que no se repita infinitamente
                 $state = $this->getState($chat);
@@ -796,7 +801,8 @@ class WhatsAppController extends Controller
                 }
             } else {
                 if ($node->body) {
-                    $this->sendWhatsAppText($chat, $node->body, 'user');
+                    $body = $this->renderTemplate($node->body, $chat, $node);
+                    $this->sendWhatsAppText($chat, $body, 'user');
                 }
             }
 
@@ -809,11 +815,11 @@ class WhatsAppController extends Controller
             return;
         }
 
-
         // text
         if ($node->type === 'text') {
             if ($node->body) {
-                $this->sendWhatsAppText($chat, $node->body, 'user');
+                $body = $this->renderTemplate($node->body, $chat, $node);
+                $this->sendWhatsAppText($chat, $body, 'user');
             }
             return;
         }
@@ -832,6 +838,7 @@ class WhatsAppController extends Controller
     }
 
 
+
     private function sendWhatsAppButtons(Chat $chat, BotNode $node): void
     {
         $contact = $chat->contact;
@@ -842,9 +849,12 @@ class WhatsAppController extends Controller
         $settings = $node->settings ?? [];
         $buttons = $settings['buttons'] ?? [];
 
+        // ✅ Render del body con variables
+        $bodyText = $this->renderTemplate($node->body ?? '', $chat, $node);
+
         if (empty($buttons)) {
             // si no hay botones configurados, mandamos texto simple
-            $this->sendWhatsAppText($chat, $node->body ?? '', 'user');
+            $this->sendWhatsAppText($chat, $bodyText, 'user');
             return;
         }
 
@@ -855,11 +865,14 @@ class WhatsAppController extends Controller
 
         $waButtons = [];
         foreach ($buttons as $btn) {
+            // ✅ opcional: también renderizar títulos
+            $title = $this->renderTemplate((string) ($btn['title'] ?? ''), $chat, $node);
+
             $waButtons[] = [
                 'type' => 'reply',
                 'reply' => [
                     'id' => $btn['id'],
-                    'title' => $btn['title'],
+                    'title' => $title,
                 ],
             ];
         }
@@ -871,7 +884,7 @@ class WhatsAppController extends Controller
             'interactive' => [
                 'type' => 'button',
                 'body' => [
-                    'text' => $node->body ?? '',
+                    'text' => $bodyText,
                 ],
                 'action' => [
                     'buttons' => $waButtons,
@@ -887,8 +900,11 @@ class WhatsAppController extends Controller
         }
 
         $waMessageId = $response->json()['messages'][0]['id'] ?? null;
-        $this->persistAndPublishOutgoing($chat, $node->body ?? '', $waMessageId);
+
+        // ✅ IMPORTANTE: persistimos el texto renderizado (no el raw)
+        $this->persistAndPublishOutgoing($chat, $bodyText, $waMessageId);
     }
+
 
     private function sendWhatsAppList(Chat $chat, BotNode $node): void
     {
@@ -903,8 +919,13 @@ class WhatsAppController extends Controller
         $sectionTitle = $settings['section_title'] ?? 'Opciones';
         $rows = $settings['rows'] ?? [];
 
+        // ✅ Render con variables
+        $bodyText = $this->renderTemplate($node->body ?? '', $chat, $node);
+        $buttonText = $this->renderTemplate((string) $buttonText, $chat, $node);
+        $sectionTitle = $this->renderTemplate((string) $sectionTitle, $chat, $node);
+
         if (empty($rows)) {
-            $this->sendWhatsAppText($chat, $node->body ?? '', 'user');
+            $this->sendWhatsAppText($chat, $bodyText, 'user');
             return;
         }
 
@@ -917,8 +938,10 @@ class WhatsAppController extends Controller
         foreach ($rows as $row) {
             $waRows[] = [
                 'id' => $row['id'],
-                'title' => $row['title'],
-                'description' => $row['description'] ?? null,
+                'title' => $this->renderTemplate((string) ($row['title'] ?? ''), $chat, $node),
+                'description' => ($desc = $this->renderTemplate((string) ($row['description'] ?? ''), $chat, $node)) !== ''
+                    ? $desc
+                    : null,
             ];
         }
 
@@ -929,7 +952,7 @@ class WhatsAppController extends Controller
             'interactive' => [
                 'type' => 'list',
                 'body' => [
-                    'text' => $node->body ?? '',
+                    'text' => $bodyText,
                 ],
                 'action' => [
                     'button' => $buttonText,
@@ -951,8 +974,11 @@ class WhatsAppController extends Controller
         }
 
         $waMessageId = $response->json()['messages'][0]['id'] ?? null;
-        $this->persistAndPublishOutgoing($chat, $node->body ?? '', $waMessageId);
+
+        // ✅ persistimos el texto renderizado
+        $this->persistAndPublishOutgoing($chat, $bodyText, $waMessageId);
     }
+
 
     public function updateBotStatus(Request $request, Chat $chat)
     {
@@ -1016,11 +1042,12 @@ class WhatsAppController extends Controller
 
     private function resetChatToStartFromFlow(Chat $chat, BotFlow $flow, string $reason = null): void
     {
-        if (!$flow->start_node_id) return;
+        if (!$flow->start_node_id)
+            return;
 
         // ✅ preservar variables ya capturadas
         $state = $this->getState($chat);
-        $vars  = is_array($state['vars'] ?? null) ? $state['vars'] : [];
+        $vars = is_array($state['vars'] ?? null) ? $state['vars'] : [];
 
         $chat->bot_flow_id = $flow->id;
         $chat->bot_node_id = $flow->start_node_id;
@@ -1041,7 +1068,8 @@ class WhatsAppController extends Controller
 
     private function maybeResetAfterSendingNode(Chat $chat, BotFlow $flow, BotNode $sentNode): bool
     {
-        if (!$chat->bot_enabled) return false;
+        if (!$chat->bot_enabled)
+            return false;
 
         // ✅ SOLO text puede ser terminal automático
         if ($sentNode->type === 'text' && empty($sentNode->next_node_id)) {
@@ -1201,9 +1229,9 @@ class WhatsAppController extends Controller
         $state = $this->getState($chat);
         $state['pending_input'] = [
             'node_id' => $node->id,
-            'variable' => (string)($settings['variable'] ?? ''),
-            'validation_regex' => (string)($settings['validation_regex'] ?? ''),
-            'error_message' => (string)($settings['error_message'] ?? 'Valor inválido, intentá de nuevo.'),
+            'variable' => (string) ($settings['variable'] ?? ''),
+            'validation_regex' => (string) ($settings['validation_regex'] ?? ''),
+            'error_message' => (string) ($settings['error_message'] ?? 'Valor inválido, intentá de nuevo.'),
             'next_node_id' => $node->next_node_id, // clave: a dónde avanzar cuando capture OK
         ];
         $this->setState($chat, $state);
@@ -1227,4 +1255,94 @@ class WhatsAppController extends Controller
     {
         return BotNode::where('flow_id', $flowId)->where('id', $nodeId)->first();
     }
+
+    private function renderTemplate(?string $text, Chat $chat, ?BotNode $node = null): string
+    {
+        if ($text === null || $text === '')
+            return (string) $text;
+
+        $vars = $this->getVars($chat);
+
+        // built-ins (sin ensuciar vars del usuario)
+        $builtins = [
+            'chat.id' => (string) $chat->id,
+            'chat.status' => (string) $chat->status,
+            'contact.name' => (string) ($chat->contact?->name ?? ''),
+            'contact.whatsapp_id' => (string) ($chat->contact?->whatsapp_id ?? ''),
+            'flow.id' => (string) ($chat->bot_flow_id ?? ''),
+            'node.id' => (string) ($node?->id ?? ($chat->bot_node_id ?? '')),
+            'node.key' => (string) ($node?->key ?? ''),
+        ];
+
+        // Reemplaza {{ ... }}
+        $out = preg_replace_callback('/\{\{\s*(.+?)\s*\}\}/u', function ($m) use ($vars, $builtins) {
+            $expr = trim($m[1]);
+
+            // soporta: key|default|pipe1|pipe2...
+            $parts = array_map('trim', explode('|', $expr));
+            $key = $parts[0] ?? '';
+
+            // default (si viene)
+            $default = null;
+            if (count($parts) >= 2 && $this->isDefaultCandidate($parts[1])) {
+                $default = $parts[1];
+            }
+
+            // valor
+            $value = null;
+
+            if ($key !== '') {
+                if (array_key_exists($key, $builtins)) {
+                    $value = $builtins[$key];
+                } elseif (array_key_exists($key, $vars)) {
+                    $value = $vars[$key];
+                }
+            }
+
+            // si es array/obj lo pasamos a json legible
+            if (is_array($value) || is_object($value)) {
+                $value = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            }
+
+            $value = (string) ($value ?? '');
+
+            // default si vacío
+            if ($value === '' && $default !== null) {
+                $value = (string) $default;
+            }
+
+            // pipes (a partir del 2do si usamos default, o del 2do siempre si no)
+            $pipeStart = 1;
+            if ($default !== null)
+                $pipeStart = 2;
+
+            for ($i = $pipeStart; $i < count($parts); $i++) {
+                $pipe = strtolower(trim($parts[$i]));
+                $value = $this->applyPipe($value, $pipe);
+            }
+
+            return $value;
+        }, $text);
+
+        return $out ?? $text;
+    }
+
+    private function isDefaultCandidate(string $s): bool
+    {
+        // cualquier texto que no sea un pipe conocido lo tratamos como default
+        // (si querés, podés hacerlo más estricto)
+        $pipes = ['upper', 'lower', 'trim'];
+        return !in_array(strtolower(trim($s)), $pipes, true);
+    }
+
+    private function applyPipe(string $value, string $pipe): string
+    {
+        return match ($pipe) {
+            'upper' => mb_strtoupper($value),
+            'lower' => mb_strtolower($value),
+            'trim' => trim($value),
+            default => $value, // pipes desconocidos: no hacen nada
+        };
+    }
+
 }

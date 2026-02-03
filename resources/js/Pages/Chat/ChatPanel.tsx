@@ -49,11 +49,12 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
 
   // ID del chat seleccionado actualmente en la UI.
   const [selectedChatId, setSelectedChatId] = useState<string>(
-    initialChats[0]?.id || ""
+    String(initialChats[0]?.id ?? "")
   )
 
+
   // Obtenemos el objeto del chat seleccionado a partir del estado.
-  const selectedChat = chats.find((chat) => chat.id === selectedChatId)
+  const selectedChat = chats.find((chat) => String(chat.id) === selectedChatId)
 
   // 🔹 NUEVO: marcar como leídos al abrir el chat
   useEffect(() => {
