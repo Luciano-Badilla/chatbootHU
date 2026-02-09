@@ -1048,6 +1048,7 @@ class WhatsAppController extends Controller
         // ✅ preservar variables ya capturadas
         $state = $this->getState($chat);
         $vars = is_array($state['vars'] ?? null) ? $state['vars'] : [];
+        $varsByDate = is_array($state['vars_by_date'] ?? null) ? $state['vars_by_date'] : [];
 
         $chat->bot_flow_id = $flow->id;
         $chat->bot_node_id = $flow->start_node_id;
@@ -1055,6 +1056,7 @@ class WhatsAppController extends Controller
         // ✅ limpiamos solo lo que rompe el próximo ciclo
         $chat->bot_state = [
             'vars' => $vars,
+            'vars_by_date' => $varsByDate,
             // pending_input se elimina al reset
         ];
         $chat->bot_step = null;
@@ -1196,6 +1198,17 @@ class WhatsAppController extends Controller
         $state = $this->getState($chat);
         $state['vars'] = is_array($state['vars'] ?? null) ? $state['vars'] : [];
         $state['vars'][$key] = $value;
+        $state['vars_by_date'] = is_array($state['vars_by_date'] ?? null) ? $state['vars_by_date'] : [];
+
+        $isoNow = now()->toIso8601String();
+        $dateKey = now()->format('Y-m-d');
+        $state['vars_by_date'][$dateKey] = is_array($state['vars_by_date'][$dateKey] ?? null)
+            ? $state['vars_by_date'][$dateKey]
+            : [];
+        $state['vars_by_date'][$dateKey][$key] = [
+            'value' => $value,
+            'updated_at' => $isoNow,
+        ];
 
         $chat->bot_state = $state;
         $chat->save();
@@ -1209,9 +1222,12 @@ class WhatsAppController extends Controller
                 'var' => [
                     'name' => $key,
                     'value' => $value,
+                    'updated_at' => $isoNow,
+                    'date' => $dateKey,
                 ],
                 'vars' => $state['vars'],
-                'timestamp' => now()->toIso8601String(),
+                'vars_by_date' => $state['vars_by_date'],
+                'timestamp' => $isoNow,
             ]), 0);
 
             $mqtt->disconnect();

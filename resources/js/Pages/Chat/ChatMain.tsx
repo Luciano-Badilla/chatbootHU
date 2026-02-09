@@ -2,7 +2,7 @@
 
 import type React from "react"
 import { useEffect, useRef, useState } from "react"
-import { Send, User, MoreVertical, PowerOff, Power, Loader } from "lucide-react"
+import { Send, User } from "lucide-react"
 import { Button } from "shadcn/components/ui/button"
 import { Input } from "shadcn/components/ui/input"
 import { Avatar, AvatarFallback } from "shadcn/components/ui/avatar"
@@ -22,17 +22,7 @@ export default function ChatMain({ chat }: ChatMainProps) {
   const [loading, setLoading] = useState(false)
   const [sending, setSending] = useState(false)
 
-  const [botEnabled, setBotEnabled] = useState<boolean>(chat?.bot_enabled ?? true)
-  const [togglingBot, setTogglingBot] = useState(false)
-
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
-
-  // 🔹 Sync de estado del bot cuando cambia el chat
-  useEffect(() => {
-    if (chat) {
-      setBotEnabled(chat.bot_enabled ?? true)
-    }
-  }, [chat?.id, chat?.bot_enabled])
 
   // 🔹 Helper para armar la URL del media
   const buildMediaSrc = (url?: string | null) => {
@@ -180,73 +170,6 @@ export default function ChatMain({ chat }: ChatMainProps) {
     }
   }
 
-  useEffect(() => {
-    if (!chat) return
-
-    const mosquitto_host = import.meta.env.VITE_MOSQUITTO_HOST
-    const client = mqtt.connect(`ws://${mosquitto_host}:9001`)
-
-    const topic = `status_bot/chat/${chat.id}`
-
-    client.on("connect", () => {
-      client.subscribe(topic)
-    })
-
-    client.on("message", (t, payload) => {
-      if (t !== topic) return
-
-      try {
-        const data = JSON.parse(payload.toString())
-
-        if (String(data.chat_id) !== String(chat.id)) return
-
-        setBotEnabled(data.status === "enabled")
-      } catch (err) {
-        console.error("Error procesando MQTT status_bot en ChatMain:", err)
-      }
-    })
-
-    return () => {
-      client.end(true)
-    }
-  }, [chat?.id])
-
-
-  // 🔹 Pausar / reanudar bot para este chat
-  const handleToggleBot = async () => {
-    if (!chat || togglingBot) return
-
-    const nextEnabled = !botEnabled
-    setTogglingBot(true)
-
-    // Optimista
-    setBotEnabled(nextEnabled)
-
-    try {
-      const res = await fetch(
-        `${import.meta.env.VITE_APP_URL}/api/chats/${chat.id}/bot`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ bot_enabled: nextEnabled }),
-        },
-      )
-
-      if (!res.ok) {
-        console.error("Error al actualizar estado del bot", await res.text())
-        // revertimos
-        setBotEnabled(!nextEnabled)
-      }
-    } catch (err) {
-      console.error("Error de red al actualizar bot:", err)
-      setBotEnabled(!nextEnabled)
-    } finally {
-      setTogglingBot(false)
-    }
-  }
-
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
@@ -373,7 +296,7 @@ export default function ChatMain({ chat }: ChatMainProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Header del chat */}
-      <div className="flex items-center justify-between p-4 border-b border-gray-300 bg-gray-100">
+      <div className="flex items-center p-4 border-b border-gray-300 bg-gray-100">
         <div className="flex items-center gap-3">
           <div className="relative">
             <Avatar className="h-10 w-10 flex items-center justify-center bg-gray-300 text-black">
@@ -385,40 +308,6 @@ export default function ChatMain({ chat }: ChatMainProps) {
 
 
           </div>
-        </div>
-
-        {/* Estado del bot */}
-        <div className="flex items-center gap-2">
-          <span
-            className={cn(
-              "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
-              botEnabled
-                ? "bg-emerald-100 text-emerald-800"
-                : "bg-gray-200 text-gray-700",
-            )}
-          >
-            <span
-              className={cn(
-                "mr-1 h-2 w-2 rounded-full",
-                botEnabled ? "bg-emerald-500" : "bg-gray-400",
-              )}
-            />
-            {botEnabled ? "Bot activo" : "Bot pausado"}
-          </span>
-
-          <Button
-            variant="outline"
-            size="xs"
-            className="h-6 text-xs px-2 py-4 bg-gray-300 text-white rounded-xl"
-            onClick={handleToggleBot}
-            disabled={togglingBot}
-          >
-            {togglingBot
-              ? <Loader />
-              : botEnabled
-                ? <PowerOff className="text-red-500 h-2.5 w-2.5" />
-                : <Power className="text-green-500 h-2.5 w-2.5" />}
-          </Button>
         </div>
       </div>
 

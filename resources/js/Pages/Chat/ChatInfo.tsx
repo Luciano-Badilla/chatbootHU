@@ -1,11 +1,13 @@
 "use client"
 
 import React, { useEffect, useMemo, useRef, useState } from "react"
-import { Code, Database, Zap, User, Image as ImageIcon, FileText, Video, Music } from "lucide-react"
+import { Code, Database, Zap, User, Image as ImageIcon, FileText, Video, Music, Bot, Clock3, MessageSquare, PowerOff, Power, Loader2, ChevronDown, ChevronRight } from "lucide-react"
 import { Avatar } from "shadcn/components/ui/avatar"
 import { Badge } from "shadcn/components/ui/badge"
 import { Button } from "shadcn/components/ui/button"
 import mqtt from "mqtt"
+import { formatDistanceToNow, format, parseISO } from "date-fns"
+import { es } from "date-fns/locale"
 import type { Chat, ChatVariable } from "./ChatPanel"
 
 interface ChatInfoProps {
@@ -25,6 +27,13 @@ interface MediaItem {
   media_name?: string | null
   created_at?: string | null
 }
+
+type VarEntry = {
+  value: any
+  updated_at?: string | null
+}
+
+type VarsByDateMap = Record<string, Record<string, VarEntry>>
 
 type PreviewMedia = {
   url: string
@@ -84,17 +93,56 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
     return String(value)
   }
 
+  const normalizeVarsByDate = (raw: any): VarsByDateMap => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {}
+
+    const out: VarsByDateMap = {}
+    for (const [dateKey, varsOfDate] of Object.entries(raw)) {
+      if (!varsOfDate || typeof varsOfDate !== "object" || Array.isArray(varsOfDate)) continue
+      out[dateKey] = {}
+      for (const [name, entry] of Object.entries(varsOfDate as Record<string, any>)) {
+        if (entry && typeof entry === "object" && !Array.isArray(entry) && ("value" in entry)) {
+          out[dateKey][name] = {
+            value: (entry as any).value,
+            updated_at: (entry as any).updated_at ?? null,
+          }
+        } else {
+          out[dateKey][name] = {
+            value: entry,
+            updated_at: null,
+          }
+        }
+      }
+    }
+    return out
+  }
+
+  const deriveVarsByDateFromFlat = (rawVars: Record<string, any>): VarsByDateMap => {
+    const dateKey = format(new Date(), "yyyy-MM-dd")
+    const bucket: Record<string, VarEntry> = {}
+    for (const [name, value] of Object.entries(rawVars || {})) {
+      bucket[name] = { value, updated_at: null }
+    }
+    return Object.keys(bucket).length ? { [dateKey]: bucket } : {}
+  }
+
   // ---------------------------
   // ✅ Variables: MAPA (sin duplicados)
   // ---------------------------
-  const [varsMap, setVarsMap] = useState<Record<string, any>>(() => {
+  const [varsByDateMap, setVarsByDateMap] = useState<VarsByDateMap>(() => {
+    const byDate = normalizeVarsByDate((chat?.bot_state as any)?.vars_by_date)
+    if (Object.keys(byDate).length > 0) return byDate
+
     if (Array.isArray(variables) && variables.length > 0) {
       const m: Record<string, any> = {}
       for (const v of variables) m[v.name] = v.value
-      return m
+      return deriveVarsByDateFromFlat(m)
     }
-    const initial = (chat?.bot_state as any)?.vars
-    return initial && typeof initial === "object" && !Array.isArray(initial) ? initial : {}
+
+    const flat = (chat?.bot_state as any)?.vars
+    return flat && typeof flat === "object" && !Array.isArray(flat)
+      ? deriveVarsByDateFromFlat(flat)
+      : {}
   })
 
   // rehidrata vars al cambiar chat
@@ -102,25 +150,160 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
     if (Array.isArray(variables) && variables.length > 0) {
       const m: Record<string, any> = {}
       for (const v of variables) m[v.name] = v.value
-      setVarsMap(m)
+      setVarsByDateMap(deriveVarsByDateFromFlat(m))
       return
     }
 
     const v = (chat?.bot_state as any)?.vars
-    setVarsMap(v && typeof v === "object" && !Array.isArray(v) ? v : {})
+    const byDate = normalizeVarsByDate((chat?.bot_state as any)?.vars_by_date)
+    if (Object.keys(byDate).length > 0) {
+      setVarsByDateMap(byDate)
+    } else {
+      const flat = v && typeof v === "object" && !Array.isArray(v) ? v : {}
+      setVarsByDateMap(deriveVarsByDateFromFlat(flat))
+    }
   }, [chat?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const derivedVars: ChatVariable[] = useMemo(() => {
-    const list: ChatVariable[] = Object.entries(varsMap).map(([name, value]) => ({
-      name,
-      value,
-      type: detectType(value),
-    }))
-    list.sort((a, b) => a.name.localeCompare(b.name))
-    return list
-  }, [varsMap]) // eslint-disable-line react-hooks/exhaustive-deps
+  const varGroups = useMemo(() => {
+    return Object.entries(varsByDateMap)
+      .filter(([, vars]) => vars && Object.keys(vars).length > 0)
+      .sort(([a], [b]) => b.localeCompare(a))
+      .map(([date, vars]) => {
+        const list: ChatVariable[] = Object.entries(vars).map(([name, entry]) => ({
+          name,
+          value: (entry as VarEntry).value,
+          type: detectType((entry as VarEntry).value),
+        }))
+        list.sort((x, y) => x.name.localeCompare(y.name))
+        return { date, vars: list }
+      })
+  }, [varsByDateMap]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const hasVars = derivedVars.length > 0
+  const totalVarsCount = useMemo(
+    () => varGroups.reduce((acc, group) => acc + group.vars.length, 0),
+    [varGroups],
+  )
+
+  const hasVars = varGroups.length > 0
+  const [expandedVarDates, setExpandedVarDates] = useState<Record<string, boolean>>({})
+
+  useEffect(() => {
+    if (!hasVars) {
+      setExpandedVarDates({})
+      return
+    }
+
+    setExpandedVarDates((prev) => {
+      const todayKey = format(new Date(), "yyyy-MM-dd")
+      const hasPrevKeys = Object.keys(prev).length > 0
+      const next: Record<string, boolean> = {}
+
+      for (const group of varGroups) {
+        next[group.date] = hasPrevKeys ? Boolean(prev[group.date]) : group.date === todayKey
+      }
+
+      // Si existe el grupo de hoy, siempre mantenerlo desplegado.
+      if (Object.prototype.hasOwnProperty.call(next, todayKey)) {
+        next[todayKey] = true
+      }
+
+      if (!Object.values(next).some(Boolean) && varGroups[0]) {
+        next[varGroups[0].date] = true
+      }
+
+      return next
+    })
+  }, [chat?.id, hasVars, varGroups])
+
+  // ---------------------------
+  // ✅ Información general
+  // ---------------------------
+  const [botEnabled, setBotEnabled] = useState<boolean>(chat.bot_enabled ?? true)
+  const [togglingBot, setTogglingBot] = useState(false)
+  const [totalMessages, setTotalMessages] = useState<number | null>(null)
+  const [lastMessageAt, setLastMessageAt] = useState<string | null>(chat.timestamp ?? null)
+  const knownMessageIdsRef = useRef<Set<string>>(new Set())
+
+  type MqttStatus = "connected" | "connecting" | "reconnecting" | "offline" | "disconnected" | "error"
+  const [mqttStatus, setMqttStatus] = useState<MqttStatus>("disconnected")
+  const [mqttLastEventAt, setMqttLastEventAt] = useState<string | null>(null)
+
+  // Reiniciar contadores/estado de red solo cuando cambia el chat seleccionado.
+  useEffect(() => {
+    setTotalMessages(null)
+    setMqttStatus("disconnected")
+    setMqttLastEventAt(null)
+    knownMessageIdsRef.current = new Set()
+  }, [chat?.id])
+
+  // Mantener sincronizado el estado del bot con la data del chat.
+  useEffect(() => {
+    setBotEnabled(chat.bot_enabled ?? true)
+  }, [chat?.bot_enabled])
+
+  // Actualizar timestamp del último mensaje sin resetear tarjetas.
+  useEffect(() => {
+    setLastMessageAt(chat.timestamp ?? null)
+  }, [chat?.timestamp])
+
+  const formatDateSafe = (raw?: string | null) => {
+    if (!raw) return "Sin datos"
+    try {
+      const parsed = raw.includes("T") ? parseISO(raw) : new Date(raw.replace(" ", "T"))
+      if (isNaN(parsed.getTime())) return "Sin datos"
+      return format(parsed, "dd/MM/yyyy HH:mm")
+    } catch {
+      return "Sin datos"
+    }
+  }
+
+  const formatDateOnlySafe = (rawDate?: string | null) => {
+    if (!rawDate) return "Sin fecha"
+    try {
+      const parsed = rawDate.includes("T") ? parseISO(rawDate) : new Date(rawDate.replace(" ", "T"))
+      if (isNaN(parsed.getTime())) return rawDate
+      return format(parsed, "dd/MM/yyyy")
+    } catch {
+      return rawDate
+    }
+  }
+
+  const formatRelativeSafe = (raw?: string | null) => {
+    if (!raw) return "Sin actividad reciente"
+    try {
+      const parsed = raw.includes("T") ? parseISO(raw) : new Date(raw.replace(" ", "T"))
+      if (isNaN(parsed.getTime())) return "Sin actividad reciente"
+      return formatDistanceToNow(parsed, { addSuffix: true, locale: es })
+    } catch {
+      return "Sin actividad reciente"
+    }
+  }
+
+  useEffect(() => {
+    if (!chat?.id) return
+
+    let cancelled = false
+    setTotalMessages(null)
+
+    fetch(`${API_BASE}/api/chat/messages/${chat.id}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+      .then((data) => {
+        const list = Array.isArray(data) ? data : (data?.messages ?? [])
+        const ids = new Set<string>()
+        for (const m of list) {
+          if (m?.id !== undefined && m?.id !== null) ids.add(String(m.id))
+        }
+        knownMessageIdsRef.current = ids
+        if (!cancelled) setTotalMessages(Array.isArray(list) ? list.length : 0)
+      })
+      .catch(() => {
+        if (!cancelled) setTotalMessages(0)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [chat?.id])
 
   // ---------------------------
   // ✅ Medios
@@ -266,8 +449,10 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
     } catch { }
 
     const host = import.meta.env.VITE_MOSQUITTO_HOST
+    const clientId = `front_chatinfo_${chat.id}_${Math.random().toString(16).slice(2)}`
+    setMqttStatus("connecting")
     const client = mqtt.connect(`ws://${host}:9001`, {
-      clientId: `front_chatinfo_${chat.id}_${Math.random().toString(16).slice(2)}`,
+      clientId,
       clean: true,
       reconnectPeriod: 2000,
     })
@@ -276,28 +461,81 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
 
     const topicVars = `chat/${chat.id}/vars`
     const topicChat = `chat/${chat.id}`
+    const topicBotStatus = `status_bot/chat/${chat.id}`
 
     client.on("connect", () => {
+      setMqttStatus("connected")
+      setMqttLastEventAt(new Date().toISOString())
       client.subscribe(topicVars)
       client.subscribe(topicChat)
+      client.subscribe(topicBotStatus)
+    })
+
+    client.on("reconnect", () => {
+      setMqttStatus("reconnecting")
+      setMqttLastEventAt(new Date().toISOString())
+    })
+
+    client.on("offline", () => {
+      setMqttStatus("offline")
+      setMqttLastEventAt(new Date().toISOString())
+    })
+
+    client.on("close", () => {
+      setMqttStatus("disconnected")
+      setMqttLastEventAt(new Date().toISOString())
+    })
+
+    client.on("error", () => {
+      setMqttStatus("error")
+      setMqttLastEventAt(new Date().toISOString())
     })
 
     client.on("message", (t, payload) => {
       try {
         const data = JSON.parse(payload.toString())
+        setMqttLastEventAt(new Date().toISOString())
 
         // Vars
         if (t === topicVars) {
           if (String(data.chat_id) !== String(chat.id)) return
 
+          if (data.vars_by_date && typeof data.vars_by_date === "object" && !Array.isArray(data.vars_by_date)) {
+            setVarsByDateMap(normalizeVarsByDate(data.vars_by_date))
+          }
+
           if (data.vars && typeof data.vars === "object" && !Array.isArray(data.vars)) {
-            setVarsMap(data.vars)
+            if (!(data.vars_by_date && typeof data.vars_by_date === "object")) {
+              setVarsByDateMap(deriveVarsByDateFromFlat(data.vars))
+            }
             return
           }
 
           if (data.var?.name) {
             const k = String(data.var.name)
-            setVarsMap((prev) => ({ ...prev, [k]: data.var.value }))
+            setVarsByDateMap((prev) => {
+              const iso = typeof data.var.updated_at === "string"
+                ? data.var.updated_at
+                : (typeof data.timestamp === "string" ? data.timestamp : new Date().toISOString())
+              const dateKey = typeof data.var.date === "string"
+                ? data.var.date
+                : format(new Date(iso), "yyyy-MM-dd")
+
+              const next = { ...prev }
+              const bucket = { ...(next[dateKey] || {}) }
+              bucket[k] = { value: data.var.value, updated_at: iso }
+              next[dateKey] = bucket
+              return next
+            })
+          }
+          return
+        }
+
+        // Estado del bot
+        if (t === topicBotStatus) {
+          if (String(data.chat_id) !== String(chat.id)) return
+          if (typeof data.status === "string") {
+            setBotEnabled(data.status === "enabled")
           }
           return
         }
@@ -305,6 +543,19 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
         // Chat messages
         if (t === topicChat) {
           if (String(data.chat_id) !== String(chat.id)) return
+
+          const incomingId = data.message_id ?? data.id
+          if (incomingId !== undefined && incomingId !== null) {
+            const key = String(incomingId)
+            if (!knownMessageIdsRef.current.has(key)) {
+              knownMessageIdsRef.current.add(key)
+              setTotalMessages((prev) => (typeof prev === "number" ? prev + 1 : 1))
+            }
+          }
+
+          if (data.timestamp) {
+            setLastMessageAt(String(data.timestamp))
+          }
 
           const msgType = String(data.message_type || "")
           const mediaUrl = data.media_url ? String(data.media_url) : ""
@@ -335,9 +586,54 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
     return () => {
       try {
         client.end(true)
+        setMqttStatus("disconnected")
+        setMqttLastEventAt(new Date().toISOString())
       } catch { }
     }
   }, [chat?.id])
+
+  const mqttStatusMeta = useMemo(() => {
+    switch (mqttStatus) {
+      case "connected":
+        return { label: "Conectado", dot: "bg-green-500" }
+      case "connecting":
+        return { label: "Conectando", dot: "bg-yellow-500" }
+      case "reconnecting":
+        return { label: "Reconectando", dot: "bg-amber-500" }
+      case "offline":
+        return { label: "Offline", dot: "bg-orange-500" }
+      case "error":
+        return { label: "Error", dot: "bg-red-500" }
+      default:
+        return { label: "Desconectado", dot: "bg-gray-400" }
+    }
+  }, [mqttStatus])
+
+  const handleToggleBot = async () => {
+    if (!chat?.id || togglingBot) return
+
+    const nextEnabled = !botEnabled
+    setTogglingBot(true)
+    setBotEnabled(nextEnabled)
+
+    try {
+      const res = await fetch(`${API_BASE}/api/chats/${chat.id}/bot`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ bot_enabled: nextEnabled }),
+      })
+
+      if (!res.ok) {
+        setBotEnabled(!nextEnabled)
+      }
+    } catch {
+      setBotEnabled(!nextEnabled)
+    } finally {
+      setTogglingBot(false)
+    }
+  }
 
   // ---------------------------
   // UI helpers
@@ -359,7 +655,7 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
         type="button"
         size="sm"
         variant={active ? "default" : "outline"}
-        className={active ? "bg-[#013765] hover:bg-[#024a8a] text-white" : "border-gray-200 bg-blue-100 text-black"}
+        className={active ? "bg-[#013765] hover:bg-[#024a8a] text-white" : "border-gray-200 bg-white text-black"}
         onClick={() => setActiveMediaType(value)}
       >
         <span className="flex items-center gap-2">
@@ -381,7 +677,7 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
     children: React.ReactNode
   }) => (
     <div className="rounded-lg overflow-hidden border hover:opacity-95 transition">
-      <div className="h-24 w-full bg-blue-100 flex items-center justify-center">{children}</div>
+      <div className="h-24 w-full bg-white flex items-center justify-center">{children}</div>
       <div className="px-2 py-1 border-t bg-white">
         <div className="text-[10px] text-muted-foreground truncate">{name}</div>
       </div>
@@ -417,51 +713,150 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
             )}
           </div>
 
+          {/* Información general */}
+          <div className="mb-4">
+            <h4 className="font-medium text-foreground mb-3 flex items-center gap-2">
+              <Bot className="h-4 w-4" />
+              Información general
+            </h4>
+
+            <div className="grid grid-cols-1 gap-2 rounded-lg border border-gray-200 bg-white p-2.5 md:grid-cols-2">
+              <div className="rounded-md border border-gray-200 px-2.5 py-2">
+                <div className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase mb-1">BOT</div>
+                <div className="space-y-2">
+                  <Badge variant="secondary" className={botEnabled ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}>
+                    {botEnabled ? "Activo" : "Pausado"}
+                  </Badge>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-8 w-full px-2"
+                    onClick={handleToggleBot}
+                    disabled={togglingBot}
+                  >
+                    {togglingBot ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : botEnabled ? (
+                      <PowerOff className="h-3.5 w-3.5 text-red-600" />
+                    ) : (
+                      <Power className="h-3.5 w-3.5 text-green-600" />
+                    )}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="rounded-md border border-gray-200 px-2.5 py-2">
+                <div className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase mb-1">RED</div>
+                <div className="mt-1 text-[10px] text-muted-foreground">
+                  Estado MQTT:{" "}
+                  <span className="inline-flex items-center gap-1 text-foreground font-medium">
+                    <span className={`inline-block h-2 w-2 rounded-full ${mqttStatusMeta.dot}`} />
+                    {mqttStatusMeta.label}
+                  </span>
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  Último evento: <span className="text-foreground font-medium">{formatDateSafe(mqttLastEventAt)}</span>
+                </div>
+              </div>
+
+              <div className="rounded-md border border-gray-200 px-2.5 py-2">
+                <div className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase mb-1">TOTAL MENSAJES</div>
+                <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                  <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
+                  {totalMessages === null ? "Cargando..." : totalMessages}
+                </div>
+                <div className="mt-1 text-[10px] text-muted-foreground">
+                  Variables: <span className="text-foreground font-medium">{totalVarsCount}</span>
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  Con media: <span className="text-foreground font-medium">{media.length}</span>
+                </div>
+              </div>
+
+              <div className="rounded-md border border-gray-200 px-2.5 py-2">
+                <div className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase mb-1">ULTIMO MENSAJE</div>
+                <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                  <Clock3 className="h-3.5 w-3.5 text-muted-foreground" />
+                  {formatRelativeSafe(lastMessageAt)}
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">{formatDateSafe(lastMessageAt)}</div>
+              </div>
+            </div>
+          </div>
+
           {/* Variables */}
-          <div className="mb-8">
+          <div className="mb-4">
             <h4 className="font-medium text-foreground mb-3 flex items-center gap-2">
               <Database className="h-4 w-4" />
               Variables del Chat
             </h4>
 
             {!hasVars ? (
-              <div className="bg-muted/30 rounded-lg p-3 border border-gray-300">
+              <div className="rounded-lg p-3 border border-gray-300">
                 <p className="text-sm text-muted-foreground">Todavía no hay variables capturadas en este chat.</p>
               </div>
             ) : (
-              <div className="space-y-3 bg-blue-500 rounded-xl">
-                {derivedVars.map((variable) => {
-                  const t = (variable.type as VarType) ?? detectType(variable.value)
-                  return (
-                    <div
-                      key={variable.name}
-                      className="rounded-lg border border-gray-200 bg-gray-100/80 px-4 py-3 shadow-sm"
+              <div className="space-y-3 rounded-xl">
+                {varGroups.map((group) => (
+                  <div key={group.date} className="rounded-lg border border-gray-200 bg-white p-2.5">
+                    <button
+                      type="button"
+                      className="mb-2 w-full flex items-center justify-between text-left"
+                      onClick={() =>
+                        setExpandedVarDates((prev) => ({ ...prev, [group.date]: !prev[group.date] }))
+                      }
                     >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          {getVariableIcon(t)}
-                          <span className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-                            {variable.name}
-                          </span>
-                        </div>
-
-                        <span className="text-[11px] text-muted-foreground">{t}</span>
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        {formatDateOnlySafe(`${group.date}T00:00:00`)}
                       </div>
-
-                      <div className="mt-1">
-                        <div className="text-sm font-medium text-foreground break-words">
-                          {formatVariableValue(variable.value, t)}
-                        </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-muted-foreground">{group.vars.length}</span>
+                        {expandedVarDates[group.date] ? (
+                          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                        )}
                       </div>
-                    </div>
-                  )
-                })}
+                    </button>
+                    {expandedVarDates[group.date] && (
+                      <div className="space-y-2">
+                        {group.vars.map((variable) => {
+                          const t = (variable.type as VarType) ?? detectType(variable.value)
+                          return (
+                            <div
+                              key={`${group.date}:${variable.name}`}
+                              className="rounded-md border border-gray-200 px-3 py-2"
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  {getVariableIcon(t)}
+                                  <span className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                                    {variable.name}
+                                  </span>
+                                </div>
+
+                                <span className="text-[11px] text-muted-foreground">{t}</span>
+                              </div>
+
+                              <div className="mt-1">
+                                <div className="text-sm font-medium text-foreground break-words">
+                                  {formatVariableValue(variable.value, t)}
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
           </div>
 
           {/* Medios */}
-          <div className="mb-8">
+          <div className="mb-4">
             <h4 className="font-medium text-foreground mb-3 flex items-center gap-2">
               <ImageIcon className="h-4 w-4" />
               Medios
@@ -486,7 +881,7 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
             </div>
 
             {mediaFiltered.length === 0 ? (
-              <div className="bg-muted/30 rounded-lg p-3 border border-gray-300">
+              <div className="bg-white rounded-lg p-3 border border-gray-300">
                 <p className="text-sm text-muted-foreground">Todavía no hay medios en este chat.</p>
               </div>
             ) : (
