@@ -12,6 +12,9 @@ class Message extends Model
     protected $fillable = [
         'chat_id',
         'sender',
+        'sender_subtype',
+        'bot_node_type',
+        'interactive_options',
         'message_type',
         'body',
         'media_url',
@@ -20,6 +23,10 @@ class Message extends Model
         'template_language',
         'status',
         'whatsapp_message_id',
+    ];
+
+    protected $casts = [
+        'interactive_options' => 'array',
     ];
 
     public function chat()

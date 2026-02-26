@@ -34,6 +34,7 @@ type VarEntry = {
 }
 
 type VarsByDateMap = Record<string, Record<string, VarEntry>>
+type DisplayVar = ChatVariable & { updated_at?: string | null }
 
 type PreviewMedia = {
   url: string
@@ -44,17 +45,6 @@ type PreviewMedia = {
 const API_BASE = (import.meta.env.VITE_APP_URL || "").replace(/\/$/, "")
 
 export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
-  if (!chat) {
-    return (
-      <div className="flex items-center justify-center h-full p-4">
-        <div className="text-center">
-          <h3 className="text-lg font-medium text-foreground mb-2">Información del Chat</h3>
-          <p className="text-muted-foreground text-sm">Selecciona una conversación para ver los detalles</p>
-        </div>
-      </div>
-    )
-  }
-
   // ---------------------------
   // Helpers Variables
   // ---------------------------
@@ -127,7 +117,7 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
   }
 
   // ---------------------------
-  // ✅ Variables: MAPA (sin duplicados)
+  // Variables: MAPA (sin duplicados)
   // ---------------------------
   const [varsByDateMap, setVarsByDateMap] = useState<VarsByDateMap>(() => {
     const byDate = normalizeVarsByDate((chat?.bot_state as any)?.vars_by_date)
@@ -169,10 +159,11 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
       .filter(([, vars]) => vars && Object.keys(vars).length > 0)
       .sort(([a], [b]) => b.localeCompare(a))
       .map(([date, vars]) => {
-        const list: ChatVariable[] = Object.entries(vars).map(([name, entry]) => ({
+        const list: DisplayVar[] = Object.entries(vars).map(([name, entry]) => ({
           name,
           value: (entry as VarEntry).value,
           type: detectType((entry as VarEntry).value),
+          updated_at: (entry as VarEntry).updated_at ?? null,
         }))
         list.sort((x, y) => x.name.localeCompare(y.name))
         return { date, vars: list }
@@ -185,43 +176,30 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
   )
 
   const hasVars = varGroups.length > 0
-  const [expandedVarDates, setExpandedVarDates] = useState<Record<string, boolean>>({})
+  const [expandedVarDate, setExpandedVarDate] = useState<string | null>(null)
 
   useEffect(() => {
     if (!hasVars) {
-      setExpandedVarDates({})
+      setExpandedVarDate(null)
       return
     }
 
-    setExpandedVarDates((prev) => {
-      const todayKey = format(new Date(), "yyyy-MM-dd")
-      const hasPrevKeys = Object.keys(prev).length > 0
-      const next: Record<string, boolean> = {}
+    const todayKey = format(new Date(), "yyyy-MM-dd")
+    if (varGroups.some((group) => group.date === todayKey)) {
+      setExpandedVarDate(todayKey)
+      return
+    }
 
-      for (const group of varGroups) {
-        next[group.date] = hasPrevKeys ? Boolean(prev[group.date]) : group.date === todayKey
-      }
-
-      // Si existe el grupo de hoy, siempre mantenerlo desplegado.
-      if (Object.prototype.hasOwnProperty.call(next, todayKey)) {
-        next[todayKey] = true
-      }
-
-      if (!Object.values(next).some(Boolean) && varGroups[0]) {
-        next[varGroups[0].date] = true
-      }
-
-      return next
-    })
+    setExpandedVarDate(varGroups[0]?.date ?? null)
   }, [chat?.id, hasVars, varGroups])
 
   // ---------------------------
-  // ✅ Información general
+  // Información general
   // ---------------------------
-  const [botEnabled, setBotEnabled] = useState<boolean>(chat.bot_enabled ?? true)
+  const [botEnabled, setBotEnabled] = useState<boolean>(chat?.bot_enabled ?? true)
   const [togglingBot, setTogglingBot] = useState(false)
   const [totalMessages, setTotalMessages] = useState<number | null>(null)
-  const [lastMessageAt, setLastMessageAt] = useState<string | null>(chat.timestamp ?? null)
+  const [lastMessageAt, setLastMessageAt] = useState<string | null>(chat?.timestamp ?? null)
   const knownMessageIdsRef = useRef<Set<string>>(new Set())
 
   type MqttStatus = "connected" | "connecting" | "reconnecting" | "offline" | "disconnected" | "error"
@@ -238,12 +216,12 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
 
   // Mantener sincronizado el estado del bot con la data del chat.
   useEffect(() => {
-    setBotEnabled(chat.bot_enabled ?? true)
+    setBotEnabled(chat?.bot_enabled ?? true)
   }, [chat?.bot_enabled])
 
   // Actualizar timestamp del último mensaje sin resetear tarjetas.
   useEffect(() => {
-    setLastMessageAt(chat.timestamp ?? null)
+    setLastMessageAt(chat?.timestamp ?? null)
   }, [chat?.timestamp])
 
   const formatDateSafe = (raw?: string | null) => {
@@ -306,7 +284,7 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
   }, [chat?.id])
 
   // ---------------------------
-  // ✅ Medios
+  // Medios
   // ---------------------------
   const [media, setMedia] = useState<MediaItem[]>([])
   const [activeMediaType, setActiveMediaType] = useState<MediaType | "all">("all")
@@ -331,6 +309,11 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
     for (const m of media) c[m.message_type]++
     return c
   }, [media])
+
+  const isPreviewableDocument = (name: string, url: string) => {
+    const target = `${name} ${url}`.toLowerCase()
+    return target.includes(".pdf")
+  }
 
   // ---------------------------
   // Thumbnails de video (captura de frame)
@@ -676,17 +659,24 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
     name: string
     children: React.ReactNode
   }) => (
-    <div className="rounded-lg overflow-hidden border hover:opacity-95 transition">
+    <div className="rounded-lg overflow-hidden border hover:opacity-95 transition min-w-0">
       <div className="h-24 w-full bg-white flex items-center justify-center">{children}</div>
       <div className="px-2 py-1 border-t bg-white">
-        <div className="text-[10px] text-muted-foreground truncate">{name}</div>
+        <div className="text-[10px] text-muted-foreground truncate min-w-0">{name}</div>
       </div>
     </div>
   )
 
-  // ---------------------------
-  // Render
-  // ---------------------------
+    if (!chat) {
+    return (
+      <div className="flex items-center justify-center h-full p-4">
+        <div className="text-center">
+          <h3 className="text-lg font-medium text-foreground mb-2">Información del Chat</h3>
+          <p className="text-muted-foreground text-sm">Selecciona una conversación para ver los detalles</p>
+        </div>
+      </div>
+    )
+  }
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -699,8 +689,8 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
           {/* Contacto */}
           <div className="flex flex-col items-center text-center mb-6">
             <div className="relative mb-3">
-              <Avatar className="h-16 w-16 bg-gray-300 flex items-center justify-center">
-                <User />
+              <Avatar className="h-16 w-16 bg-[#2b5f90] text-white flex items-center justify-center">
+                <User className="h-6 w-6" />
               </Avatar>
             </div>
             <h3 className="font-semibold text-foreground text-lg">{chat.name}</h3>
@@ -775,7 +765,7 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
               </div>
 
               <div className="rounded-md border border-gray-200 px-2.5 py-2">
-                <div className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase mb-1">ULTIMO MENSAJE</div>
+                <div className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase mb-1">ÚLTIMO MENSAJE</div>
                 <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
                   <Clock3 className="h-3.5 w-3.5 text-muted-foreground" />
                   {formatRelativeSafe(lastMessageAt)}
@@ -803,30 +793,50 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
                     <button
                       type="button"
                       className="mb-2 w-full flex items-center justify-between text-left"
-                      onClick={() =>
-                        setExpandedVarDates((prev) => ({ ...prev, [group.date]: !prev[group.date] }))
-                      }
+                      onClick={() => {
+                        const willExpand = expandedVarDate !== group.date
+                        setExpandedVarDate((prev) => (prev === group.date ? null : group.date))
+                        if (willExpand) {
+                          window.dispatchEvent(new CustomEvent("chat:scrollToDate", {
+                            detail: {
+                              chatId: String(chat.id),
+                              dateKey: group.date,
+                            },
+                          }))
+                        }
+                      }}
                     >
                       <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                         {formatDateOnlySafe(`${group.date}T00:00:00`)}
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="text-[10px] text-muted-foreground">{group.vars.length}</span>
-                        {expandedVarDates[group.date] ? (
+                        {expandedVarDate === group.date ? (
                           <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                         ) : (
                           <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
                         )}
                       </div>
                     </button>
-                    {expandedVarDates[group.date] && (
+                    {expandedVarDate === group.date && (
                       <div className="space-y-2">
                         {group.vars.map((variable) => {
                           const t = (variable.type as VarType) ?? detectType(variable.value)
                           return (
-                            <div
+                            <button
+                              type="button"
                               key={`${group.date}:${variable.name}`}
-                              className="rounded-md border border-gray-200 px-3 py-2"
+                              className="w-full text-left rounded-md border border-gray-200 px-3 py-2"
+                              onClick={() => {
+                                window.dispatchEvent(new CustomEvent("chat:scrollToVar", {
+                                  detail: {
+                                    chatId: String(chat.id),
+                                    dateKey: group.date,
+                                    updatedAt: variable.updated_at ?? null,
+                                    varName: variable.name,
+                                  },
+                                }))
+                              }}
                             >
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
@@ -844,7 +854,7 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
                                   {formatVariableValue(variable.value, t)}
                                 </div>
                               </div>
-                            </div>
+                            </button>
                           )
                         })}
                       </div>
@@ -960,21 +970,22 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
 
                     // document
                     return (
-                      <a
+                      <button
                         key={m.id}
-                        href={url}
-                        target="_blank"
-                        rel="noreferrer"
+                        type="button"
+                        onClick={() => setPreview({ url, name, type: "document" })}
                         title={name}
-                        className="block"
+                        className="block text-left"
                       >
                         <MediaCard name={name}>
                           <div className="flex flex-col items-center justify-center gap-2 px-2">
                             <FileText className="h-6 w-6 text-muted-foreground" />
-                            <div className="text-[11px] text-muted-foreground text-center line-clamp-2">{name}</div>
+                            <div className="w-full max-w-full text-[11px] text-muted-foreground text-center break-all line-clamp-2">
+                              {name}
+                            </div>
                           </div>
                         </MediaCard>
-                      </a>
+                      </button>
                     )
                   })}
                 </div>
@@ -1033,11 +1044,23 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
                       )}
 
                       {preview.type === "document" && (
-                        <div className="p-4 bg-white">
-                          <p className="text-sm text-muted-foreground mb-2">Documento:</p>
-                          <a href={preview.url} target="_blank" rel="noreferrer" className="text-sm underline">
-                            {preview.name}
-                          </a>
+                        <div className="bg-white">
+                          {isPreviewableDocument(preview.name, preview.url) ? (
+                            <iframe
+                              src={preview.url}
+                              title={preview.name}
+                              className="w-full h-[75vh]"
+                            />
+                          ) : (
+                            <div className="p-4">
+                              <p className="text-sm text-muted-foreground mb-2">
+                                Vista previa no disponible para este formato.
+                              </p>
+                              <a href={preview.url} target="_blank" rel="noreferrer" className="text-sm underline">
+                                Abrir documento: {preview.name}
+                              </a>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

@@ -70,13 +70,14 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
     }
   }
 
-  const handleSelectChat = async (chatId: string) => {
-    onSelectChat(chatId)
+  const handleSelectChat = async (chatId: string | number) => {
+    const normalizedChatId = String(chatId)
+    onSelectChat(normalizedChatId)
 
-    window.dispatchEvent(new CustomEvent("chat:read", { detail: { chatId } }))
+    window.dispatchEvent(new CustomEvent("chat:read", { detail: { chatId: normalizedChatId } }))
 
     try {
-      await fetch(`${import.meta.env.VITE_APP_URL}/api/message/markAsRead/${chatId}`, {
+      await fetch(`${import.meta.env.VITE_APP_URL}/api/message/markAsRead/${normalizedChatId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       })
@@ -113,10 +114,10 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
                 onClick={() => handleSelectChat(chat.id)}
                 className={cn(
                   "flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors hover:bg-muted/50",
-                  selectedChatId === chat.id && "bg-muted",
+                  String(selectedChatId) === String(chat.id) && "bg-muted",
                 )}
               >
-                <Avatar className="h-12 w-12 flex items-center justify-center bg-[#013765] text-white">
+                <Avatar className="h-12 w-12 flex items-center justify-center bg-[#2b5f90] text-white">
                   <User />
                 </Avatar>
 

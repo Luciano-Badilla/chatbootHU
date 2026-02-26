@@ -301,6 +301,7 @@ class WhatsAppController extends Controller
             [
                 'chat_id' => $chat->id,
                 'sender' => 'contact',
+                'sender_subtype' => 'contact',
                 'message_type' => $messageType,
                 'body' => $body,
                 'status' => 'received',
@@ -329,6 +330,9 @@ class WhatsAppController extends Controller
                 'chat_id' => $chat->id,
                 'message_id' => $message->id,
                 'sender' => $message->sender,
+                'sender_subtype' => $message->sender_subtype,
+                'bot_node_type' => $message->bot_node_type,
+                'interactive_options' => $message->interactive_options,
                 'body' => $message->body,
                 'message_type' => $message->message_type,
                 'media_url' => $message->media_url,
@@ -391,7 +395,7 @@ class WhatsAppController extends Controller
         $chat = Chat::with('contact')->findOrFail($validated['chat_id']);
 
         try {
-            $message = $this->sendWhatsAppText($chat, $messageBody, 'user');
+            $message = $this->sendWhatsAppText($chat, $messageBody, 'user', 'operator');
         } catch (\Throwable $e) {
             return response()->json(['error' => $e->getMessage()], 500);
         }
@@ -402,10 +406,232 @@ class WhatsAppController extends Controller
                 'id' => $message->id,
                 'chat_id' => $message->chat_id,
                 'sender' => $message->sender,
+                'sender_subtype' => $message->sender_subtype,
                 'body' => $message->body,
                 'timestamp' => $message->created_at->toIso8601String(),
             ],
         ], 200);
+    }
+
+    /**
+     * Enviar media (imagen/video/audio/documento) a WhatsApp desde el operador.
+     */
+    public function sendMedia(Request $request)
+    {
+        $validated = $request->validate([
+            'chat_id' => 'required|integer|exists:chats,id',
+            'file' => 'required|file|max:51200',
+            'caption' => 'nullable|string',
+            'media_kind' => 'nullable|in:image,video,audio,document',
+        ]);
+
+        $chat = Chat::with('contact')->findOrFail($validated['chat_id']);
+        $contact = $chat->contact;
+
+        if (!$contact || !$contact->whatsapp_id) {
+            return response()->json(['error' => 'Contacto sin whatsapp_id'], 422);
+        }
+
+        $file = $request->file('file');
+        $caption = trim((string) ($validated['caption'] ?? ''));
+        $mime = (string) ($file->getMimeType() ?? '');
+        $clientMime = (string) ($file->getClientMimeType() ?? '');
+        $messageType = $validated['media_kind'] ?? $this->resolveOutgoingMediaType($mime);
+        $uploadMime = $this->normalizeWhatsAppUploadMime($mime, $messageType);
+        $originalName = (string) ($file->getClientOriginalName() ?? ('file_' . uniqid()));
+        $sniff = $this->sniffAudioContainer($file->getRealPath());
+
+        $accessToken = env('WHATSAPP_ACCESS_TOKEN');
+        $phoneId = env('WHATSAPP_PHONE_ID');
+        $phoneNumber = $this->formatPhoneNumber($contact->whatsapp_id);
+
+        if ($messageType === 'audio') {
+            $allowedAudioMimes = [
+                'audio/ogg',
+                'audio/ogg; codecs=opus',
+                'audio/mpeg',
+                'audio/mp4',
+                'audio/aac',
+                'audio/amr',
+                'audio/opus',
+            ];
+
+            if (!in_array(strtolower($uploadMime), $allowedAudioMimes, true)) {
+                return response()->json([
+                    'error' => "Audio no soportado para WhatsApp: {$mime} (uploadMime={$uploadMime}). Subí OGG/OPUS o MP3/M4A.",
+                ], 422);
+            }
+
+            if ($uploadMime === 'audio/mp4' && $sniff !== 'mp4') {
+                return response()->json([
+                    'error' => "El archivo NO parece MP4/M4A válido (firma={$sniff}).",
+                ], 422);
+            }
+            if ($uploadMime === 'audio/mpeg' && $sniff !== 'mp3') {
+                return response()->json([
+                    'error' => "El archivo NO parece MP3 válido (firma={$sniff}).",
+                ], 422);
+            }
+            if (str_starts_with($uploadMime, 'audio/ogg') && $sniff !== 'ogg') {
+                return response()->json([
+                    'error' => "El archivo NO parece OGG válido (firma={$sniff}).",
+                ], 422);
+            }
+        }
+
+        Log::info('sendMedia debug', [
+            'chat_id' => $chat->id,
+            'orig_name' => $originalName,
+            'messageType' => $messageType,
+            'getMimeType' => $mime,
+            'clientMimeType' => $clientMime,
+            'uploadMime' => $uploadMime,
+            'size' => $file->getSize(),
+            'sniff' => $sniff,
+        ]);
+
+        try {
+            // 1) Subir media a WhatsApp para obtener media_id
+            $mediaUploadUrl = "https://graph.facebook.com/v22.0/{$phoneId}/media";
+            $uploadResponse = Http::withToken($accessToken)
+                ->attach(
+                    'file',
+                    fopen($file->getRealPath(), 'r'),
+                    $originalName,
+                    ['Content-Type' => $uploadMime]
+                )
+                ->post($mediaUploadUrl, [
+                    'messaging_product' => 'whatsapp',
+                ]);
+
+            if ($uploadResponse->failed()) {
+                Log::error('API Error (sendMedia upload): ' . $uploadResponse->body());
+                return response()->json(['error' => 'Error subiendo media a WhatsApp'], 500);
+            }
+
+            $mediaId = $uploadResponse->json('id');
+            if (!$mediaId) {
+                return response()->json(['error' => 'No se obtuvo media_id de WhatsApp'], 500);
+            }
+
+            // 2) Enviar mensaje con ese media_id
+            $sendUrl = "https://graph.facebook.com/v22.0/{$phoneId}/messages";
+            $payload = [
+                'messaging_product' => 'whatsapp',
+                'to' => $phoneNumber,
+                'type' => $messageType,
+            ];
+
+            if ($messageType === 'image') {
+                $payload['image'] = ['id' => $mediaId];
+                if ($caption !== '') {
+                    $payload['image']['caption'] = $caption;
+                }
+            } elseif ($messageType === 'video') {
+                $payload['video'] = ['id' => $mediaId];
+                if ($caption !== '') {
+                    $payload['video']['caption'] = $caption;
+                }
+            } elseif ($messageType === 'audio') {
+                $payload['audio'] = ['id' => $mediaId];
+            } else {
+                $payload['document'] = [
+                    'id' => $mediaId,
+                    'filename' => $originalName,
+                ];
+                if ($caption !== '') {
+                    $payload['document']['caption'] = $caption;
+                }
+            }
+
+            $sendResponse = Http::withToken($accessToken)->post($sendUrl, $payload);
+            if ($sendResponse->failed()) {
+                Log::error('API Error (sendMedia message): ' . $sendResponse->body());
+                return response()->json(['error' => 'Error enviando media a WhatsApp'], 500);
+            }
+
+            // 3) Guardar copia local para previsualización en front
+            $storedName = uniqid($messageType . '_') . '_' . preg_replace('/[^A-Za-z0-9._-]/', '_', $originalName);
+            $localPath = "whatsapp/{$chat->id}/{$storedName}";
+            Storage::disk('public')->put($localPath, file_get_contents($file->getRealPath()));
+            $publicMediaUrl = '/storage/' . $localPath;
+
+            // 4) Persistir mensaje
+            $body = $caption !== '' ? $caption : null;
+            $message = Message::create([
+                'chat_id' => $chat->id,
+                'sender' => 'user',
+                'sender_subtype' => 'operator',
+                'bot_node_type' => null,
+                'interactive_options' => null,
+                'message_type' => $messageType,
+                'body' => $body,
+                'status' => 'sent',
+                'media_url' => $publicMediaUrl,
+                'media_name' => $originalName,
+                'whatsapp_message_id' => $sendResponse->json('messages.0.id'),
+            ]);
+
+            // 5) MQTT (sidebar + chat)
+            $previewText = match ($messageType) {
+                'image' => '[Imagen]',
+                'video' => '[Video]',
+                'audio' => '[Audio]',
+                default => '[Documento]',
+            };
+            if ($caption !== '') {
+                $previewText .= " {$caption}";
+            }
+
+            try {
+                $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_media_' . uniqid());
+                $mqtt->connect();
+
+                $mqtt->publish('sidebar/chat', json_encode([
+                    'chat_id' => $chat->id,
+                    'name' => $contact->name ?? 'Desconocido',
+                    'lastMessage' => $previewText,
+                    'timestamp' => $message->created_at->toIso8601String(),
+                ]), 0);
+
+                $mqtt->publish("chat/{$chat->id}", json_encode([
+                    'chat_id' => $chat->id,
+                    'message_id' => $message->id,
+                    'sender' => $message->sender,
+                    'sender_subtype' => $message->sender_subtype,
+                    'bot_node_type' => $message->bot_node_type,
+                    'interactive_options' => $message->interactive_options,
+                    'body' => $message->body,
+                    'message_type' => $message->message_type,
+                    'media_url' => $message->media_url,
+                    'media_name' => $message->media_name,
+                    'status' => $message->status,
+                    'timestamp' => $message->created_at->toIso8601String(),
+                ]), 0);
+
+                $mqtt->disconnect();
+            } catch (\Throwable $e) {
+                Log::error('MQTT Error (sendMedia): ' . $e->getMessage());
+            }
+
+            return response()->json([
+                'ok' => true,
+                'message' => [
+                    'id' => $message->id,
+                    'chat_id' => $message->chat_id,
+                    'sender' => $message->sender,
+                    'sender_subtype' => $message->sender_subtype,
+                    'message_type' => $message->message_type,
+                    'body' => $message->body,
+                    'media_url' => $message->media_url,
+                    'media_name' => $message->media_name,
+                    'timestamp' => $message->created_at->toIso8601String(),
+                ],
+            ], 200);
+        } catch (\Throwable $e) {
+            Log::error('Error sendMedia: ' . $e->getMessage());
+            return response()->json(['error' => 'Error interno al enviar media'], 500);
+        }
     }
 
     /**
@@ -422,6 +648,68 @@ class WhatsAppController extends Controller
         return $number;
     }
 
+    private function resolveOutgoingMediaType(string $mime): string
+    {
+        if (str_starts_with($mime, 'image/')) {
+            return 'image';
+        }
+        if (str_starts_with($mime, 'video/')) {
+            return 'video';
+        }
+        if (str_starts_with($mime, 'audio/')) {
+            return 'audio';
+        }
+        return 'document';
+    }
+
+    private function normalizeWhatsAppUploadMime(string $mime, ?string $messageType = null): string
+    {
+        $normalized = strtolower(trim($mime));
+
+        return match ($normalized) {
+            'audio/x-m4a', 'audio/m4a' => 'audio/mp4',
+            'audio/mp4a-latm' => 'audio/mp4',
+            'audio/x-wav' => 'audio/mpeg', // fallback compatible para algunos navegadores/OS
+            default => $normalized !== '' ? $normalized : 'application/octet-stream',
+        };
+    }
+
+    private function sniffAudioContainer(string $path): ?string
+    {
+        $fh = @fopen($path, 'rb');
+        if (!$fh) {
+            return null;
+        }
+        $head = fread($fh, 16);
+        fclose($fh);
+
+        if (!$head) {
+            return null;
+        }
+
+        if (str_starts_with($head, 'OggS')) {
+            return 'ogg';
+        }
+
+        if (str_starts_with($head, 'ID3')) {
+            return 'mp3';
+        }
+
+        if (isset($head[0], $head[1])) {
+            $b0 = ord($head[0]);
+            $b1 = ord($head[1]);
+            if ($b0 === 0xFF && ($b1 & 0xE0) === 0xE0) {
+                return 'mp3';
+            }
+        }
+
+        if (strlen($head) >= 8 && substr($head, 4, 4) === 'ftyp') {
+            return 'mp4';
+        }
+
+        return null;
+    }
+
     /**
      * Lógica del bot (mini "árbol" de estados) dentro del controlador.
      */
@@ -431,7 +719,14 @@ class WhatsAppController extends Controller
      * Enviar texto por WhatsApp, guardar mensaje y publicar por MQTT.
      * $sender = 'user' (desde tu sistema) o 'contact' si algún día hicieras eco, etc.
      */
-    private function sendWhatsAppText(Chat $chat, string $messageBody, string $sender = 'user'): Message
+    private function sendWhatsAppText(
+        Chat $chat,
+        string $messageBody,
+        string $sender = 'user',
+        string $senderSubtype = 'bot',
+        ?string $botNodeType = null,
+        ?array $interactiveOptions = null
+    ): Message
     {
         $contact = $chat->contact;
 
@@ -461,6 +756,9 @@ class WhatsAppController extends Controller
         $message = Message::create([
             'chat_id' => $chat->id,
             'sender' => $sender, // 'user' desde tu sistema (incluye bot)
+            'sender_subtype' => $sender === 'contact' ? 'contact' : $senderSubtype,
+            'bot_node_type' => $botNodeType,
+            'interactive_options' => $interactiveOptions,
             'message_type' => 'text',
             'body' => $messageBody,
             'status' => 'sent',
@@ -485,6 +783,9 @@ class WhatsAppController extends Controller
                 'chat_id' => $chat->id,
                 'message_id' => $message->id,
                 'sender' => $message->sender,
+                'sender_subtype' => $message->sender_subtype,
+                'bot_node_type' => $message->bot_node_type,
+                'interactive_options' => $message->interactive_options,
                 'body' => $message->body,
                 'message_type' => $message->message_type,
                 'media_url' => null,
@@ -500,13 +801,22 @@ class WhatsAppController extends Controller
         return $message;
     }
 
-    private function persistAndPublishOutgoing(Chat $chat, string $body, ?string $waMessageId = null): void
+    private function persistAndPublishOutgoing(
+        Chat $chat,
+        string $body,
+        ?string $waMessageId = null,
+        ?string $botNodeType = null,
+        ?array $interactiveOptions = null
+    ): void
     {
         $contact = $chat->contact;
 
         $message = Message::create([
             'chat_id' => $chat->id,
             'sender' => 'user',
+            'sender_subtype' => 'bot',
+            'bot_node_type' => $botNodeType,
+            'interactive_options' => $interactiveOptions,
             'message_type' => 'text',   // tu enum actual
             'body' => $body,
             'status' => 'sent',
@@ -529,6 +839,9 @@ class WhatsAppController extends Controller
                 'chat_id' => $chat->id,
                 'message_id' => $message->id,
                 'sender' => $message->sender,
+                'sender_subtype' => $message->sender_subtype,
+                'bot_node_type' => $message->bot_node_type,
+                'interactive_options' => $message->interactive_options,
                 'body' => $message->body,
                 'message_type' => $message->message_type,
                 'media_url' => null,
@@ -739,7 +1052,7 @@ class WhatsAppController extends Controller
             // enviar mensaje del handoff (si tiene)
             if ($node->body) {
                 $body = $this->renderTemplate($node->body, $chat, $node);
-                $this->sendWhatsAppText($chat, $body, 'user');
+                $this->sendWhatsAppText($chat, $body, 'user', 'bot', 'handoff');
             }
 
             // apagar bot
@@ -791,7 +1104,7 @@ class WhatsAppController extends Controller
             // 2) Mandamos primero el error si existe, sino el body normal (renderizado)
             if ($errorToSend) {
                 $err = $this->renderTemplate($errorToSend, $chat, $node);
-                $this->sendWhatsAppText($chat, $err, 'user');
+                $this->sendWhatsAppText($chat, $err, 'user', 'bot', 'input');
 
                 // limpiamos last_error para que no se repita infinitamente
                 $state = $this->getState($chat);
@@ -802,7 +1115,7 @@ class WhatsAppController extends Controller
             } else {
                 if ($node->body) {
                     $body = $this->renderTemplate($node->body, $chat, $node);
-                    $this->sendWhatsAppText($chat, $body, 'user');
+                    $this->sendWhatsAppText($chat, $body, 'user', 'bot', 'input');
                 }
             }
 
@@ -819,7 +1132,7 @@ class WhatsAppController extends Controller
         if ($node->type === 'text') {
             if ($node->body) {
                 $body = $this->renderTemplate($node->body, $chat, $node);
-                $this->sendWhatsAppText($chat, $body, 'user');
+                $this->sendWhatsAppText($chat, $body, 'user', 'bot', 'text');
             }
             return;
         }
@@ -854,7 +1167,7 @@ class WhatsAppController extends Controller
 
         if (empty($buttons)) {
             // si no hay botones configurados, mandamos texto simple
-            $this->sendWhatsAppText($chat, $bodyText, 'user');
+            $this->sendWhatsAppText($chat, $bodyText, 'user', 'bot', 'buttons', []);
             return;
         }
 
@@ -876,6 +1189,14 @@ class WhatsAppController extends Controller
                 ],
             ];
         }
+
+        $interactiveOptions = array_map(function ($btn) {
+            return [
+                'id' => (string) ($btn['id'] ?? ''),
+                'label' => (string) ($btn['reply']['title'] ?? ''),
+                'kind' => 'button',
+            ];
+        }, $waButtons);
 
         $payload = [
             'messaging_product' => 'whatsapp',
@@ -902,7 +1223,7 @@ class WhatsAppController extends Controller
         $waMessageId = $response->json()['messages'][0]['id'] ?? null;
 
         // ✅ IMPORTANTE: persistimos el texto renderizado (no el raw)
-        $this->persistAndPublishOutgoing($chat, $bodyText, $waMessageId);
+        $this->persistAndPublishOutgoing($chat, $bodyText, $waMessageId, 'buttons', $interactiveOptions);
     }
 
 
@@ -925,7 +1246,7 @@ class WhatsAppController extends Controller
         $sectionTitle = $this->renderTemplate((string) $sectionTitle, $chat, $node);
 
         if (empty($rows)) {
-            $this->sendWhatsAppText($chat, $bodyText, 'user');
+            $this->sendWhatsAppText($chat, $bodyText, 'user', 'bot', 'list', []);
             return;
         }
 
@@ -944,6 +1265,15 @@ class WhatsAppController extends Controller
                     : null,
             ];
         }
+
+        $interactiveOptions = array_map(function ($row) {
+            return [
+                'id' => (string) ($row['id'] ?? ''),
+                'label' => (string) ($row['title'] ?? ''),
+                'description' => (string) ($row['description'] ?? ''),
+                'kind' => 'list',
+            ];
+        }, $waRows);
 
         $payload = [
             'messaging_product' => 'whatsapp',
@@ -976,7 +1306,7 @@ class WhatsAppController extends Controller
         $waMessageId = $response->json()['messages'][0]['id'] ?? null;
 
         // ✅ persistimos el texto renderizado
-        $this->persistAndPublishOutgoing($chat, $bodyText, $waMessageId);
+        $this->persistAndPublishOutgoing($chat, $bodyText, $waMessageId, 'list', $interactiveOptions);
     }
 
 

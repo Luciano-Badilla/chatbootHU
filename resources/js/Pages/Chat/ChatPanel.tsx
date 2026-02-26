@@ -33,6 +33,24 @@ export type ChatVariable = {
   description?: string
 }
 
+export type Message = {
+  id: number | string
+  sender: "user" | "contact"
+  sender_subtype?: "operator" | "bot" | "contact" | null
+  bot_node_type?: string | null
+  interactive_options?: Array<{
+    id: string
+    label: string
+    description?: string
+    kind?: "button" | "list" | string
+  }> | null
+  body: string | null
+  timestamp: string
+  message_type?: "text" | "image" | "video" | "audio" | "document" | "template"
+  media_url?: string | null
+  media_name?: string | null
+}
+
 interface ChatPanelProps {
   // Lista inicial de chats enviada desde Laravel vía Inertia.
   chats: Chat[]
@@ -48,13 +66,11 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   const [chats, setChats] = useState<Chat[]>(initialChats)
 
   // ID del chat seleccionado actualmente en la UI.
-  const [selectedChatId, setSelectedChatId] = useState<string>(
-    String(initialChats[0]?.id ?? "")
-  )
+  const [selectedChatId, setSelectedChatId] = useState<string>("")
 
 
   // Obtenemos el objeto del chat seleccionado a partir del estado.
-  const selectedChat = chats.find((chat) => String(chat.id) === selectedChatId)
+  const selectedChat = chats.find((chat) => String(chat.id) === String(selectedChatId))
 
   // 🔹 NUEVO: marcar como leídos al abrir el chat
   useEffect(() => {

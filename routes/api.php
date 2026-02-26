@@ -23,6 +23,7 @@ Route::post('/webhook', [WhatsAppController::class, 'receiveMessage']);
 Route::post('/message/markAsRead/{chatId}', [ChatController::class, 'markAsReadMessages']);
 Route::get('/chat/messages/{chatId}', [ChatController::class, 'getMessages']);
 Route::post('/message/send', [WhatsAppController::class, 'sendMessage']);
+Route::post('/message/send-media', [WhatsAppController::class, 'sendMedia']);
 Route::post('/chats/{chat}/bot', [WhatsAppController::class, 'updateBotStatus']);
 
 Route::get('/bot/flows', [BotFlowController::class, 'apiIndex']);
