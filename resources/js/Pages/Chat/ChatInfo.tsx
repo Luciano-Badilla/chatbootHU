@@ -680,7 +680,7 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="p-4 border-b border-gray-300 bg-gray-50">
+      <div className="flex h-[72px] items-center px-4 border-b border-gray-300 bg-gray-100">
         <h2 className="text-lg font-semibold text-foreground">Información del Chat</h2>
       </div>
 

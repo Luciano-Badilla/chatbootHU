@@ -35,6 +35,7 @@ export default function ChatMain({ chat }: ChatMainProps) {
   const [sending, setSending] = useState(false)
   const [preview, setPreview] = useState<PreviewMedia | null>(null)
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
+  const [highlightBlinkOn, setHighlightBlinkOn] = useState(true)
   const [pendingMediaList, setPendingMediaList] = useState<PendingMedia[]>([])
   const [recordingAudio, setRecordingAudio] = useState(false)
   const [recordingSeconds, setRecordingSeconds] = useState(0)
@@ -44,6 +45,7 @@ export default function ChatMain({ chat }: ChatMainProps) {
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const messagesContainerRef = useRef<HTMLDivElement | null>(null)
   const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const highlightBlinkIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const mediaRecorderRef = useRef<any | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
@@ -212,6 +214,9 @@ export default function ChatMain({ chat }: ChatMainProps) {
       if (highlightTimeoutRef.current) {
         clearTimeout(highlightTimeoutRef.current)
       }
+      if (highlightBlinkIntervalRef.current) {
+        clearInterval(highlightBlinkIntervalRef.current)
+      }
       pendingMediaRef.current.forEach((item) => URL.revokeObjectURL(item.previewUrl))
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach((t) => t.stop())
@@ -225,12 +230,27 @@ export default function ChatMain({ chat }: ChatMainProps) {
   const highlightMessage = (messageId?: string | null) => {
     if (!messageId) return
     setHighlightedMessageId(messageId)
+    setHighlightBlinkOn(true)
+
     if (highlightTimeoutRef.current) {
       clearTimeout(highlightTimeoutRef.current)
     }
+    if (highlightBlinkIntervalRef.current) {
+      clearInterval(highlightBlinkIntervalRef.current)
+    }
+
+    highlightBlinkIntervalRef.current = setInterval(() => {
+      setHighlightBlinkOn((prev) => !prev)
+    }, 280)
+
     highlightTimeoutRef.current = setTimeout(() => {
       setHighlightedMessageId(null)
-    }, 1600)
+      setHighlightBlinkOn(true)
+      if (highlightBlinkIntervalRef.current) {
+        clearInterval(highlightBlinkIntervalRef.current)
+        highlightBlinkIntervalRef.current = null
+      }
+    }, 3200)
   }
 
   useEffect(() => {
@@ -813,7 +833,7 @@ export default function ChatMain({ chat }: ChatMainProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Header del chat */}
-      <div className="flex items-center p-4 border-b border-gray-300 bg-gray-100">
+      <div className="flex h-[72px] items-center px-4 border-b border-gray-300 bg-gray-100">
         <div className="flex items-center gap-3">
           <div className="relative">
             <Avatar className="h-10 w-10 flex items-center justify-center bg-[#2b5f90] text-white">
@@ -870,8 +890,8 @@ export default function ChatMain({ chat }: ChatMainProps) {
 
                   <div
                     className={cn(
-                      "flex gap-3 p-1 transition-colors duration-1000 rounded-md",
-                      highlightedMessageId === String(message.id) && "bg-gray-300/40",
+                      "flex gap-3 p-1 rounded-md transition-colors duration-300 ease-in-out",
+                      highlightedMessageId === String(message.id) && (highlightBlinkOn ? "bg-gray-300" : "bg-gray-200"),
                       message.sender === "user" ? "justify-end" : "justify-start",
                     )}
                   >
@@ -1181,4 +1201,3 @@ export default function ChatMain({ chat }: ChatMainProps) {
     </div>
   )
 }
-
