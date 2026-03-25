@@ -1,8 +1,8 @@
 "use client"
 
 import type React from "react"
-import { useEffect, useRef, useState } from "react"
-import { Bot, FileText, Headset, Mic, Paperclip, Send, Square, User, X } from "lucide-react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { Bot, ChevronDown, ChevronUp, FileText, Headset, Mic, Paperclip, Search, Send, Square, User, X } from "lucide-react"
 import { Button } from "shadcn/components/ui/button"
 import { Input } from "shadcn/components/ui/input"
 import { Avatar } from "shadcn/components/ui/avatar"
@@ -41,6 +41,11 @@ export default function ChatMain({ chat }: ChatMainProps) {
   const [recordingSeconds, setRecordingSeconds] = useState(0)
   const [audioDurations, setAudioDurations] = useState<Record<string, number>>({})
   const [mediaError, setMediaError] = useState<string | null>(null)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [searchResultIds, setSearchResultIds] = useState<string[]>([])
+  const [activeSearchIndex, setActiveSearchIndex] = useState(0)
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false)
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const messagesContainerRef = useRef<HTMLDivElement | null>(null)
@@ -52,6 +57,8 @@ export default function ChatMain({ chat }: ChatMainProps) {
   const audioChunksRef = useRef<Blob[]>([])
   const recordingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const pendingMediaRef = useRef<PendingMedia[]>([])
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const previousSearchQueryRef = useRef("")
 
   const loadOpusMediaRecorder = async () => {
     const win = window as Window & {
@@ -201,9 +208,28 @@ export default function ChatMain({ chat }: ChatMainProps) {
 
   // 🔹 Scroll al último mensaje
   useEffect(() => {
+    if (searchOpen && searchQuery.trim()) return
     if (!messagesEndRef.current) return
     messagesEndRef.current.scrollIntoView({ behavior: "smooth" })
-  }, [messages.length, chat?.id])
+  }, [messages.length, chat?.id, searchOpen, searchQuery])
+
+  useEffect(() => {
+    const container = messagesContainerRef.current
+    if (!container) return
+
+    const updateVisibility = () => {
+      const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight
+      setShowScrollToBottom(distanceToBottom > 220)
+    }
+
+    updateVisibility()
+    container.addEventListener("scroll", updateVisibility)
+    return () => container.removeEventListener("scroll", updateVisibility)
+  }, [chat?.id, messages.length])
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }
 
   useEffect(() => {
     pendingMediaRef.current = pendingMediaList
@@ -251,6 +277,40 @@ export default function ChatMain({ chat }: ChatMainProps) {
         highlightBlinkIntervalRef.current = null
       }
     }, 3200)
+  }
+
+  const closeSearch = () => {
+    setSearchOpen(false)
+    setSearchQuery("")
+    setSearchResultIds([])
+    setActiveSearchIndex(0)
+    previousSearchQueryRef.current = ""
+  }
+
+  const goToPreviousSearchResult = () => {
+    if (searchResultIds.length === 0) return
+    setActiveSearchIndex((prev) => (prev - 1 + searchResultIds.length) % searchResultIds.length)
+  }
+
+  const goToNextSearchResult = () => {
+    if (searchResultIds.length === 0) return
+    setActiveSearchIndex((prev) => (prev + 1) % searchResultIds.length)
+  }
+
+  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault()
+      closeSearch()
+      return
+    }
+    if (event.key === "Enter") {
+      event.preventDefault()
+      if (event.shiftKey) {
+        goToPreviousSearchResult()
+      } else {
+        goToNextSearchResult()
+      }
+    }
   }
 
   useEffect(() => {
@@ -332,6 +392,69 @@ export default function ChatMain({ chat }: ChatMainProps) {
       window.removeEventListener("chat:scrollToVar", onScrollToVar as EventListener)
     }
   }, [chat?.id, messages])
+
+  useEffect(() => {
+    if (!chat?.id) return
+    setSearchOpen(false)
+    setSearchQuery("")
+    setSearchResultIds([])
+    setActiveSearchIndex(0)
+    previousSearchQueryRef.current = ""
+  }, [chat?.id])
+
+  useEffect(() => {
+    if (!searchOpen) return
+    const timer = setTimeout(() => {
+      searchInputRef.current?.focus()
+      searchInputRef.current?.select()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [searchOpen])
+
+  useEffect(() => {
+    if (!searchOpen) return
+
+    const query = searchQuery.trim().toLowerCase()
+    const queryChanged = previousSearchQueryRef.current !== query
+    previousSearchQueryRef.current = query
+
+    if (!query) {
+      setSearchResultIds([])
+      setActiveSearchIndex(0)
+      return
+    }
+
+    const resultIds = messages
+      .filter((message) => {
+        const haystack = `${message.body ?? ""} ${message.media_name ?? ""}`.toLowerCase()
+        return haystack.includes(query)
+      })
+      .map((message) => String(message.id))
+
+    setSearchResultIds(resultIds)
+    setActiveSearchIndex((prev) => {
+      if (resultIds.length === 0) return 0
+      if (queryChanged) return resultIds.length - 1
+      return Math.min(prev, resultIds.length - 1)
+    })
+  }, [messages, searchOpen, searchQuery])
+
+  useEffect(() => {
+    if (!searchOpen) return
+    if (searchResultIds.length === 0) return
+
+    const targetId = searchResultIds[activeSearchIndex]
+    if (!targetId) return
+
+    requestAnimationFrame(() => {
+      const target = messagesContainerRef.current?.querySelector(
+        `[data-msg-id="${targetId}"]`,
+      ) as HTMLElement | null
+      if (!target) return
+      target.scrollIntoView({ behavior: "smooth", block: "center" })
+      highlightMessage(targetId)
+    })
+  }, [activeSearchIndex, searchOpen, searchResultIds])
 
   const handleSendMessage = async () => {
     if (!newMessage.trim() || !chat || sending) return
@@ -633,6 +756,9 @@ export default function ChatMain({ chat }: ChatMainProps) {
     return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`
   }
 
+  const activeSearchResultId = searchResultIds[activeSearchIndex] ?? null
+  const searchResultIdSet = useMemo(() => new Set(searchResultIds), [searchResultIds])
+
   if (!chat) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -701,6 +827,28 @@ export default function ChatMain({ chat }: ChatMainProps) {
   }
 
   // 🔹 Render según tipo de mensaje
+  const getDocumentLabel = (message: Message) => {
+    const explicit = (message.media_name || "").trim()
+    if (explicit) return explicit
+
+    const body = (message.body || "").trim()
+    if (body && body !== "[Documento]") return body
+
+    const src = buildMediaSrc(message.media_url || undefined)
+    if (src) {
+      try {
+        const path = new URL(src).pathname
+        const fileName = decodeURIComponent(path.split("/").pop() || "").trim()
+        if (fileName) return fileName
+      } catch {
+        const fallback = decodeURIComponent(src.split("/").pop() || "").trim()
+        if (fallback) return fallback
+      }
+    }
+
+    return "Documento"
+  }
+
   const renderMessageContent = (message: Message) => {
     const type = message.message_type ?? "text"
     const src = buildMediaSrc(message.media_url || undefined)
@@ -794,6 +942,7 @@ export default function ChatMain({ chat }: ChatMainProps) {
     }
 
     if (type === "document" && src) {
+      const documentLabel = getDocumentLabel(message)
       return (
         <div className="space-y-2">
           <button
@@ -802,18 +951,18 @@ export default function ChatMain({ chat }: ChatMainProps) {
             onClick={() =>
               setPreview({
                 url: src,
-                name: message.media_name ?? "Documento",
+                name: documentLabel,
                 type: "document",
               })
             }
           >
             <div className="w-32 rounded-lg overflow-hidden border border-gray-300 bg-white">
-              <div className="h-20 w-full flex items-center justify-center">
-                <FileText className="h-8 w-8 text-muted-foreground" />
+              <div className="h-20 w-full flex items-center justify-center bg-gray-50">
+                <FileText className="h-8 w-8 text-gray-600" />
               </div>
               <div className="px-2 py-1 border-t bg-white">
-                <div className="text-[10px] text-muted-foreground truncate">
-                  {message.media_name ?? "Documento"}
+                <div className="text-[10px] text-gray-700 truncate">
+                  {documentLabel}
                 </div>
               </div>
             </div>
@@ -833,23 +982,93 @@ export default function ChatMain({ chat }: ChatMainProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Header del chat */}
-      <div className="flex h-[72px] items-center px-4 border-b border-gray-300 bg-gray-100">
-        <div className="flex items-center gap-3">
-          <div className="relative">
-            <Avatar className="h-10 w-10 flex items-center justify-center bg-[#2b5f90] text-white">
-              <User className="h-4 w-4" />
-            </Avatar>
+      <div className="border-b border-gray-300 bg-gray-100">
+        <div className="flex h-[72px] items-center justify-between px-4">
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <Avatar className="h-10 w-10 flex items-center justify-center bg-[#2b5f90] text-white">
+                <User className="h-4 w-4" />
+              </Avatar>
+            </div>
+            <div className="flex flex-col gap-1">
+              <h2 className="font-semibold text-foreground">{chat.name}</h2>
+            </div>
           </div>
-          <div className="flex flex-col gap-1">
-            <h2 className="font-semibold text-foreground">{chat.name}</h2>
 
-
-          </div>
+          <Button
+            type="button"
+            variant={searchOpen ? "default" : "outline"}
+            size="sm"
+            onClick={() => {
+              if (searchOpen) {
+                closeSearch()
+                return
+              }
+              setSearchOpen(true)
+            }}
+            className={cn(searchOpen && "bg-[#013765] text-white hover:bg-[#012e54]")}
+            title="Buscar en el chat"
+          >
+            <Search className="h-4 w-4" />
+          </Button>
         </div>
+
+        {searchOpen && (
+          <div className="px-4 pb-3">
+            <div className="flex items-center gap-2">
+              <Input
+                ref={searchInputRef}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={handleSearchKeyDown}
+                placeholder="Buscar mensajes..."
+                className="h-9 bg-white border-gray-300"
+              />
+              <div className="min-w-[78px] text-center text-xs text-muted-foreground">
+                {searchQuery.trim()
+                  ? `${searchResultIds.length === 0 ? 0 : activeSearchIndex + 1}/${searchResultIds.length}`
+                  : "0/0"}
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={searchResultIds.length === 0}
+                onClick={goToPreviousSearchResult}
+                title="Resultado anterior"
+                className="h-9 w-9 p-0 border-gray-300"
+              >
+                <ChevronUp className="h-4 w-4" />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={searchResultIds.length === 0}
+                onClick={goToNextSearchResult}
+                title="Resultado siguiente"
+                className="h-9 w-9 p-0 border-gray-300"
+              >
+                <ChevronDown className="h-4 w-4" />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={closeSearch}
+                title="Cerrar busqueda"
+                className="h-9 w-9 p-0 border-gray-300"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Área de mensajes */}
-      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto custom-scrollbar p-4">
+      <div className="relative flex-1 min-h-0">
+        <div ref={messagesContainerRef} className="h-full overflow-y-auto custom-scrollbar p-4">
         {loading ? (
           <p className="text-sm text-muted-foreground text-center">
             Cargando mensajes...
@@ -857,6 +1076,7 @@ export default function ChatMain({ chat }: ChatMainProps) {
         ) : (
           <div className="space-y-4">
             {messages.map((message, index) => {
+              const messageId = String(message.id)
               const prev = index > 0 ? messages[index - 1] : null
               const showDateSeparator =
                 !prev || getDateKey(prev.timestamp) !== getDateKey(message.timestamp)
@@ -869,12 +1089,14 @@ export default function ChatMain({ chat }: ChatMainProps) {
               const isAudio = message.message_type === "audio"
               const isBotMessage = message.sender === "user" && message.sender_subtype === "bot"
               const isOperatorMessage = message.sender === "user" && !isBotMessage
+              const isSearchMatch = searchResultIdSet.has(messageId)
+              const isActiveSearchMatch = activeSearchResultId === messageId
 
               return (
                 <div
                   key={message.id}
                   data-msg-ts={message.timestamp}
-                  data-msg-id={String(message.id)}
+                  data-msg-id={messageId}
                   data-msg-date-key={getDateKey(message.timestamp)}
                 >
                   {showDateSeparator && (
@@ -892,6 +1114,8 @@ export default function ChatMain({ chat }: ChatMainProps) {
                     className={cn(
                       "flex gap-3 p-1 rounded-md transition-colors duration-300 ease-in-out",
                       highlightedMessageId === String(message.id) && (highlightBlinkOn ? "bg-gray-300" : "bg-gray-200"),
+                      isSearchMatch && "ring-1 ring-gray-300/60",
+                      isActiveSearchMatch && "ring-2 ring-[#2b5f90]/70 bg-[#2b5f90]/10",
                       message.sender === "user" ? "justify-end" : "justify-start",
                     )}
                   >
@@ -975,6 +1199,19 @@ export default function ChatMain({ chat }: ChatMainProps) {
 
             <div ref={messagesEndRef} />
           </div>
+        )}
+        </div>
+
+        {showScrollToBottom && (
+          <Button
+            type="button"
+            size="sm"
+            onClick={scrollToBottom}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 h-10 w-10 rounded-full p-0 bg-[#013765] shadow-lg"
+            title="Ir al final"
+          >
+            <ChevronDown className="h-5 w-5 text-white" />
+          </Button>
         )}
       </div>
 
@@ -1097,9 +1334,9 @@ export default function ChatMain({ chat }: ChatMainProps) {
                         <button
                           type="button"
                           onClick={() => setPreview({ url: item.previewUrl, name: item.file.name, type: "document" })}
-                          className="flex h-24 w-full items-center justify-center rounded bg-white"
+                          className="flex h-24 w-full items-center justify-center rounded bg-gray-50"
                         >
-                          <FileText className="h-7 w-7 text-muted-foreground" />
+                          <FileText className="h-7 w-7 text-gray-600" />
                         </button>
                       )}
 

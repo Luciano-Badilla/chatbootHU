@@ -108,31 +108,37 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
       <div className="flex-1 overflow-y-auto custom-scrollbar">
         <div className="p-2">
           {visibleChats.length > 0 ? (
-            visibleChats.map((chat) => (
+            visibleChats.map((chat) => {
+              const isSelected = String(selectedChatId) === String(chat.id)
+              return (
               <div
                 key={chat.id}
                 onClick={() => handleSelectChat(chat.id)}
+                aria-selected={isSelected}
                 className={cn(
-                  "flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors hover:bg-muted/50",
-                  String(selectedChatId) === String(chat.id) && "bg-muted",
+                  "relative flex items-center gap-3 p-3 rounded-lg cursor-pointer border border-transparent transition-colors hover:bg-muted/50",
+                  isSelected && "bg-[#dce8f5] border-[#2b5f90]/35",
                 )}
               >
+                {isSelected && (
+                  <div className="absolute left-0 top-2 bottom-2 w-1 rounded-r bg-[#013765]" />
+                )}
                 <Avatar className="h-12 w-12 flex items-center justify-center bg-[#2b5f90] text-white">
                   <User />
                 </Avatar>
 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between mb-1">
-                    <h3 className="font-medium text-foreground truncate">
+                    <h3 className={cn("font-medium truncate", isSelected ? "text-[#013765]" : "text-foreground")}>
                       {chat.name}
                     </h3>
-                    <span className="text-xs text-muted-foreground">
+                    <span className={cn("text-xs", isSelected ? "text-[#013765]/80" : "text-muted-foreground")}>
                       {formatTimestamp(chat.timestamp)}
                     </span>
                   </div>
 
                   <div className="flex items-center justify-between">
-                    <p className="text-sm text-muted-foreground truncate">
+                    <p className={cn("text-sm truncate", isSelected ? "text-[#013765]/85" : "text-muted-foreground")}>
                       {chat.lastMessage}
                     </p>
 
@@ -147,7 +153,7 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
                   </div>
                 </div>
               </div>
-            ))
+            )})
           ) : (
             <p className="text-center text-sm text-muted-foreground mt-4">
               No se encontraron conversaciones
