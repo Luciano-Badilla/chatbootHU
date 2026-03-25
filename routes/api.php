@@ -25,6 +25,7 @@ Route::get('/chat/messages/{chatId}', [ChatController::class, 'getMessages']);
 Route::post('/message/send', [WhatsAppController::class, 'sendMessage']);
 Route::post('/message/send-media', [WhatsAppController::class, 'sendMedia']);
 Route::post('/chats/{chat}/bot', [WhatsAppController::class, 'updateBotStatus']);
+Route::post('/chats/{chat}/operator', [ChatController::class, 'updateOperator']);
 
 Route::get('/bot/flows', [BotFlowController::class, 'apiIndex']);
 Route::post('/bot/flows', [BotFlowController::class, 'store']);

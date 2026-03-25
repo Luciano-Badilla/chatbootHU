@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use App\Models\User;
 
 class Chat extends Model
 {
@@ -16,6 +17,7 @@ class Chat extends Model
         'title',
         'status',
         'bot_enabled',
+        'operator_id',
         'bot_step',
         'bot_state'
     ];
@@ -44,5 +46,10 @@ class Chat extends Model
     public function botNode()
     {
         return $this->belongsTo(\App\Models\BotNode::class, 'bot_node_id');
+    }
+
+    public function operator()
+    {
+        return $this->belongsTo(User::class, 'operator_id');
     }
 }
