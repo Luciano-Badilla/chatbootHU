@@ -6,7 +6,7 @@ import ChatMain from "./ChatMain"
 import ChatInfo from "./ChatInfo"
 import mqtt from "mqtt"
 import { usePage } from "@inertiajs/react"
-import { AlertTriangle, Eye } from "lucide-react"
+import { AlertTriangle, Eye, WifiOff } from "lucide-react"
 
 export type Chat = {
   id: number | string
@@ -71,6 +71,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   // Estado local con la lista de chats (se inicializa con lo que viene del backend).
   const [chats, setChats] = useState<Chat[]>(initialChats)
   const [dbHydrated, setDbHydrated] = useState(false)
+  const [panelMqttConnected, setPanelMqttConnected] = useState(false)
 
   // ID del chat seleccionado actualmente en la UI.
   const [selectedChatId, setSelectedChatId] = useState<string>("")
@@ -206,9 +207,26 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     mqttClientRef.current = client
 
     client.on("connect", () => {
+      setPanelMqttConnected(true)
       client.subscribe("sidebar/chat")
       client.subscribe("status_bot/chat/+")
       client.subscribe("operator/chat/+")
+    })
+
+    client.on("reconnect", () => {
+      setPanelMqttConnected(false)
+    })
+
+    client.on("offline", () => {
+      setPanelMqttConnected(false)
+    })
+
+    client.on("close", () => {
+      setPanelMqttConnected(false)
+    })
+
+    client.on("error", () => {
+      setPanelMqttConnected(false)
     })
 
     client.on("message", (topic, message, packet) => {
@@ -327,6 +345,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
       try {
         client.end(true)
       } finally {
+        setPanelMqttConnected(false)
         mqttClientRef.current = null
       }
     }
@@ -497,7 +516,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
 
   return (
     // Antes: <div className="flex flex-1">
-    <div className="flex h-[calc(100vh-64px)] min-h-0">
+    <div className="relative flex h-[calc(100vh-64px)] min-h-0">
       {/* Sidebar de chats */}
       <div className="w-80 border-r border-gray-300 bg-gray-100 flex flex-col min-h-0">
         <ChatSidebar
@@ -610,6 +629,25 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
               >
                 Tomar chat
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!panelMqttConnected && (
+        <div className="absolute inset-0 z-[9998] flex items-center justify-center bg-black/55 backdrop-blur-[1px]">
+          <div className="rounded-lg border border-white/20 bg-black/55 px-4 py-3 text-center text-white">
+            <div className="mb-2 flex items-center justify-center">
+              <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10">
+                <WifiOff className="h-5 w-5" />
+              </span>
+            </div>
+            <div className="text-sm font-semibold">Error de red</div>
+            <div className="mt-1 text-xs text-white/85">
+              No hay conexión con el servidor MQTT (posible caída del servicio o red inestable).
+            </div>
+            <div className="mt-1 text-xs text-white/85">
+              El panel quedó bloqueado para evitar acciones no sincronizadas. Si persiste, contacta al área de TICs.
             </div>
           </div>
         </div>
