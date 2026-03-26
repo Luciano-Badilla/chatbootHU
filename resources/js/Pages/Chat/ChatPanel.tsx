@@ -77,6 +77,13 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   const selectedChatIdRef = useRef<string>("")
   const mqttClientRef = useRef<any>(null)
   const lastOperatorStateRef = useRef<Record<string, boolean>>({})
+  const operatorRequestInFlightRef = useRef<Record<string, boolean>>({})
+  const waitingForChatReleaseRef = useRef<Record<string, boolean>>({})
+  const [viewerReadOnlyChatId, setViewerReadOnlyChatId] = useState<string | null>(null)
+  const [operatorLeftPrompt, setOperatorLeftPrompt] = useState<{
+    chatId: string
+    operatorName?: string | null
+  } | null>(null)
   const [operatorConflict, setOperatorConflict] = useState<{
     chatId: string
     operatorId?: number | null
@@ -117,18 +124,6 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
       client.subscribe("sidebar/chat")
       client.subscribe("status_bot/chat/+")
       client.subscribe("operator/chat/+")
-
-      const currentChatId = selectedChatIdRef.current
-      if (!currentChatId) return
-      const payload = {
-        chat_id: Number(currentChatId),
-        active: true,
-        operator_id: authUser?.id ?? null,
-        operator_name: authUser?.name ?? null,
-        source: "frontend",
-        ts: new Date().toISOString(),
-      }
-      client.publish(`operator/chat/${currentChatId}`, JSON.stringify(payload), { retain: true })
     })
 
     client.on("message", (topic, message) => {
@@ -157,17 +152,34 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
           if (!chatId) return
 
           const active = Boolean(data.active)
+          let previousOperatorName: string | null = null
           setChats((prevChats) =>
             prevChats.map((c) =>
               String(c.id) === chatId
-                ? {
-                  ...c,
-                  operator_id: active ? (data.operator_id ?? null) : null,
-                  operator_name: active ? (data.operator_name ?? null) : null,
-                }
+                ? (() => {
+                  previousOperatorName = c.operator_name ?? null
+                  return {
+                    ...c,
+                    operator_id: active ? (data.operator_id ?? null) : null,
+                    operator_name: active ? (data.operator_name ?? null) : null,
+                  }
+                })()
                 : c,
             ),
           )
+
+          const currentChatId = selectedChatIdRef.current
+          const isCurrentChat = currentChatId && String(currentChatId) === chatId
+          const chatWasWaiting = Boolean(waitingForChatReleaseRef.current[chatId])
+          if (isCurrentChat && chatWasWaiting && !active) {
+            waitingForChatReleaseRef.current[chatId] = false
+            setOperatorConflict(null)
+            setViewerReadOnlyChatId(chatId)
+            setOperatorLeftPrompt({
+              chatId,
+              operatorName: previousOperatorName || operatorConflict?.operatorName || null,
+            })
+          }
           return
         }
 
@@ -235,9 +247,12 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
 
   const updateOperatorPresence = async (chatId: string, active: boolean, keepalive = false) => {
     if (!chatId) return
+    if (active && !authUser?.id) return
     const normalizedChatId = String(chatId)
+    if (operatorRequestInFlightRef.current[normalizedChatId]) return
     if (lastOperatorStateRef.current[normalizedChatId] === active) return
     lastOperatorStateRef.current[normalizedChatId] = active
+    operatorRequestInFlightRef.current[normalizedChatId] = true
 
     // 1) reflejo inmediato local
     setChats((prevChats) =>
@@ -252,7 +267,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
       ),
     )
 
-    // 2) emito MQTT inmediato para otras PCs
+    // 2) esquema hibrido: emite por websocket y persiste en DB
     const client = mqttClientRef.current
     if (client?.connected) {
       const payload = {
@@ -263,7 +278,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
         source: "frontend",
         ts: new Date().toISOString(),
       }
-      client.publish(`operator/chat/${normalizedChatId}`, JSON.stringify(payload), { retain: true })
+      client.publish(`operator/chat/${normalizedChatId}`, JSON.stringify(payload))
     }
 
     // 3) persisto en DB (source of truth)
@@ -301,10 +316,29 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
           lastOperatorStateRef.current[normalizedChatId] = false
           return
         }
+        lastOperatorStateRef.current[normalizedChatId] = !active
         console.error("Error guardando operador del chat:", await res.text())
+        return
       }
+
+      const okData = await res.json()
+      setChats((prevChats) =>
+        prevChats.map((c) =>
+          String(c.id) === normalizedChatId
+            ? {
+              ...c,
+              operator_id: okData.operator_id ?? null,
+              operator_name: okData.operator_name ?? null,
+            }
+            : c,
+        ),
+      )
+      lastOperatorStateRef.current[normalizedChatId] = Boolean(okData.active)
     } catch (error) {
+      lastOperatorStateRef.current[normalizedChatId] = !active
       console.error("Error actualizando operador del chat:", error)
+    } finally {
+      operatorRequestInFlightRef.current[normalizedChatId] = false
     }
   }
 
@@ -313,6 +347,13 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     const currentChatId = String(selectedChatId || "")
 
     if (previousChatId && previousChatId !== currentChatId) {
+      waitingForChatReleaseRef.current[previousChatId] = false
+      if (viewerReadOnlyChatId === previousChatId) {
+        setViewerReadOnlyChatId(null)
+      }
+      if (operatorLeftPrompt?.chatId === previousChatId) {
+        setOperatorLeftPrompt(null)
+      }
       updateOperatorPresence(previousChatId, false)
     }
     if (currentChatId && previousChatId !== currentChatId) {
@@ -323,6 +364,8 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
         Number(currentChat?.operator_id) !== myOperatorId
 
       if (occupiedByAnotherOperator) {
+        waitingForChatReleaseRef.current[currentChatId] = true
+        setViewerReadOnlyChatId(currentChatId)
         setOperatorConflict({
           chatId: currentChatId,
           operatorId: currentChat?.operator_id ?? null,
@@ -333,21 +376,10 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
         return
       }
 
+      waitingForChatReleaseRef.current[currentChatId] = false
+      setViewerReadOnlyChatId(null)
       setOperatorConflict(null)
       updateOperatorPresence(currentChatId, true)
-    }
-    if (currentChatId && previousChatId === currentChatId) {
-      const currentChat = chats.find((c) => String(c.id) === currentChatId)
-      const myOperatorId = Number(authUser?.id ?? 0)
-      const occupiedByAnotherOperator =
-        Boolean(currentChat?.operator_id) &&
-        Number(currentChat?.operator_id) !== myOperatorId
-      const chatIsFree = !currentChat?.operator_id
-
-      if (!occupiedByAnotherOperator && chatIsFree) {
-        setOperatorConflict(null)
-        updateOperatorPresence(currentChatId, true)
-      }
     }
 
     previousSelectedChatIdRef.current = currentChatId
@@ -390,10 +422,18 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
         <ChatMain
           chat={selectedChat}
           readOnly={Boolean(
-            selectedChat?.operator_id &&
-            Number(selectedChat.operator_id) !== Number(authUser?.id ?? 0),
+            (selectedChat?.operator_id &&
+              Number(selectedChat.operator_id) !== Number(authUser?.id ?? 0)) ||
+            (viewerReadOnlyChatId &&
+              String(viewerReadOnlyChatId) === String(selectedChat?.id ?? "")),
           )}
-          readOnlyOperatorName={selectedChat?.operator_name ?? null}
+          readOnlyOperatorName={
+            selectedChat?.operator_name ??
+            (viewerReadOnlyChatId &&
+            String(viewerReadOnlyChatId) === String(selectedChat?.id ?? "")
+              ? operatorLeftPrompt?.operatorName ?? null
+              : null)
+          }
         />
       </div>
 
@@ -435,6 +475,54 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
                 className="inline-flex items-center rounded-lg bg-[#013765] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#012e54]"
               >
                 Entendido
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {operatorLeftPrompt && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]">
+          <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start gap-3 border-b border-slate-200 bg-slate-50 px-5 py-4">
+              <div className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-700">
+                <Eye className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-base font-semibold text-slate-900">El operador abandono el chat</h3>
+                <p className="mt-0.5 text-sm text-slate-600">Puedes seguir en solo lectura o tomar la atencion.</p>
+              </div>
+            </div>
+            <div className="space-y-3 px-5 py-4 text-sm text-slate-700">
+              <p>
+                {operatorLeftPrompt.operatorName
+                  ? `${operatorLeftPrompt.operatorName} ya no esta atendiendo este chat.`
+                  : "El operador anterior ya no esta atendiendo este chat."}
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => {
+                  waitingForChatReleaseRef.current[operatorLeftPrompt.chatId] = false
+                  setOperatorLeftPrompt(null)
+                }}
+                className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+              >
+                Seguir viendo
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const chatId = operatorLeftPrompt.chatId
+                  waitingForChatReleaseRef.current[chatId] = false
+                  setOperatorLeftPrompt(null)
+                  setViewerReadOnlyChatId(null)
+                  updateOperatorPresence(chatId, true)
+                }}
+                className="inline-flex items-center rounded-lg bg-[#013765] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#012e54]"
+              >
+                Tomar chat
               </button>
             </div>
           </div>
