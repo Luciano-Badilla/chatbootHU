@@ -13,6 +13,8 @@ import type { Chat, ChatVariable } from "./ChatPanel"
 interface ChatInfoProps {
   chat?: Chat
   variables?: ChatVariable[]
+  readOnly?: boolean
+  canToggleBot?: boolean
 }
 
 type VarType = "string" | "number" | "boolean" | "object" | "array" | "null" | "unknown"
@@ -44,7 +46,12 @@ type PreviewMedia = {
 
 const API_BASE = (import.meta.env.VITE_APP_URL || "").replace(/\/$/, "")
 
-export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
+export default function ChatInfo({
+  chat,
+  variables = [],
+  readOnly = false,
+  canToggleBot = false,
+}: ChatInfoProps) {
   // ---------------------------
   // Helpers Variables
   // ---------------------------
@@ -593,7 +600,7 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
   }, [mqttStatus])
 
   const handleToggleBot = async () => {
-    if (!chat?.id || togglingBot) return
+    if (!chat?.id || togglingBot || !canToggleBot) return
 
     const nextEnabled = !botEnabled
     setTogglingBot(true)
@@ -723,7 +730,7 @@ export default function ChatInfo({ chat, variables = [] }: ChatInfoProps) {
                     variant="outline"
                     className="h-8 w-full px-2"
                     onClick={handleToggleBot}
-                    disabled={togglingBot}
+                    disabled={togglingBot || !canToggleBot}
                   >
                     {togglingBot ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />

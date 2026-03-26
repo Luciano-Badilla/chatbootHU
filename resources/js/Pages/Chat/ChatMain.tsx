@@ -16,6 +16,7 @@ interface ChatMainProps {
   chat?: Chat
   readOnly?: boolean
   readOnlyOperatorName?: string | null
+  readOnlyReason?: "operator" | "bot" | null
 }
 
 type PreviewMedia = {
@@ -30,7 +31,12 @@ type PendingMedia = {
   previewUrl: string
 }
 
-export default function ChatMain({ chat, readOnly = false, readOnlyOperatorName = null }: ChatMainProps) {
+export default function ChatMain({
+  chat,
+  readOnly = false,
+  readOnlyOperatorName = null,
+  readOnlyReason = null,
+}: ChatMainProps) {
   const [newMessage, setNewMessage] = useState("")
   const [messages, setMessages] = useState<Message[]>([])
   const [loading, setLoading] = useState(false)
@@ -997,7 +1003,9 @@ export default function ChatMain({ chat, readOnly = false, readOnlyOperatorName 
   const inputStatusMessage = mediaError
     ? mediaError
     : readOnly
-      ? `Este chat esta siendo atendido por ${readOnlyOperatorName ?? "otro operador"}.`
+      ? readOnlyReason === "bot"
+        ? "Modo lectura: el bot esta activo. Puedes tomar el chat, pero no enviar hasta que termine o lo apagues."
+        : `Este chat esta siendo atendido por ${readOnlyOperatorName ?? "otro operador"}.`
       : ""
   const hasInputStatus = Boolean(inputStatusMessage)
 
@@ -1297,7 +1305,13 @@ export default function ChatMain({ chat, readOnly = false, readOnlyOperatorName 
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={readOnly ? "Solo lectura: chat atendido por otro operador" : "Escribe un mensaje..."}
+              placeholder={
+                readOnly
+                  ? readOnlyReason === "bot"
+                    ? "Solo lectura: bot activo"
+                    : "Solo lectura: chat atendido por otro operador"
+                  : "Escribe un mensaje..."
+              }
               disabled={readOnly}
               className="pr-20 min-h-[44px] resize-none bg-muted/50 border-gray-300"
             />

@@ -70,6 +70,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
 
   // Estado local con la lista de chats (se inicializa con lo que viene del backend).
   const [chats, setChats] = useState<Chat[]>(initialChats)
+  const [dbHydrated, setDbHydrated] = useState(false)
 
   // ID del chat seleccionado actualmente en la UI.
   const [selectedChatId, setSelectedChatId] = useState<string>("")
@@ -78,6 +79,8 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   const mqttClientRef = useRef<any>(null)
   const lastOperatorStateRef = useRef<Record<string, boolean>>({})
   const operatorRequestInFlightRef = useRef<Record<string, boolean>>({})
+  const pendingOperatorStateRef = useRef<Record<string, boolean | undefined>>({})
+  const didRestoreSelectionFromDbRef = useRef(false)
   const waitingForChatReleaseRef = useRef<Record<string, boolean>>({})
   const [viewerReadOnlyChatId, setViewerReadOnlyChatId] = useState<string | null>(null)
   const [operatorLeftPrompt, setOperatorLeftPrompt] = useState<{
@@ -93,6 +96,21 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
 
   // Obtenemos el objeto del chat seleccionado a partir del estado.
   const selectedChat = chats.find((chat) => String(chat.id) === String(selectedChatId))
+  const readOnlyByOperator = Boolean(
+    selectedChat?.operator_id &&
+    Number(selectedChat.operator_id) !== Number(authUser?.id ?? 0),
+  )
+  const readOnlyByViewerLock = Boolean(
+    viewerReadOnlyChatId &&
+    String(viewerReadOnlyChatId) === String(selectedChat?.id ?? ""),
+  )
+  const readOnlyByBot = Boolean(selectedChat?.bot_enabled)
+  const isReadOnly = readOnlyByOperator || readOnlyByViewerLock || readOnlyByBot
+  const readOnlyReason: "operator" | "bot" | null = readOnlyByBot ? "bot" : (isReadOnly ? "operator" : null)
+  const canToggleBot = Boolean(
+    selectedChat?.operator_id &&
+    Number(selectedChat.operator_id) === Number(authUser?.id ?? 0),
+  )
 
   // ðŸ”¹ NUEVO: marcar como leÃ­dos al abrir el chat
   useEffect(() => {
@@ -111,6 +129,73 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     selectedChatIdRef.current = String(selectedChatId || "")
   }, [selectedChatId])
 
+  // Sincroniza estado local con DB al cargar (prioriza DB sobre memoria del front).
+  useEffect(() => {
+    let cancelled = false
+
+    const hydrateFromDb = async () => {
+      try {
+        const res = await fetch(`${import.meta.env.VITE_APP_URL}/api/chats/snapshot`)
+        if (!res.ok) {
+          console.error("Error cargando snapshot de chats:", await res.text())
+          return
+        }
+
+        const payload = await res.json()
+        const rows = Array.isArray(payload?.data) ? payload.data : []
+        const byChatId = new Map<string, any>(
+          rows.map((row: any) => [String(row.chat_id), row]),
+        )
+
+        if (cancelled) return
+        setChats((prevChats) =>
+          prevChats.map((chat) => {
+            const row = byChatId.get(String(chat.id))
+            if (!row) return chat
+            return {
+              ...chat,
+              operator_id: row.operator_id ?? null,
+              operator_name: row.operator_name ?? null,
+              bot_enabled: typeof row.bot_enabled === "boolean" ? row.bot_enabled : chat.bot_enabled,
+            }
+          }),
+        )
+      } catch (error) {
+        console.error("Error de red cargando snapshot de chats:", error)
+      } finally {
+        if (!cancelled) setDbHydrated(true)
+      }
+    }
+
+    hydrateFromDb()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // En F5/hard reload priorizamos el estado de DB (Inertia): abrir ultimo chat asignado al operador.
+  useEffect(() => {
+    if (!dbHydrated) return
+    if (didRestoreSelectionFromDbRef.current) return
+    didRestoreSelectionFromDbRef.current = true
+    if (selectedChatId) return
+    const myOperatorId = Number(authUser?.id ?? 0)
+    if (!myOperatorId) return
+
+    const assignedChats = chats.filter((c) => Number(c.operator_id ?? 0) === myOperatorId)
+    if (assignedChats.length === 0) return
+
+    const pickLatest = [...assignedChats].sort((a, b) => {
+      const aTs = a.timestamp ? new Date(a.timestamp).getTime() : 0
+      const bTs = b.timestamp ? new Date(b.timestamp).getTime() : 0
+      return bTs - aTs
+    })[0]
+
+    if (pickLatest?.id !== undefined && pickLatest?.id !== null) {
+      setSelectedChatId(String(pickLatest.id))
+    }
+  }, [dbHydrated, selectedChatId, chats, authUser?.id])
+
   useEffect(() => {
     const mosquitto_host = (import.meta.env.VITE_MOSQUITTO_HOST);
     const client = mqtt.connect("ws://" + mosquitto_host + ":9001", {
@@ -126,7 +211,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
       client.subscribe("operator/chat/+")
     })
 
-    client.on("message", (topic, message) => {
+    client.on("message", (topic, message, packet) => {
       try {
         const data = JSON.parse(message.toString())
 
@@ -147,6 +232,8 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
         }
 
         if (topic.startsWith("operator/chat/")) {
+          // Ignora retained viejos para no pisar el snapshot real de DB al reconectar/F5.
+          if (packet?.retain) return
           const topicChatId = topic.split("/").pop()
           const chatId = String(data.chat_id ?? topicChatId ?? "")
           if (!chatId) return
@@ -249,10 +336,14 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     if (!chatId) return
     if (active && !authUser?.id) return
     const normalizedChatId = String(chatId)
-    if (operatorRequestInFlightRef.current[normalizedChatId]) return
+    if (operatorRequestInFlightRef.current[normalizedChatId]) {
+      pendingOperatorStateRef.current[normalizedChatId] = active
+      return
+    }
     if (lastOperatorStateRef.current[normalizedChatId] === active) return
     lastOperatorStateRef.current[normalizedChatId] = active
     operatorRequestInFlightRef.current[normalizedChatId] = true
+    pendingOperatorStateRef.current[normalizedChatId] = undefined
 
     // 1) reflejo inmediato local
     setChats((prevChats) =>
@@ -339,6 +430,11 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
       console.error("Error actualizando operador del chat:", error)
     } finally {
       operatorRequestInFlightRef.current[normalizedChatId] = false
+      const pending = pendingOperatorStateRef.current[normalizedChatId]
+      pendingOperatorStateRef.current[normalizedChatId] = undefined
+      if (typeof pending === "boolean" && pending !== lastOperatorStateRef.current[normalizedChatId]) {
+        updateOperatorPresence(normalizedChatId, pending)
+      }
     }
   }
 
@@ -385,13 +481,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     previousSelectedChatIdRef.current = currentChatId
   }, [selectedChatId, chats, authUser?.id])
 
-  useEffect(() => {
-    return () => {
-      const lastChatId = previousSelectedChatIdRef.current
-      if (!lastChatId) return
-      updateOperatorPresence(lastChatId, false, true)
-    }
-  }, [])
+  // No liberamos al cerrar pestaña: la asignacion persiste en DB.
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -421,12 +511,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
       <div className="flex-1 flex flex-col min-h-0">
         <ChatMain
           chat={selectedChat}
-          readOnly={Boolean(
-            (selectedChat?.operator_id &&
-              Number(selectedChat.operator_id) !== Number(authUser?.id ?? 0)) ||
-            (viewerReadOnlyChatId &&
-              String(viewerReadOnlyChatId) === String(selectedChat?.id ?? "")),
-          )}
+          readOnly={isReadOnly}
           readOnlyOperatorName={
             selectedChat?.operator_name ??
             (viewerReadOnlyChatId &&
@@ -434,13 +519,14 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
               ? operatorLeftPrompt?.operatorName ?? null
               : null)
           }
+          readOnlyReason={readOnlyReason}
         />
       </div>
 
 
       {/* Panel derecho */}
       <div className="w-80 border-l border-gray-300 bg-gray-100 flex flex-col min-h-0">
-        <ChatInfo chat={selectedChat} />
+        <ChatInfo chat={selectedChat} readOnly={isReadOnly} canToggleBot={canToggleBot} />
       </div>
 
       {operatorConflict && (

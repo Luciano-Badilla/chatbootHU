@@ -122,6 +122,26 @@ class ChatController extends Controller
         return $messages;
     }
 
+    public function snapshot()
+    {
+        $rows = Chat::with('operator:id,name')
+            ->get(['id', 'operator_id', 'bot_enabled'])
+            ->map(function (Chat $chat) {
+                return [
+                    'chat_id' => (int) $chat->id,
+                    'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null,
+                    'operator_name' => $chat->operator?->name,
+                    'bot_enabled' => (bool) $chat->bot_enabled,
+                ];
+            })
+            ->values();
+
+        return response()->json([
+            'ok' => true,
+            'data' => $rows,
+        ]);
+    }
+
     private function publishOperatorStatus(int $chatId, array $payload): void
     {
         $host = env('MQTT_HOST') ?: env('VITE_MOSQUITTO_HOST');
