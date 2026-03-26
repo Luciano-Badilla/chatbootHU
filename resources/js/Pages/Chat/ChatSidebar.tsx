@@ -175,26 +175,39 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <p className={cn("text-sm truncate", isSelected ? "text-[#013765]/85" : "text-muted-foreground")}>
                           {formatLastMessagePreview(chat.lastMessage)}
                         </p>
 
-                        {chat.unread > 0 && (
-                          <Badge
-                            variant="default"
-                            className="ml-2 h-5 min-w-5 text-xs bg-[#013765] text-white"
-                          >
-                            {chat.unread}
-                          </Badge>
-                        )}
+                        <div className="ml-2 flex items-center gap-2 shrink-0">
+                          {botActive && (
+                            <span
+                              title="Bot activo"
+                              className={cn(
+                                "inline-flex h-5 w-5 items-center justify-center rounded-full shrink-0",
+                                isSelected ? "bg-[#2b5f90]/15 text-[#2b5f90]" : "bg-blue-100 text-blue-700",
+                              )}
+                            >
+                              <Bot className="h-3.5 w-3.5" />
+                            </span>
+                          )}
+                          {chat.unread > 0 && (
+                            <Badge
+                              variant="default"
+                              className="h-5 min-w-5 text-xs bg-[#013765] text-white"
+                            >
+                              {chat.unread}
+                            </Badge>
+                          )}
+                        </div>
                       </div>
 
-                      {(operatorActive || botActive) && (
+                      {operatorActive && (
                         <div
                           className={cn(
                             "mt-1 flex items-center gap-2 min-w-0",
-                            operatorActive ? "justify-between" : "justify-end",
+                            "justify-start",
                           )}
                         >
                           {operatorActive && (
@@ -210,17 +223,6 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
                                 <span className="truncate">{operatorLabel}</span>
                               </span>
                             </div>
-                          )}
-                          {botActive && (
-                            <span
-                              title="Bot activo"
-                              className={cn(
-                                "inline-flex h-5 w-5 items-center justify-center rounded-full shrink-0",
-                                isSelected ? "bg-[#2b5f90]/15 text-[#2b5f90]" : "bg-blue-100 text-blue-700",
-                              )}
-                            >
-                              <Bot className="h-3.5 w-3.5" />
-                            </span>
                           )}
                         </div>
                       )}

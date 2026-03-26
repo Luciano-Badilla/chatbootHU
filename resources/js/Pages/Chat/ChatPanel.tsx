@@ -6,6 +6,7 @@ import ChatMain from "./ChatMain"
 import ChatInfo from "./ChatInfo"
 import mqtt from "mqtt"
 import { usePage } from "@inertiajs/react"
+import { AlertTriangle, Eye } from "lucide-react"
 
 export type Chat = {
   id: number | string
@@ -76,6 +77,11 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   const selectedChatIdRef = useRef<string>("")
   const mqttClientRef = useRef<any>(null)
   const lastOperatorStateRef = useRef<Record<string, boolean>>({})
+  const [operatorConflict, setOperatorConflict] = useState<{
+    chatId: string
+    operatorId?: number | null
+    operatorName?: string | null
+  } | null>(null)
 
 
   // Obtenemos el objeto del chat seleccionado a partir del estado.
@@ -274,6 +280,27 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
       })
 
       if (!res.ok) {
+        if (res.status === 409) {
+          const conflictData = await res.json()
+          setChats((prevChats) =>
+            prevChats.map((c) =>
+              String(c.id) === normalizedChatId
+                ? {
+                  ...c,
+                  operator_id: conflictData.operator_id ?? null,
+                  operator_name: conflictData.operator_name ?? null,
+                }
+                : c,
+            ),
+          )
+          setOperatorConflict({
+            chatId: normalizedChatId,
+            operatorId: conflictData.operator_id ?? null,
+            operatorName: conflictData.operator_name ?? null,
+          })
+          lastOperatorStateRef.current[normalizedChatId] = false
+          return
+        }
         console.error("Error guardando operador del chat:", await res.text())
       }
     } catch (error) {
@@ -289,11 +316,42 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
       updateOperatorPresence(previousChatId, false)
     }
     if (currentChatId && previousChatId !== currentChatId) {
+      const currentChat = chats.find((c) => String(c.id) === currentChatId)
+      const myOperatorId = Number(authUser?.id ?? 0)
+      const occupiedByAnotherOperator =
+        Boolean(currentChat?.operator_id) &&
+        Number(currentChat?.operator_id) !== myOperatorId
+
+      if (occupiedByAnotherOperator) {
+        setOperatorConflict({
+          chatId: currentChatId,
+          operatorId: currentChat?.operator_id ?? null,
+          operatorName: currentChat?.operator_name ?? null,
+        })
+        lastOperatorStateRef.current[currentChatId] = false
+        previousSelectedChatIdRef.current = currentChatId
+        return
+      }
+
+      setOperatorConflict(null)
       updateOperatorPresence(currentChatId, true)
+    }
+    if (currentChatId && previousChatId === currentChatId) {
+      const currentChat = chats.find((c) => String(c.id) === currentChatId)
+      const myOperatorId = Number(authUser?.id ?? 0)
+      const occupiedByAnotherOperator =
+        Boolean(currentChat?.operator_id) &&
+        Number(currentChat?.operator_id) !== myOperatorId
+      const chatIsFree = !currentChat?.operator_id
+
+      if (!occupiedByAnotherOperator && chatIsFree) {
+        setOperatorConflict(null)
+        updateOperatorPresence(currentChatId, true)
+      }
     }
 
     previousSelectedChatIdRef.current = currentChatId
-  }, [selectedChatId])
+  }, [selectedChatId, chats, authUser?.id])
 
   useEffect(() => {
     return () => {
@@ -329,7 +387,14 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
 
       {/* Panel principal */}
       <div className="flex-1 flex flex-col min-h-0">
-        <ChatMain chat={selectedChat} />
+        <ChatMain
+          chat={selectedChat}
+          readOnly={Boolean(
+            selectedChat?.operator_id &&
+            Number(selectedChat.operator_id) !== Number(authUser?.id ?? 0),
+          )}
+          readOnlyOperatorName={selectedChat?.operator_name ?? null}
+        />
       </div>
 
 
@@ -337,7 +402,46 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
       <div className="w-80 border-l border-gray-300 bg-gray-100 flex flex-col min-h-0">
         <ChatInfo chat={selectedChat} />
       </div>
+
+      {operatorConflict && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]">
+          <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start gap-3 border-b border-slate-200 bg-slate-50 px-5 py-4">
+              <div className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-base font-semibold text-slate-900">Chat en uso por otro operador</h3>
+                <p className="mt-0.5 text-sm text-slate-600">Acceso en modo solo lectura.</p>
+              </div>
+            </div>
+            <div className="space-y-3 px-5 py-4 text-sm text-slate-700">
+              <p>
+                Este chat ya esta siendo atendido por{" "}
+                <span className="font-semibold text-slate-900">
+                  {operatorConflict.operatorName ?? `Operador #${operatorConflict.operatorId ?? "?"}`}
+                </span>
+                .
+              </p>
+              <div className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+                <Eye className="h-3.5 w-3.5" />
+                Solo lectura habilitada
+              </div>
+            </div>
+            <div className="flex justify-end border-t border-slate-200 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setOperatorConflict(null)}
+                className="inline-flex items-center rounded-lg bg-[#013765] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#012e54]"
+              >
+                Entendido
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
+
 

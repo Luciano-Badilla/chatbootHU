@@ -76,6 +76,18 @@ class ChatController extends Controller
                 ], 422);
             }
 
+            if ($chat->operator_id && (int) $chat->operator_id !== (int) $operatorId) {
+                $chat->load('operator');
+                return response()->json([
+                    'ok' => false,
+                    'conflict' => true,
+                    'chat_id' => (int) $chat->id,
+                    'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null,
+                    'operator_name' => $chat->operator?->name,
+                    'message' => 'Este chat ya está siendo atendido por otro operador.',
+                ], 409);
+            }
+
             $chat->operator_id = (int) $operatorId;
         } else {
             $chat->operator_id = null;

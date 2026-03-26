@@ -14,6 +14,8 @@ import { es } from "date-fns/locale"
 
 interface ChatMainProps {
   chat?: Chat
+  readOnly?: boolean
+  readOnlyOperatorName?: string | null
 }
 
 type PreviewMedia = {
@@ -28,7 +30,7 @@ type PendingMedia = {
   previewUrl: string
 }
 
-export default function ChatMain({ chat }: ChatMainProps) {
+export default function ChatMain({ chat, readOnly = false, readOnlyOperatorName = null }: ChatMainProps) {
   const [newMessage, setNewMessage] = useState("")
   const [messages, setMessages] = useState<Message[]>([])
   const [loading, setLoading] = useState(false)
@@ -201,7 +203,7 @@ export default function ChatMain({ chat }: ChatMainProps) {
       }
     })
 
-    return () => {
+  return () => {
       client.end()
     }
   }, [chat?.id])
@@ -224,7 +226,8 @@ export default function ChatMain({ chat }: ChatMainProps) {
 
     updateVisibility()
     container.addEventListener("scroll", updateVisibility)
-    return () => container.removeEventListener("scroll", updateVisibility)
+
+  return () => container.removeEventListener("scroll", updateVisibility)
   }, [chat?.id, messages.length])
 
   const scrollToBottom = () => {
@@ -236,7 +239,8 @@ export default function ChatMain({ chat }: ChatMainProps) {
   }, [pendingMediaList])
 
   useEffect(() => {
-    return () => {
+
+  return () => {
       if (highlightTimeoutRef.current) {
         clearTimeout(highlightTimeoutRef.current)
       }
@@ -332,7 +336,8 @@ export default function ChatMain({ chat }: ChatMainProps) {
     }
 
     window.addEventListener("chat:scrollToDate", onScrollToDate as EventListener)
-    return () => {
+
+  return () => {
       window.removeEventListener("chat:scrollToDate", onScrollToDate as EventListener)
     }
   }, [chat?.id])
@@ -388,7 +393,8 @@ export default function ChatMain({ chat }: ChatMainProps) {
     }
 
     window.addEventListener("chat:scrollToVar", onScrollToVar as EventListener)
-    return () => {
+
+  return () => {
       window.removeEventListener("chat:scrollToVar", onScrollToVar as EventListener)
     }
   }, [chat?.id, messages])
@@ -408,7 +414,8 @@ export default function ChatMain({ chat }: ChatMainProps) {
       searchInputRef.current?.focus()
       searchInputRef.current?.select()
     }, 0)
-    return () => clearTimeout(timer)
+
+  return () => clearTimeout(timer)
   }, [searchOpen])
 
   useEffect(() => {
@@ -457,7 +464,7 @@ export default function ChatMain({ chat }: ChatMainProps) {
   }, [activeSearchIndex, searchOpen, searchResultIds])
 
   const handleSendMessage = async () => {
-    if (!newMessage.trim() || !chat || sending) return
+    if (!newMessage.trim() || !chat || sending || readOnly) return
 
     const content = newMessage.trim()
     setNewMessage("")
@@ -492,7 +499,7 @@ export default function ChatMain({ chat }: ChatMainProps) {
   }
 
   const handlePickFile = () => {
-    if (sending) return
+    if (sending || readOnly) return
     setMediaError(null)
     fileInputRef.current?.click()
   }
@@ -527,6 +534,7 @@ export default function ChatMain({ chat }: ChatMainProps) {
   }
 
   const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (readOnly) return
     const selectedFiles = Array.from(e.target.files ?? []) as File[]
     if (!selectedFiles.length || !chat || sending) return
     setMediaError(null)
@@ -586,7 +594,7 @@ export default function ChatMain({ chat }: ChatMainProps) {
   }
 
   const handleToggleRecordAudio = async () => {
-    if (sending) return
+    if (sending || readOnly) return
 
     if (recordingAudio && mediaRecorderRef.current) {
       mediaRecorderRef.current.stop()
@@ -692,7 +700,7 @@ export default function ChatMain({ chat }: ChatMainProps) {
   }
 
   const handleSendPendingMedia = async () => {
-    if (pendingMediaList.length === 0 || !chat || sending) return
+    if (pendingMediaList.length === 0 || !chat || sending || readOnly) return
 
     setSending(true)
     try {
@@ -760,7 +768,8 @@ export default function ChatMain({ chat }: ChatMainProps) {
   const searchResultIdSet = useMemo(() => new Set(searchResultIds), [searchResultIds])
 
   if (!chat) {
-    return (
+
+  return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
           <h3 className="text-lg font-medium text-foreground mb-2">
@@ -855,7 +864,8 @@ export default function ChatMain({ chat }: ChatMainProps) {
     const isSticker = type === "image" && message.body === "[Sticker]"
 
     if (isSticker && src) {
-      return (
+
+  return (
         <button
           type="button"
           onClick={() =>
@@ -877,7 +887,8 @@ export default function ChatMain({ chat }: ChatMainProps) {
 
     // Imagen normal
     if (type === "image" && src) {
-      return (
+
+  return (
         <div className="space-y-1">
           <button
             type="button"
@@ -905,7 +916,8 @@ export default function ChatMain({ chat }: ChatMainProps) {
     }
 
     if (type === "video" && src) {
-      return (
+
+  return (
         <div className="space-y-1">
           <button
             type="button"
@@ -934,7 +946,8 @@ export default function ChatMain({ chat }: ChatMainProps) {
     }
 
     if (type === "audio" && src) {
-      return (
+
+  return (
         <div className="space-y-1 w-full">
           <audio src={src} controls className="w-full min-w-[240px]" />
         </div>
@@ -943,7 +956,8 @@ export default function ChatMain({ chat }: ChatMainProps) {
 
     if (type === "document" && src) {
       const documentLabel = getDocumentLabel(message)
-      return (
+
+  return (
         <div className="space-y-2">
           <button
             type="button"
@@ -972,12 +986,20 @@ export default function ChatMain({ chat }: ChatMainProps) {
     }
 
     // Texto por defecto
-    return (
+
+  return (
       <p className="text-sm leading-relaxed break-words">
         {message.body ?? ""}
       </p>
     )
   }
+
+  const inputStatusMessage = mediaError
+    ? mediaError
+    : readOnly
+      ? `Este chat esta siendo atendido por ${readOnlyOperatorName ?? "otro operador"}.`
+      : ""
+  const hasInputStatus = Boolean(inputStatusMessage)
 
   return (
     <div className="flex flex-col h-full">
@@ -1092,7 +1114,7 @@ export default function ChatMain({ chat }: ChatMainProps) {
               const isSearchMatch = searchResultIdSet.has(messageId)
               const isActiveSearchMatch = activeSearchResultId === messageId
 
-              return (
+  return (
                 <div
                   key={message.id}
                   data-msg-ts={message.timestamp}
@@ -1229,7 +1251,7 @@ export default function ChatMain({ chat }: ChatMainProps) {
           <Button
             type="button"
             variant="outline"
-            disabled={sending || !chat || recordingAudio}
+            disabled={sending || !chat || recordingAudio || readOnly}
             onClick={handlePickFile}
             className="h-11 w-11 p-0 border-gray-300"
             title="Adjuntar archivo"
@@ -1241,7 +1263,7 @@ export default function ChatMain({ chat }: ChatMainProps) {
             <Button
               type="button"
               variant="outline"
-              disabled={sending || !chat}
+              disabled={sending || !chat || readOnly}
               onClick={handleToggleRecordAudio}
               className={cn(
                 "h-11 w-11 p-0 border-gray-300",
@@ -1258,19 +1280,27 @@ export default function ChatMain({ chat }: ChatMainProps) {
             )}
           </div>
 
-          <div className="flex-1 relative">
+          <div className="flex-1 min-w-0 relative">
+            {hasInputStatus && (
+              <div
+                className={cn(
+                  "pointer-events-none absolute -top-7 left-0 z-10 inline-flex max-w-full items-center rounded-md border px-2 py-1 text-[11px] leading-4 shadow-sm",
+                  mediaError
+                    ? "border-red-200 bg-red-50 text-red-700"
+                    : "border-amber-200 bg-amber-50 text-amber-700",
+                )}
+              >
+                <span className="truncate">{inputStatusMessage}</span>
+              </div>
+            )}
             <Input
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Escribe un mensaje..."
+              placeholder={readOnly ? "Solo lectura: chat atendido por otro operador" : "Escribe un mensaje..."}
+              disabled={readOnly}
               className="pr-20 min-h-[44px] resize-none bg-muted/50 border-gray-300"
             />
-            {mediaError && (
-              <div className="mt-2 text-xs text-red-600">
-                {mediaError}
-              </div>
-            )}
             {pendingMediaList.length > 0 && (
               <div className="mt-2 rounded-lg border border-gray-300 bg-white p-2">
                 <div className="text-xs text-muted-foreground mb-2">
@@ -1349,7 +1379,7 @@ export default function ChatMain({ chat }: ChatMainProps) {
           </div>
 
           <Button
-            disabled={(!newMessage.trim() && pendingMediaList.length === 0) || sending}
+            disabled={readOnly || ((!newMessage.trim() && pendingMediaList.length === 0) || sending)}
             onClick={pendingMediaList.length > 0 ? handleSendPendingMedia : handleSendMessage}
             className="h-11 px-4 bg-[#013765]"
           >
@@ -1438,3 +1468,6 @@ export default function ChatMain({ chat }: ChatMainProps) {
     </div>
   )
 }
+
+
+
