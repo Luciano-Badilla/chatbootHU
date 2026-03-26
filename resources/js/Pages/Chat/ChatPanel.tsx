@@ -74,8 +74,8 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   const [selectedChatId, setSelectedChatId] = useState<string>("")
   const previousSelectedChatIdRef = useRef<string>("")
   const selectedChatIdRef = useRef<string>("")
-  const operatorPresenceSentRef = useRef<Record<string, boolean>>({})
   const mqttClientRef = useRef<any>(null)
+  const lastOperatorStateRef = useRef<Record<string, boolean>>({})
 
 
   // Obtenemos el objeto del chat seleccionado a partir del estado.
@@ -113,18 +113,16 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
       client.subscribe("operator/chat/+")
 
       const currentChatId = selectedChatIdRef.current
-      if (currentChatId) {
-        const payload = {
-          chat_id: Number(currentChatId),
-          active: true,
-          operator_id: authUser?.id ?? null,
-          operator_name: authUser?.name ?? null,
-          source: "frontend",
-          ts: new Date().toISOString(),
-        }
-        operatorPresenceSentRef.current[currentChatId] = true
-        client.publish(`operator/chat/${currentChatId}`, JSON.stringify(payload), { retain: true })
+      if (!currentChatId) return
+      const payload = {
+        chat_id: Number(currentChatId),
+        active: true,
+        operator_id: authUser?.id ?? null,
+        operator_name: authUser?.name ?? null,
+        source: "frontend",
+        ts: new Date().toISOString(),
       }
+      client.publish(`operator/chat/${currentChatId}`, JSON.stringify(payload), { retain: true })
     })
 
     client.on("message", (topic, message) => {
@@ -153,7 +151,6 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
           if (!chatId) return
 
           const active = Boolean(data.active)
-          operatorPresenceSentRef.current[chatId] = active
           setChats((prevChats) =>
             prevChats.map((c) =>
               String(c.id) === chatId
@@ -230,12 +227,13 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     }
   }, [])
 
-  const updateOperatorPresence = (chatId: string, active: boolean) => {
+  const updateOperatorPresence = async (chatId: string, active: boolean, keepalive = false) => {
     if (!chatId) return
     const normalizedChatId = String(chatId)
-    if (operatorPresenceSentRef.current[normalizedChatId] === active) return
-    operatorPresenceSentRef.current[normalizedChatId] = active
+    if (lastOperatorStateRef.current[normalizedChatId] === active) return
+    lastOperatorStateRef.current[normalizedChatId] = active
 
+    // 1) reflejo inmediato local
     setChats((prevChats) =>
       prevChats.map((c) =>
         String(c.id) === normalizedChatId
@@ -248,18 +246,39 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
       ),
     )
 
+    // 2) emito MQTT inmediato para otras PCs
     const client = mqttClientRef.current
-    if (!client?.connected) return
-
-    const payload = {
-      chat_id: Number(normalizedChatId),
-      active,
-      operator_id: authUser?.id ?? null,
-      operator_name: authUser?.name ?? null,
-      source: "frontend",
-      ts: new Date().toISOString(),
+    if (client?.connected) {
+      const payload = {
+        chat_id: Number(normalizedChatId),
+        active,
+        operator_id: authUser?.id ?? null,
+        operator_name: authUser?.name ?? null,
+        source: "frontend",
+        ts: new Date().toISOString(),
+      }
+      client.publish(`operator/chat/${normalizedChatId}`, JSON.stringify(payload), { retain: true })
     }
-    client.publish(`operator/chat/${normalizedChatId}`, JSON.stringify(payload), { retain: true })
+
+    // 3) persisto en DB (source of truth)
+    try {
+      const res = await fetch(`${import.meta.env.VITE_APP_URL}/api/chats/${normalizedChatId}/operator`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        keepalive,
+        body: JSON.stringify({
+          active,
+          operator_id: authUser?.id ?? null,
+          operator_name: authUser?.name ?? null,
+        }),
+      })
+
+      if (!res.ok) {
+        console.error("Error guardando operador del chat:", await res.text())
+      }
+    } catch (error) {
+      console.error("Error actualizando operador del chat:", error)
+    }
   }
 
   useEffect(() => {
@@ -280,7 +299,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     return () => {
       const lastChatId = previousSelectedChatIdRef.current
       if (!lastChatId) return
-      updateOperatorPresence(lastChatId, false)
+      updateOperatorPresence(lastChatId, false, true)
     }
   }, [])
 
