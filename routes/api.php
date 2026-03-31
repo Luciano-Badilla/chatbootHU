@@ -29,12 +29,18 @@ Route::post('/chats/{chat}/bot', [WhatsAppController::class, 'updateBotStatus'])
 Route::post('/chats/{chat}/operator', [ChatController::class, 'updateOperator']);
 
 Route::get('/bot/flows', [BotFlowController::class, 'apiIndex']);
+Route::get('/bot/trash', [BotFlowController::class, 'trash']);
 Route::post('/bot/flows', [BotFlowController::class, 'store']);
+Route::put('/bot/flows/{flow}', [BotFlowController::class, 'updateFlow']);
+Route::delete('/bot/flows/{flow}', [BotFlowController::class, 'destroyFlow']);
+Route::post('/bot/flows/{flowId}/restore', [BotFlowController::class, 'restoreFlow']);
 Route::post('/bot/flows/{flow}/make-default', [BotFlowController::class, 'makeDefault']);
 Route::put('/bot/flows/{flow}/start-node', [BotFlowController::class, 'setStartNode']);
 Route::get('/bot/flows/{flow}/nodes', [BotFlowController::class, 'nodes']);
 Route::post('/bot/flows/{flow}/nodes', [BotFlowController::class, 'storeNode']);
 Route::put('/bot/nodes/{node}', [BotFlowController::class, 'updateNode']);
+Route::delete('/bot/nodes/{node}', [BotFlowController::class, 'destroyNode']);
+Route::post('/bot/nodes/{nodeId}/restore', [BotFlowController::class, 'restoreNode']);
 Route::get('/chats/{chat}/media', [ChatMediaController::class, 'index']);
 
 

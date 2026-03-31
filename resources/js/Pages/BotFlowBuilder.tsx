@@ -1,7 +1,7 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
-import { Plus, RefreshCcw, ChevronRight, Zap, Loader2 } from "lucide-react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { Plus, RefreshCcw, ChevronRight, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp } from "lucide-react"
 import { Button } from "shadcn/components/ui/button"
 import { Input } from "shadcn/components/ui/input"
 import { Textarea } from "shadcn/components/ui/textarea"
@@ -32,6 +32,7 @@ interface BotFlow {
   start_node_id?: number | null
   is_active: boolean
   is_default?: boolean
+  deleted_at?: string | null
 }
 
 interface BotNode {
@@ -42,12 +43,31 @@ interface BotNode {
   body: string | null
   settings: any
   next_node_id: number | null
+  deleted_at?: string | null
+}
+
+interface TrashedNodeSummary {
+  id: number
+  flow_id: number
+  flow_name?: string | null
+  key: string | null
+  type: NodeType
+  deleted_at?: string | null
 }
 
 const API_BASE = (import.meta.env.VITE_APP_URL || "").replace(/\/$/, "")
 
 const MAX_BUTTONS = 2 // si querés 3 (lo que permite WhatsApp), poné 3
 const MAX_LIST_ROWS = 10
+
+const serializeNodeSnapshot = (node: BotNode | null) => {
+  if (!node) return ""
+
+  return JSON.stringify({
+    ...node,
+    settings: node.settings ?? {},
+  })
+}
 
 export default function BotFlowBuilder() {
   const [flows, setFlows] = useState<BotFlow[]>([])
@@ -62,18 +82,50 @@ export default function BotFlowBuilder() {
   const [creatingFlow, setCreatingFlow] = useState(false)
   const [creatingNode, setCreatingNode] = useState(false)
   const [savingStartNode, setSavingStartNode] = useState(false)
+  const [savingFlow, setSavingFlow] = useState(false)
+  const [deletingFlowId, setDeletingFlowId] = useState<number | null>(null)
+  const [deletingNodeId, setDeletingNodeId] = useState<number | null>(null)
+  const [restoringFlowId, setRestoringFlowId] = useState<number | null>(null)
+  const [restoringNodeId, setRestoringNodeId] = useState<number | null>(null)
+  const [trashOpen, setTrashOpen] = useState(false)
+  const [loadingTrash, setLoadingTrash] = useState(false)
+  const [trashedFlows, setTrashedFlows] = useState<BotFlow[]>([])
+  const [trashedNodes, setTrashedNodes] = useState<TrashedNodeSummary[]>([])
+  const [trashSearch, setTrashSearch] = useState("")
+  const [confirmDelete, setConfirmDelete] = useState<
+    | { type: "flow"; id: number; name: string }
+    | { type: "node"; id: number; name: string }
+    | null
+  >(null)
+  const [createModal, setCreateModal] = useState<"flow" | "node" | null>(null)
+  const [regexHelpOpen, setRegexHelpOpen] = useState(false)
+  const [pendingNavigation, setPendingNavigation] = useState<
+    | { type: "flow"; id: number }
+    | { type: "node"; id: number }
+    | null
+  >(null)
 
   const [newFlowName, setNewFlowName] = useState("")
   const [newNodeKey, setNewNodeKey] = useState("")
+  const [editFlowName, setEditFlowName] = useState("")
 
   // Estado local editable del nodo
   const [editNode, setEditNode] = useState<BotNode | null>(null)
+  const lastSavedNodeSnapshotRef = useRef("")
 
   // 🔹 Flow seleccionado
   const selectedFlow = useMemo(
     () => flows.find((f) => f.id === selectedFlowId) ?? null,
     [flows, selectedFlowId],
   )
+
+  const hasUnsavedChanges = useMemo(() => {
+    return serializeNodeSnapshot(editNode) !== lastSavedNodeSnapshotRef.current
+  }, [editNode])
+
+  const hasUnsavedFlowChanges = useMemo(() => {
+    return editFlowName.trim() !== (selectedFlow?.name ?? "")
+  }, [editFlowName, selectedFlow?.name])
 
   const startNodeOptions = useMemo(() => {
     return nodes.map((n) => ({
@@ -154,11 +206,56 @@ export default function BotFlowBuilder() {
   useEffect(() => {
     if (!selectedNodeId) {
       setEditNode(null)
+      lastSavedNodeSnapshotRef.current = ""
       return
     }
     const n = nodes.find((x) => x.id === selectedNodeId) ?? null
-    setEditNode(n ? { ...n, settings: n.settings ?? {} } : null)
+    if (!n) {
+      setEditNode(null)
+      lastSavedNodeSnapshotRef.current = ""
+      return
+    }
+
+    const normalizedNode = { ...n, settings: n.settings ?? {} }
+
+    setEditNode((prev) => {
+      if (!prev || prev.id !== normalizedNode.id) {
+        lastSavedNodeSnapshotRef.current = serializeNodeSnapshot(normalizedNode)
+        return normalizedNode
+      }
+
+      return prev
+    })
   }, [selectedNodeId, nodes])
+
+  useEffect(() => {
+    setEditFlowName(selectedFlow?.name ?? "")
+  }, [selectedFlow?.id, selectedFlow?.name])
+
+  useEffect(() => {
+    if (!trashOpen) return
+
+    const loadTrash = async () => {
+      try {
+        setLoadingTrash(true)
+        const res = await fetch(`${API_BASE}/api/bot/trash`)
+        if (!res.ok) {
+          console.error("Error al cargar papelera", await res.text())
+          return
+        }
+
+        const data = await res.json()
+        setTrashedFlows(data.flows ?? [])
+        setTrashedNodes(data.nodes ?? [])
+      } catch (err) {
+        console.error("Error de red cargando papelera:", err)
+      } finally {
+        setLoadingTrash(false)
+      }
+    }
+
+    loadTrash()
+  }, [trashOpen])
 
   // 🔹 Crear flujo nuevo
   const handleCreateFlow = async () => {
@@ -180,6 +277,7 @@ export default function BotFlowBuilder() {
       setFlows((prev) => [...prev, flow])
       setSelectedFlowId(flow.id)
       setNewFlowName("")
+      setCreateModal(null)
     } catch (err) {
       console.error("Error de red al crear flow:", err)
     } finally {
@@ -220,6 +318,40 @@ export default function BotFlowBuilder() {
     }
   }
 
+  const handleSaveFlow = async () => {
+    if (!selectedFlow) return
+
+    const name = editFlowName.trim()
+    if (!name || name === selectedFlow.name) return
+
+    setSavingFlow(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/bot/flows/${selectedFlow.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          description: selectedFlow.description ?? null,
+        }),
+      })
+
+      if (!res.ok) {
+        console.error("Error al guardar flow", await res.text())
+        return
+      }
+
+      const data = await res.json()
+      const updatedFlow: BotFlow = data.flow ?? data
+
+      setFlows((prev) => prev.map((flow) => (flow.id === updatedFlow.id ? { ...flow, ...updatedFlow } : flow)))
+      setEditFlowName(updatedFlow.name)
+    } catch (err) {
+      console.error("Error de red guardando flow:", err)
+    } finally {
+      setSavingFlow(false)
+    }
+  }
+
 
   const handleMakeDefault = async (flowId: number) => {
     try {
@@ -237,6 +369,78 @@ export default function BotFlowBuilder() {
       setFlows((prev) => prev.map((f) => ({ ...f, is_default: f.id === flowId })))
     } catch (err) {
       console.error("Error de red seteando default:", err)
+    }
+  }
+
+  const handleDeleteFlow = async (flowId: number) => {
+    setDeletingFlowId(flowId)
+    try {
+      const res = await fetch(`${API_BASE}/api/bot/flows/${flowId}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+      })
+
+      if (!res.ok) {
+        console.error("Error al eliminar flow", await res.text())
+        return
+      }
+
+      const data = await res.json()
+      const replacementDefaultFlowId: number | null = data.replacement_default_flow_id ?? null
+      const remainingFlows = flows
+        .filter((item) => item.id !== flowId)
+        .map((item) => ({
+          ...item,
+          is_default: replacementDefaultFlowId ? item.id === replacementDefaultFlowId : item.is_default,
+        }))
+      const nextFlowId =
+        remainingFlows.find((item) => item.id === selectedFlowId)?.id ??
+        remainingFlows.find((item) => item.is_default)?.id ??
+        remainingFlows[0]?.id ??
+        null
+
+      setFlows(remainingFlows)
+
+      if (selectedFlowId === flowId) {
+        setSelectedFlowId(nextFlowId)
+        setNodes([])
+        setSelectedNodeId(null)
+        setEditNode(null)
+      }
+    } catch (err) {
+      console.error("Error de red eliminando flow:", err)
+    } finally {
+      setDeletingFlowId(null)
+    }
+  }
+
+  const handleRestoreFlow = async (flowId: number) => {
+    setRestoringFlowId(flowId)
+    try {
+      const res = await fetch(`${API_BASE}/api/bot/flows/${flowId}/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      })
+
+      if (!res.ok) {
+        console.error("Error al restaurar flow", await res.text())
+        return
+      }
+
+      const data = await res.json()
+      const restoredFlow: BotFlow = data.flow ?? data
+
+      setFlows((prev) => [...prev, restoredFlow].sort((a, b) => a.id - b.id))
+      setTrashedFlows((prev) => prev.filter((flow) => flow.id !== flowId))
+      setTrashedNodes((prev) => prev.filter((node) => node.flow_id !== flowId))
+
+      if (!selectedFlowId) {
+        setSelectedFlowId(restoredFlow.id)
+      }
+    } catch (err) {
+      console.error("Error de red restaurando flow:", err)
+    } finally {
+      setRestoringFlowId(null)
     }
   }
 
@@ -269,6 +473,7 @@ export default function BotFlowBuilder() {
       setNodes((prev) => [...prev, node])
       setSelectedNodeId(node.id)
       setNewNodeKey("")
+      setCreateModal(null)
     } catch (err) {
       console.error("Error de red al crear node:", err)
     } finally {
@@ -277,26 +482,160 @@ export default function BotFlowBuilder() {
   }
 
   // 🔹 Guardar cambios del nodo
+  const handleDeleteNode = async (nodeId: number) => {
+    setDeletingNodeId(nodeId)
+    try {
+      const res = await fetch(`${API_BASE}/api/bot/nodes/${nodeId}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+      })
+      if (!res.ok) {
+        console.error("Error al eliminar node", await res.text())
+        return
+      }
+
+      const data = await res.json()
+      const replacementNodeId: number | null = data.replacement_node_id ?? null
+      const updatedFlow: BotFlow | null = data.flow ?? null
+
+      setFlows((prev) =>
+        prev.map((flow) => (updatedFlow && flow.id === updatedFlow.id ? { ...flow, ...updatedFlow } : flow)),
+      )
+      setNodes((prev) =>
+        prev
+          .filter((item) => item.id !== nodeId)
+          .map((item) => ({
+            ...item,
+            next_node_id: item.next_node_id === nodeId ? null : item.next_node_id,
+            settings: clearDeletedNodeReferencesFromSettings(item.settings, nodeId),
+          })),
+      )
+
+      if (selectedNodeId === nodeId) {
+        setSelectedNodeId(replacementNodeId)
+      }
+    } catch (err) {
+      console.error("Error de red eliminando node:", err)
+    } finally {
+      setDeletingNodeId(null)
+    }
+  }
+
+  const handleRestoreNode = async (nodeId: number) => {
+    setRestoringNodeId(nodeId)
+    try {
+      const res = await fetch(`${API_BASE}/api/bot/nodes/${nodeId}/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      })
+
+      if (!res.ok) {
+        console.error("Error al restaurar node", await res.text())
+        return
+      }
+
+      const data = await res.json()
+      const restoredNode: BotNode = data.node ?? data
+      const updatedFlow: BotFlow | null = data.flow ?? null
+
+      setTrashedNodes((prev) => prev.filter((node) => node.id !== nodeId))
+      setFlows((prev) =>
+        prev.map((flow) => (updatedFlow && flow.id === updatedFlow.id ? { ...flow, ...updatedFlow } : flow)),
+      )
+
+      if (selectedFlowId === restoredNode.flow_id) {
+        setNodes((prev) => [...prev, restoredNode].sort((a, b) => a.id - b.id))
+      }
+    } catch (err) {
+      console.error("Error de red restaurando node:", err)
+    } finally {
+      setRestoringNodeId(null)
+    }
+  }
+
+  const handleConfirmDelete = async () => {
+    if (!confirmDelete) return
+
+    const pendingDelete = confirmDelete
+    setConfirmDelete(null)
+
+    if (pendingDelete.type === "flow") {
+      await handleDeleteFlow(pendingDelete.id)
+      return
+    }
+
+    await handleDeleteNode(pendingDelete.id)
+  }
+
   const handleSaveNode = async () => {
     if (!editNode) return
+
+    const snapshot = {
+      ...editNode,
+      settings: editNode.settings ?? {},
+    }
+
     setSavingNode(true)
     try {
-      const res = await fetch(`${API_BASE}/api/bot/nodes/${editNode.id}`, {
+      const res = await fetch(`${API_BASE}/api/bot/nodes/${snapshot.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(editNode),
+        body: JSON.stringify(snapshot),
       })
       if (!res.ok) {
         console.error("Error al guardar node", await res.text())
-        return
+        return false
       }
+
       const updated: BotNode = await res.json()
-      setNodes((prev) => prev.map((n) => (n.id === updated.id ? updated : n)))
+      const normalizedUpdated = { ...updated, settings: updated.settings ?? {} }
+
+      lastSavedNodeSnapshotRef.current = serializeNodeSnapshot(normalizedUpdated)
+      setNodes((prev) => prev.map((n) => (n.id === updated.id ? normalizedUpdated : n)))
+      setEditNode((prev) => (prev && prev.id === updated.id ? normalizedUpdated : prev))
+      return true
     } catch (err) {
       console.error("Error de red al guardar node:", err)
+      return false
     } finally {
       setSavingNode(false)
     }
+  }
+
+  const requestSelectFlow = (flowId: number) => {
+    if (flowId === selectedFlowId) return
+
+    if (hasUnsavedChanges) {
+      setPendingNavigation({ type: "flow", id: flowId })
+      return
+    }
+
+    setSelectedFlowId(flowId)
+  }
+
+  const requestSelectNode = (nodeId: number) => {
+    if (nodeId === selectedNodeId) return
+
+    if (hasUnsavedChanges) {
+      setPendingNavigation({ type: "node", id: nodeId })
+      return
+    }
+
+    setSelectedNodeId(nodeId)
+  }
+
+  const handleDiscardPendingNavigation = () => {
+    if (!pendingNavigation) return
+
+    const nextNavigation = pendingNavigation
+    setPendingNavigation(null)
+
+    if (nextNavigation.type === "flow") {
+      setSelectedFlowId(nextNavigation.id)
+      return
+    }
+
+    setSelectedNodeId(nextNavigation.id)
   }
 
   // Helpers para settings según tipo
@@ -321,12 +660,44 @@ export default function BotFlowBuilder() {
   }, [nodes])
 
   const nodesWithNextKey = useMemo(() => {
+    const getNodeLabel = (nodeId: number | null | undefined) => {
+      if (!nodeId) return null
+      const next = nodesById.get(nodeId)
+      return next?.key ?? (next ? `node_${next.id}` : `node_${nodeId}`)
+    }
+
     return nodes.map((node) => {
-      const next = node.next_node_id ? nodesById.get(node.next_node_id) : undefined
+      const settings = node.settings ?? {}
+      const linearNextLabel = getNodeLabel(node.next_node_id)
+      const buttonTargets = Array.isArray(settings.buttons)
+        ? settings.buttons
+          .map((button: any) => getNodeLabel(Number(button?.next_node_id ?? 0)))
+          .filter(Boolean)
+        : []
+      const listTargets = Array.isArray(settings.rows)
+        ? settings.rows
+          .map((row: any) => getNodeLabel(Number(row?.next_node_id ?? 0)))
+          .filter(Boolean)
+        : []
+
+      const uniqueTargets = Array.from(new Set([linearNextLabel, ...buttonTargets, ...listTargets].filter(Boolean)))
+      const nextSummary =
+        uniqueTargets.length === 0
+          ? null
+          : uniqueTargets.length === 1
+            ? uniqueTargets[0]
+            : `${uniqueTargets[0]} +${uniqueTargets.length - 1}`
+
+      const bodyPreview = (node.body ?? "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 90)
 
       return {
         ...node,
-        nextNodeKey: next?.key ?? (next ? `node_${next.id}` : null),
+        nextNodeKey: linearNextLabel,
+        nextSummary,
+        bodyPreview,
       }
     })
   }, [nodes, nodesById])
@@ -336,6 +707,74 @@ export default function BotFlowBuilder() {
     const n = nodes.find((x) => x.id === selectedFlow.start_node_id)
     return n?.key || (n ? `node_${n.id}` : `Cargando...`)
   }, [selectedFlow?.start_node_id, nodes])
+
+  const clearDeletedNodeReferencesFromSettings = (settings: any, deletedNodeId: number) => {
+    const nextSettings = settings && typeof settings === "object" ? { ...settings } : {}
+
+    if (Array.isArray(nextSettings.buttons)) {
+      nextSettings.buttons = nextSettings.buttons.map((button: any) => {
+        if (!button || typeof button !== "object") return button
+        return Number(button.next_node_id ?? 0) === deletedNodeId
+          ? { ...button, next_node_id: null }
+          : button
+      })
+    }
+
+    if (Array.isArray(nextSettings.rows)) {
+      nextSettings.rows = nextSettings.rows.map((row: any) => {
+        if (!row || typeof row !== "object") return row
+        return Number(row.next_node_id ?? 0) === deletedNodeId
+          ? { ...row, next_node_id: null }
+          : row
+      })
+    }
+
+    return nextSettings
+  }
+
+  const trashSearchNormalized = trashSearch.trim().toLowerCase()
+
+  const filteredTrashedFlows = useMemo(() => {
+    if (!trashSearchNormalized) return trashedFlows
+
+    return trashedFlows.filter((flow) => {
+      return [flow.name, flow.description, String(flow.id)]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(trashSearchNormalized))
+    })
+  }, [trashedFlows, trashSearchNormalized])
+
+  const filteredTrashedNodes = useMemo(() => {
+    if (!trashSearchNormalized) return trashedNodes
+
+    return trashedNodes.filter((node) => {
+      return [node.key, node.flow_name, node.type, String(node.id), String(node.flow_id)]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(trashSearchNormalized))
+    })
+  }, [trashedNodes, trashSearchNormalized])
+
+  const removeDeletedNodeReferencesFromSettings = (settings: any, deletedNodeId: number) => {
+    const nextSettings = settings && typeof settings === "object" ? { ...settings } : {}
+
+    if (Array.isArray(nextSettings.buttons)) {
+      nextSettings.buttons = nextSettings.buttons.map((button: any) =>
+        Number(button?.next_node_id) === deletedNodeId
+          ? { ...button, next_node_id: null }
+          : button,
+      )
+    }
+
+    if (Array.isArray(nextSettings.rows)) {
+      nextSettings.rows = nextSettings.rows.map((row: any) =>
+        Number(row?.next_node_id) === deletedNodeId
+          ? { ...row, next_node_id: null }
+          : row,
+      )
+    }
+
+    return nextSettings
+  }
 
   // 🔹 Inputs de settings específicos
   const renderSettingsFields = () => {
@@ -385,16 +824,20 @@ export default function BotFlowBuilder() {
 
       return (
         <div className="space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
             <h4 className="font-medium text-sm">Botones</h4>
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+              {buttons.length}/{MAX_BUTTONS}
+            </span>
+          </div>
             <Button
-              size="xs"
               variant="outline"
-              className="border-[#013765] text-[#013765] hover:bg-[#013765] hover:text-white"
+              className="h-9 w-full justify-center border-dashed border-[#013765]/40 bg-[#013765]/[0.03] text-[#013765] hover:bg-[#013765] hover:text-white"
               onClick={addButton}
               disabled={buttons.length >= MAX_BUTTONS}
             >
-              <Plus className="h-3 w-3 mr-1" />
+              <Plus className="mr-2 h-3.5 w-3.5" />
               Agregar botón
             </Button>
 
@@ -446,14 +889,14 @@ export default function BotFlowBuilder() {
                     </SelectContent>
                   </Select>
 
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    className="text-red-600 hover:text-red-700"
+                  <button
+                    type="button"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 bg-red-50 text-red-600 transition-colors hover:bg-red-100 hover:text-red-700"
                     onClick={() => removeButton(index)}
+                    title="Eliminar botón"
                   >
-                    Eliminar
-                  </Button>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               </div>
             ))}
@@ -558,16 +1001,20 @@ export default function BotFlowBuilder() {
             </div>
           </div>
 
-          <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
             <h4 className="font-medium text-sm">Opciones de la lista</h4>
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+              {rows.length}/{MAX_LIST_ROWS}
+            </span>
+          </div>
             <Button
-              size="xs"
               variant="outline"
-              className="border-[#013765] text-[#013765] hover:bg-[#013765] hover:text-white"
+              className="h-9 w-full justify-center border-dashed border-[#013765]/40 bg-[#013765]/[0.03] text-[#013765] hover:bg-[#013765] hover:text-white"
               onClick={addRow}
               disabled={rows.length >= MAX_LIST_ROWS}
             >
-              <Plus className="h-3 w-3 mr-1" />
+              <Plus className="mr-2 h-3.5 w-3.5" />
               Agregar opción
             </Button>
 
@@ -626,14 +1073,14 @@ export default function BotFlowBuilder() {
                     </SelectContent>
                   </Select>
 
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    className="text-red-600 hover:text-red-700"
+                  <button
+                    type="button"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 bg-red-50 text-red-600 transition-colors hover:bg-red-100 hover:text-red-700"
                     onClick={() => removeRow(index)}
+                    title="Eliminar opción"
                   >
-                    Eliminar
-                  </Button>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               </div>
             ))}
@@ -677,7 +1124,8 @@ export default function BotFlowBuilder() {
       return (
         <div className="space-y-3">
           <div>
-            <label className="text-xs mb-1 block text-muted-foreground">
+            <div className="mb-1 flex items-center gap-2">
+              <label className="text-xs block text-muted-foreground">
               Nombre de la variable
             </label>
             <Input
@@ -687,11 +1135,21 @@ export default function BotFlowBuilder() {
               className="text-xs"
             />
           </div>
+          </div>
 
           <div>
-            <label className="text-xs mb-1 block text-muted-foreground">
+            <div className="mb-1 flex items-center gap-2"><label className="text-xs block text-muted-foreground">
               Regex de validación (opcional)
             </label>
+              <button
+                type="button"
+                onClick={() => setRegexHelpOpen(true)}
+                className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-[#013765] transition-colors hover:bg-slate-50"
+              >
+                <CircleHelp className="h-3.5 w-3.5" />
+                Ayuda sobre regex
+              </button>
+            </div>
             <Input
               value={settings.validation_regex ?? ""}
               onChange={(e) => update("validation_regex", e.target.value)}
@@ -723,7 +1181,7 @@ export default function BotFlowBuilder() {
 
   // 🔹 Render: layout general
   return (
-    <div className="flex h-full flex-col bg-slate-100">
+    <div className="flex h-screen flex-col overflow-hidden bg-slate-100">
       {/* Barra superior estilo panel de mensajes */}
       <div className="flex items-center justify-between px-4 py-3 bg-[#013765] text-white">
         <div>
@@ -739,58 +1197,47 @@ export default function BotFlowBuilder() {
             <p className="text-xs mt-1 opacity-80">Selecciona un flujo o crea uno nuevo.</p>
           )}
         </div>
-        {selectedFlow && (
-          <div className="inline-flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-full text-xs">
-            <Zap className="h-6 w-6 text-yellow-300" />
-
-            <span className="opacity-90">Nodo inicial:</span>
-            <div className="relative">
-              <Select
-                value={selectedFlow.start_node_id ? String(selectedFlow.start_node_id) : "none"}
-                onValueChange={(val) => handleSetStartNode(val === "none" ? null : Number(val))}
-                disabled={savingStartNode || nodes.length === 0}
-              >
-                <SelectTrigger className="h-7 text-xs bg-white/10 border-white/20 text-white hover:bg-white/15 pr-8">
-                  <SelectValue placeholder="Elegí nodo..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {startNodeOptions.map((opt) => (
-                    <SelectItem key={opt.id} value={String(opt.id)}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              {savingStartNode && (
-                <div className="absolute right-2 top-1/2 -translate-y-1/2">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-white/90" />
-                </div>
-              )}
-            </div>
-          </div>
-
-        )}
+        <div>
+          <Button
+            variant="outline"
+            className="h-7 w-[6rem] px-5 border-slate-200 text-[#013765] bg-slate-100 hover:bg-slate-300"
+            onClick={() => setTrashOpen(true)}
+            title="Abrir papelera"
+          >
+            <Trash2 className="h-3 w-3" />
+            <span>Papelera</span>
+          </Button>
+        </div>
 
       </div>
 
       {/* Contenido */}
-      <div className="flex flex-1 gap-4 p-4">
+      <div className="flex flex-1 gap-4 overflow-hidden p-4 min-h-0">
         {/* Sidebar de Flows */}
-        <div className="w-64 flex flex-col border rounded-xl bg-white p-3 gap-3 shadow-sm">
+        <div className="w-64 min-h-0 flex flex-col border rounded-xl bg-white p-3 gap-3 shadow-sm">
           <div className="flex items-center justify-between">
             <h2 className="font-semibold text-sm text-[#013765]">Flujos del bot</h2>
-            <Button
-              size="icon"
-              variant="ghost"
-              className="h-7 w-7 text-[#013765]"
-              onClick={() => window.location.reload()}
-            >
-              <RefreshCcw className="h-3 w-3" />
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="outline"
+                className="h-7 w-7 border-slate-200 text-[#013765] hover:bg-slate-100"
+                onClick={() => setCreateModal("flow")}
+                title="Crear flujo"
+              >
+                <Plus className="h-3 w-3" />
+              </Button>
+
+              <Button
+                variant="outline"
+                className="h-7 w-7 border-slate-200 text-[#013765] hover:bg-slate-100"
+                onClick={() => window.location.reload()}
+              >
+                <RefreshCcw className="h-3 w-3" />
+              </Button>
+            </div>
           </div>
 
-          <div className="space-y-2 flex-1 overflow-y-auto">
+          <div className="space-y-2 flex-1 overflow-y-auto min-h-0 pr-1">
             {loadingFlows ? (
               <p className="text-xs text-muted-foreground">Cargando flujos...</p>
             ) : flows.length === 0 ? (
@@ -801,113 +1248,167 @@ export default function BotFlowBuilder() {
                   key={flow.id}
                   role="button"
                   tabIndex={0}
-                  onClick={() => setSelectedFlowId(flow.id)}
+                  onClick={() => requestSelectFlow(flow.id)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault()
-                      setSelectedFlowId(flow.id)
+                      requestSelectFlow(flow.id)
                     }
                   }}
                   className={cn(
-                    "w-full text-left px-3 py-2 rounded-lg text-xs border flex items-center justify-between transition-colors cursor-pointer select-none",
+                    "w-full text-left px-3 py-2 rounded-lg text-xs border flex flex-col gap-2 transition-colors cursor-pointer select-none",
                     selectedFlowId === flow.id
                       ? "bg-[#013765] text-white border-[#013765]"
                       : "bg-white hover:bg-slate-100 border-slate-200",
                   )}
                 >
-                  <span className="truncate">{flow.name}</span>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <span className="block truncate font-medium">{flow.name}</span>
+                      {flow.description ? (
+                        <span className={cn(
+                          "mt-1 block truncate text-[10px]",
+                          selectedFlowId === flow.id ? "text-white/75" : "text-slate-500",
+                        )}>
+                          {flow.description}
+                        </span>
+                      ) : null}
+                    </div>
 
-                  <div className="flex items-center gap-2 ml-2 shrink-0">
-                    {flow.is_default ? (
-                      <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full">
-                        Activo
-                      </span>
-                    ) : (
+                    <div className="flex items-center gap-2 ml-2 shrink-0">
+                      {flow.is_default ? (
+                        <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full">
+                          Activo
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          className={cn(
+                            "text-[10px] px-2 py-0.5 rounded-full border",
+                            selectedFlowId === flow.id
+                              ? "border-white/30 bg-white/10 text-white hover:bg-white/15"
+                              : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100",
+                          )}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleMakeDefault(flow.id)
+                          }}
+                        >
+                          Activar
+                        </button>
+                      )}
+
                       <button
                         type="button"
                         className={cn(
-                          "text-[10px] px-2 py-0.5 rounded-full border",
+                          "inline-flex h-6 w-6 items-center justify-center rounded-md border transition-colors",
                           selectedFlowId === flow.id
                             ? "border-white/30 bg-white/10 text-white hover:bg-white/15"
-                            : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100",
+                            : "border-red-200 bg-red-50 text-red-600 hover:bg-red-100",
                         )}
                         onClick={(e) => {
                           e.stopPropagation()
-                          handleMakeDefault(flow.id)
+                          setConfirmDelete({
+                            type: "flow",
+                            id: flow.id,
+                            name: flow.name,
+                          })
                         }}
+                        disabled={deletingFlowId === flow.id}
+                        title="Eliminar flujo"
                       >
-                        Activar
+                        {deletingFlowId === flow.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3 w-3" />
+                        )}
                       </button>
-                    )}
+                    </div>
+                  </div>
+
+                  <div className={cn(
+                    "flex items-center justify-between gap-2 text-[10px]",
+                    selectedFlowId === flow.id ? "text-white/80" : "text-slate-500",
+                  )}>
+                    <span className="truncate">
+                      {selectedFlowId === flow.id
+                        ? `${nodes.length} nodos • Inicio: ${startNodeLabel}`
+                        : `ID #${flow.id}`}
+                    </span>
+                    {selectedFlowId === flow.id ? (
+                      <span className="rounded-full border border-white/20 bg-white/10 px-1.5 py-0.5 text-[10px]">
+                        Editando
+                      </span>
+                    ) : null}
                   </div>
                 </div>
               ))
             )}
           </div>
 
-          {/* Crear flujo */}
-          <div className="border-t pt-2 mt-2">
-            <p className="text-[11px] text-muted-foreground mb-1">Crear nuevo flujo</p>
-            <div className="flex gap-1">
-              <Input
-                value={newFlowName}
-                onChange={(e) => setNewFlowName(e.target.value)}
-                placeholder="Nombre del flujo"
-                className="h-8 text-xs"
-              />
-              <Button
-                size="icon"
-                className="h-8 w-8 bg-[#013765] hover:bg-[#024a8a] text-white"
-                onClick={handleCreateFlow}
-                disabled={creatingFlow || !newFlowName.trim()}
-              >
-                <Plus className="h-3 w-3" />
-              </Button>
-            </div>
-          </div>
         </div>
 
         {/* Main: Nodes y editor */}
-        <div className="flex-1 flex flex-col gap-4">
-          <div className="flex gap-4 h-[calc(100%-0rem)]">
+        <div className="flex-1 min-h-0 flex flex-col gap-4 overflow-hidden">
+          <div className="flex gap-4 flex-1 min-h-0 overflow-hidden">
             {/* Lista de nodos */}
-            <div className="w-80 border rounded-xl bg-white p-3 flex flex-col shadow-sm">
+            <div className="w-80 min-h-0 border rounded-xl bg-white p-3 flex flex-col shadow-sm">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="font-medium text-sm text-[#013765]">Nodos del flujo</h3>
-                <Button
-                  size="icon"
-                  variant="outline"
-                  className="h-7 w-7 border-slate-200 text-[#013765] hover:bg-slate-100"
-                  onClick={() => {
-                    if (selectedFlowId) {
-                      setLoadingNodes(true)
-                      fetch(`${API_BASE}/api/bot/flows/${selectedFlowId}/nodes`)
-                        .then((res) => res.json())
-                        .then((data) => {
-                          const list: BotNode[] = data.nodes ?? data
-                          setNodes(list)
-                        })
-                        .catch((err) => console.error("Error recargando nodes:", err))
-                        .finally(() => setLoadingNodes(false))
-                    }
-                  }}
-                >
-                  <RefreshCcw className="h-3 w-3" />
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    className="h-7 w-7 border-slate-200 text-[#013765] hover:bg-slate-100"
+                    onClick={() => setCreateModal("node")}
+                    disabled={!selectedFlowId}
+                    title="Crear nodo"
+                  >
+                    <Plus className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    className="h-7 w-7 border-slate-200 text-[#013765] hover:bg-slate-100"
+                    onClick={() => {
+                      if (selectedFlowId) {
+                        setLoadingNodes(true)
+                        fetch(`${API_BASE}/api/bot/flows/${selectedFlowId}/nodes`)
+                          .then((res) => res.json())
+                          .then((data) => {
+                            const list: BotNode[] = data.nodes ?? data
+                            setNodes(list)
+                          })
+                          .catch((err) => console.error("Error recargando nodes:", err))
+                          .finally(() => setLoadingNodes(false))
+                      }
+                    }}
+                  >
+                    <RefreshCcw className="h-3 w-3" />
+                  </Button>
+                </div>
               </div>
 
-              <div className="space-y-2 flex-1 overflow-y-auto">
+              <div className="space-y-2 flex-1 overflow-y-auto min-h-0 pr-1">
                 {loadingNodes ? (
                   <p className="text-xs text-muted-foreground">Cargando nodos...</p>
                 ) : nodes.length === 0 ? (
                   <p className="text-xs text-muted-foreground">No hay nodos para este flujo.</p>
                 ) : (
                   nodesWithNextKey.map((node) => (
-                    <button
+                    <div
                       key={node.id}
-                      onClick={() => setSelectedNodeId(node.id)}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => requestSelectNode(node.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault()
+                          requestSelectNode(node.id)
+                        }
+                      }}
                       className={cn(
-                        "w-full text-left px-3 py-2 rounded-lg border text-xs flex flex-col gap-1 transition-colors",
+                        "w-full text-left px-3 py-2 rounded-lg border text-xs flex flex-col gap-2 transition-colors",
                         selectedNodeId === node.id
                           ? "bg-[#013765] text-white border-[#013765]"
                           : "bg-white hover:bg-slate-100 border-slate-200",
@@ -925,44 +1426,161 @@ export default function BotFlowBuilder() {
                         </span>
                       </div>
 
-                      {node.next_node_id && (
-                        <div className="flex items-center text-[10px] opacity-80">
-                          <ChevronRight className="h-3 w-3 mr-1" />
-                          Siguiente: {node.nextNodeKey}
+                      <div className={cn(
+                        "rounded-md px-2 py-1.5 text-[10px]",
+                        selectedNodeId === node.id ? "bg-white/10 text-white/85" : "bg-slate-50 text-slate-600",
+                      )}>
+                        {node.bodyPreview ? node.bodyPreview : "Sin mensaje configurado."}
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2">
+                        {node.nextSummary ? (
+                          <div className="flex items-center text-[10px] opacity-80 min-w-0">
+                            <ChevronRight className="h-3 w-3 mr-1 shrink-0" />
+                            <span className="truncate">Siguiente: {node.nextSummary}</span>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] opacity-60">Sin siguiente nodo</span>
+                        )}
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          {selectedFlow?.start_node_id === node.id ? (
+                            <span className={cn(
+                              "rounded-full px-1.5 py-0.5 text-[10px]",
+                              selectedNodeId === node.id
+                                ? "bg-white/10 text-white"
+                                : "bg-emerald-100 text-emerald-700",
+                            )}>
+                              Inicio
+                            </span>
+                          ) : null}
+
+                          <button
+                            type="button"
+                            className={cn(
+                              "inline-flex h-6 w-6 items-center justify-center rounded-md border transition-colors",
+                              selectedNodeId === node.id
+                                ? "border-white/30 bg-white/10 text-white hover:bg-white/15"
+                                : "border-red-200 bg-red-50 text-red-600 hover:bg-red-100",
+                            )}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setConfirmDelete({
+                                type: "node",
+                                id: node.id,
+                                name: node.key || `node_${node.id}`,
+                              })
+                            }}
+                            disabled={deletingNodeId === node.id}
+                            title="Eliminar nodo"
+                          >
+                            {deletingNodeId === node.id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3 w-3" />
+                            )}
+                          </button>
                         </div>
-                      )}
-                    </button>
+                      </div>
+                    </div>
                   ))
                 )}
               </div>
-
-              {/* Crear nodo */}
-              {selectedFlowId && (
-                <div className="border-t pt-2 mt-2">
-                  <p className="text-[11px] text-muted-foreground mb-1">Nuevo nodo</p>
-                  <div className="flex gap-1">
-                    <Input
-                      value={newNodeKey}
-                      onChange={(e) => setNewNodeKey(e.target.value)}
-                      placeholder="key del nodo (ej: menu_principal)"
-                      className="h-8 text-xs"
-                    />
-                    <Button
-                      size="icon"
-                      className="h-8 w-8 bg-[#013765] hover:bg-[#024a8a] text-white"
-                      onClick={handleCreateNode}
-                      disabled={creatingNode || !newNodeKey.trim()}
-                    >
-                      <Plus className="h-3 w-3" />
-                    </Button>
-                  </div>
-                </div>
-              )}
             </div>
 
-            {/* Editor del nodo seleccionado */}
-            <div className="flex-1">
-              <Card className="h-full flex flex-col shadow-sm">
+            {/* Panel de edición */}
+            <div className="flex-1 min-h-0 flex flex-col gap-4 overflow-hidden">
+              <Card className="shadow-sm">
+                <CardHeader className="pb-2 border-b border-slate-200 bg-slate-50 bg-white rounded-t-xl">
+                  <CardTitle className="text-sm text-[#013765]">Configuración del flujo</CardTitle>
+                  <CardDescription className="text-xs">
+                    Renombrá el flujo y definí desde qué nodo comienza la conversación.
+                  </CardDescription>
+                </CardHeader>
+
+                <CardContent className="pt-4 bg-white rounded-b-xl">
+                  {!selectedFlow ? (
+                    <p className="text-xs text-muted-foreground">
+                      Seleccioná un flujo en la lista de la izquierda para editar su configuración.
+                    </p>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div>
+                          <label className="text-xs mb-1 block text-muted-foreground">
+                            Nombre del flujo
+                          </label>
+                          <Input
+                            value={editFlowName}
+                            onChange={(e) => setEditFlowName(e.target.value)}
+                            className="text-xs"
+                            placeholder="Ej: Turnos consultorio"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-xs mb-1 block text-muted-foreground">
+                            Nodo inicial
+                          </label>
+                          <div className="relative">
+                            <Select
+                              value={selectedFlow.start_node_id ? String(selectedFlow.start_node_id) : "none"}
+                              onValueChange={(val) => handleSetStartNode(val === "none" ? null : Number(val))}
+                              disabled={savingStartNode || nodes.length === 0}
+                            >
+                              <SelectTrigger className="h-8 text-xs pr-8">
+                                <SelectValue placeholder="Elegí nodo..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="none">Sin nodo inicial</SelectItem>
+                                {startNodeOptions.map((opt) => (
+                                  <SelectItem key={opt.id} value={String(opt.id)}>
+                                    {opt.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+
+                            {savingStartNode && (
+                              <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                                <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-500" />
+                              </div>
+                            )}
+                          </div>
+                          <p className="mt-1 text-[10px] text-muted-foreground">
+                            Actualmente: {startNodeLabel}
+                          </p>
+                        </div>
+
+                      </div>
+
+                      <div className="mt-2 flex flex-col items-center gap-2">
+                        <Button
+                          size="sm"
+                          className="w-full text-xs bg-[#013765] hover:bg-[#024a8a] text-white"
+                          onClick={handleSaveFlow}
+                          disabled={savingFlow || !hasUnsavedFlowChanges || !editFlowName.trim()}
+                        >
+                          {savingFlow ? "Guardando..." : "Guardar flujo"}
+                        </Button>
+                        {hasUnsavedFlowChanges && (
+                          <div
+                            className={cn(
+                              "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-medium border-amber-200 bg-amber-50 text-amber-700"
+                            )}
+                          >
+                            <CircleDot className="h-3.5 w-3.5" />
+                            <span>{hasUnsavedFlowChanges ? "Cambios sin guardar" : "Todo guardado"}</span>
+                          </div>
+                        )}
+
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="flex-1 min-h-0 flex flex-col shadow-sm">
                 <CardHeader className="pb-2 border-b border-slate-200 bg-slate-50 bg-white rounded-t-xl">
                   <CardTitle className="text-sm text-[#013765]">
                     Editor de nodo seleccionado
@@ -1139,6 +1757,7 @@ export default function BotFlowBuilder() {
                             </div>
                           </div>
 
+                          {/*
                           <div className="grid grid-cols-2 gap-2">
                             <div>
                               <label className="text-xs mb-1 block text-muted-foreground">
@@ -1188,19 +1807,31 @@ export default function BotFlowBuilder() {
                               />
                             </div>
                           </div>
+                          */}
                         </div>
                       )}
 
                       {/* Botón guardar */}
-                      <div className="mt-2">
+                      <div className="mt-2 flex flex-col items-center gap-2">
                         <Button
                           size="sm"
-                          className="text-xs bg-[#013765] hover:bg-[#024a8a] text-white"
+                          className="w-full text-xs bg-[#013765] hover:bg-[#024a8a] text-white"
                           onClick={handleSaveNode}
-                          disabled={savingNode}
+                          disabled={savingNode || !hasUnsavedChanges}
                         >
                           {savingNode ? "Guardando..." : "Guardar nodo"}
                         </Button>
+                        
+                        {hasUnsavedChanges && (
+                          <div
+                            className={cn(
+                              "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-medium border-amber-200 bg-amber-50 text-amber-700"
+                            )}
+                          >
+                            <CircleDot className="h-3.5 w-3.5" />
+                            <span>Cambios sin guardar</span>
+                          </div>
+                        )}
                       </div>
                     </>
                   )}
@@ -1210,6 +1841,345 @@ export default function BotFlowBuilder() {
           </div>
         </div>
       </div>
+
+      {confirmDelete && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]">
+          <div className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="border-b border-slate-200 bg-slate-50 px-5 py-4">
+              <h3 className="text-base font-semibold text-slate-900">Enviar a papelera</h3>
+              <p className="mt-1 text-sm text-slate-600">
+                {confirmDelete.type === "flow"
+                  ? `El flujo "${confirmDelete.name}" y sus nodos se moverán a la papelera para poder restaurarlos más tarde.`
+                  : `El nodo "${confirmDelete?.name}" se moverá a la papelera y podrá restaurarse desde allí.`}
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(null)}
+                className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={
+                  (confirmDelete.type === "flow" && deletingFlowId === confirmDelete.id) ||
+                  (confirmDelete.type === "node" && deletingNodeId === confirmDelete.id)
+                }
+                className="inline-flex items-center rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {(confirmDelete.type === "flow" && deletingFlowId === confirmDelete.id) ||
+                  (confirmDelete.type === "node" && deletingNodeId === confirmDelete.id) ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Moviendo...
+                  </>
+                ) : (
+                  "Mover a papelera"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {createModal && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]">
+          <div className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="border-b border-slate-200 bg-slate-50 px-5 py-4">
+              <h3 className="text-base font-semibold text-slate-900">
+                {createModal === "flow" ? "Crear nuevo flujo" : "Crear nuevo nodo"}
+              </h3>
+              <p className="mt-1 text-sm text-slate-600">
+                {createModal === "flow"
+                  ? "Ingresá el nombre del flujo que querés agregar al bot."
+                  : "Ingresá la key del nuevo nodo para este flujo."}
+              </p>
+            </div>
+
+            <div className="px-5 py-4">
+              <label className="mb-1 block text-xs text-slate-500">
+                {createModal === "flow" ? "Nombre del flujo" : "Key del nodo"}
+              </label>
+              <Input
+                value={createModal === "flow" ? newFlowName : newNodeKey}
+                onChange={(e) =>
+                  createModal === "flow"
+                    ? setNewFlowName(e.target.value)
+                    : setNewNodeKey(e.target.value)
+                }
+                placeholder={
+                  createModal === "flow"
+                    ? "Ej: Turnos consultorio"
+                    : "Ej: menu_principal"
+                }
+                className="h-9 text-sm"
+              />
+              {createModal === "node" && !selectedFlowId ? (
+                <p className="mt-2 text-xs text-amber-600">
+                  Seleccioná un flujo antes de crear nodos.
+                </p>
+              ) : null}
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setCreateModal(null)}
+                className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={createModal === "flow" ? handleCreateFlow : handleCreateNode}
+                disabled={
+                  createModal === "flow"
+                    ? creatingFlow || !newFlowName.trim()
+                    : creatingNode || !newNodeKey.trim() || !selectedFlowId
+                }
+                className="inline-flex items-center rounded-lg bg-[#013765] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#024a8a] disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {(createModal === "flow" && creatingFlow) || (createModal === "node" && creatingNode) ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Creando...
+                  </>
+                ) : (
+                  <>
+                    <Plus className="mr-2 h-4 w-4" />
+                    {createModal === "flow" ? "Crear flujo" : "Crear nodo"}
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {regexHelpOpen && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]">
+          <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="border-b border-slate-200 bg-slate-50 px-5 py-4">
+              <h3 className="text-base font-semibold text-slate-900">Ayuda con regex</h3>
+              <p className="mt-1 text-sm text-slate-600">
+                Este campo sirve para validar lo que escribe el usuario antes de continuar con el flujo.
+              </p>
+            </div>
+
+            <div className="space-y-4 px-5 py-4 text-sm text-slate-700">
+              <div>
+                <p className="font-medium text-slate-900">Para qué funciona</p>
+                <p className="mt-1">
+                  Si el texto del usuario cumple el patrón, el nodo acepta la respuesta. Si no cumple, se muestra el mensaje de error y el bot vuelve a pedir el dato.
+                </p>
+              </div>
+
+              <div>
+                <p className="font-medium text-slate-900">Cómo se usa</p>
+                <p className="mt-1">
+                  Escribí una expresión regular que represente el formato esperado. Por ejemplo, podés exigir solo números, una cantidad exacta de caracteres o un correo con formato válido.
+                </p>
+              </div>
+
+              <div>
+                <p className="font-medium text-slate-900">Ejemplos rápidos</p>
+                <div className="mt-2 space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-[13px]">
+                  <p><span className="font-semibold">DNI:</span> <code>^[0-9]{7,9}$</code></p>
+                  <p><span className="font-semibold">Solo letras:</span> <code>^[A-Za-zÁÉÍÓÚáéíóúÑñ\\s]+$</code></p>
+                  <p><span className="font-semibold">Email:</span> <code>^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$</code></p>
+                  <p><span className="font-semibold">Celular argentino simple:</span> <code>^\\+?[0-9]{10,15}$</code></p>
+                </div>
+              </div>
+
+              <div>
+                <p className="font-medium text-slate-900">Cómo generarlo más fácil</p>
+                <p className="mt-1">
+                  Si no querés armar el regex a mano, podés pedírselo a ChatGPT. Ejemplo: "Generame un regex para validar un DNI argentino de 7 u 8 dígitos, y explicame qué acepta y qué no".
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setRegexHelpOpen(false)}
+                className="inline-flex items-center rounded-lg bg-[#013765] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#024a8a]"
+              >
+                Entendido
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingNavigation && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]">
+          <div className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="border-b border-slate-200 bg-slate-50 px-5 py-4">
+              <h3 className="text-base font-semibold text-slate-900">Cambios sin guardar</h3>
+              <p className="mt-1 text-sm text-slate-600">
+                Tenes cambios sin guardar en este nodo. Si continuas, se perderan al cambiar de
+                {pendingNavigation.type === "flow" ? " flujo." : " nodo."}
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setPendingNavigation(null)}
+                className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+              >
+                Seguir editando
+              </button>
+              <button
+                type="button"
+                onClick={handleDiscardPendingNavigation}
+                className="inline-flex items-center rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-600"
+              >
+                Salir sin guardar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {trashOpen && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]">
+          <div className="w-full max-w-4xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-200 bg-slate-50 px-5 py-4">
+              <div className="min-w-0">
+                <h3 className="text-base font-semibold text-slate-900">Papelera de flujos</h3>
+                <p className="mt-0.5 text-sm text-slate-600">
+                  Restaurá flujos completos o nodos individuales. Los nodos sólo se pueden restaurar si su flujo ya está activo.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTrashOpen(false)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="border-b border-slate-200 bg-white px-5 py-3">
+              <Input
+                value={trashSearch}
+                onChange={(e) => setTrashSearch(e.target.value)}
+                placeholder="Buscar flujo, nodo o ID..."
+                className="h-9 border-slate-300 bg-white text-sm"
+              />
+            </div>
+
+            {loadingTrash ? (
+              <div className="flex items-center justify-center px-6 py-10 text-sm text-slate-500">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Cargando papelera...
+              </div>
+            ) : (
+              <div className="grid max-h-[calc(85vh-92px)] gap-0 overflow-y-auto lg:grid-cols-2">
+                <div className="space-y-3 border-b border-slate-200 px-6 py-5 lg:border-b-0 lg:border-r lg:border-slate-200">
+                  <div>
+                    <h3 className="text-sm font-semibold text-[#013765]">Flujos eliminados</h3>
+                    <p className="text-xs text-slate-500">
+                      Al restaurar un flujo también se recuperan sus nodos eliminados con él.
+                    </p>
+                  </div>
+
+                  {filteredTrashedFlows.length === 0 ? (
+                    <p className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-xs text-slate-500">
+                      {trashSearchNormalized ? "No hay flujos que coincidan con la búsqueda." : "No hay flujos en la papelera."}
+                    </p>
+                  ) : (
+                    filteredTrashedFlows.map((flow) => (
+                      <div
+                        key={flow.id}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-slate-900">{flow.name}</p>
+                          <p className="text-[11px] text-slate-500">
+                            ID #{flow.id}
+                          </p>
+                        </div>
+
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="shrink-0 border-[#013765] text-[#013765] hover:bg-[#013765] hover:text-white"
+                          onClick={() => handleRestoreFlow(flow.id)}
+                          disabled={restoringFlowId === flow.id}
+                        >
+                          {restoringFlowId === flow.id ? (
+                            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <RotateCcw className="mr-2 h-3.5 w-3.5" />
+                          )}
+                          Restaurar
+                        </Button>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div className="space-y-3 px-6 py-5">
+                  <div>
+                    <h3 className="text-sm font-semibold text-[#013765]">Nodos eliminados</h3>
+                    <p className="text-xs text-slate-500">
+                      Si el flujo del nodo también está en papelera, restauralo primero.
+                    </p>
+                  </div>
+
+                  {filteredTrashedNodes.length === 0 ? (
+                    <p className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-xs text-slate-500">
+                      {trashSearchNormalized ? "No hay nodos que coincidan con la búsqueda." : "No hay nodos en la papelera."}
+                    </p>
+                  ) : (
+                    filteredTrashedNodes.map((node) => {
+                      const flowIsTrashed = trashedFlows.some((flow) => flow.id === node.flow_id)
+
+                      return (
+                        <div
+                          key={node.id}
+                          className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3"
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium text-slate-900">
+                              {node.key || `node_${node.id}`}
+                            </p>
+                            <p className="text-[11px] text-slate-500">
+                              Flujo: {node.flow_name || `#${node.flow_id}`} · Tipo: {node.type}
+                            </p>
+                          </div>
+
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="shrink-0 border-[#013765] text-[#013765] hover:bg-[#013765] hover:text-white"
+                            onClick={() => handleRestoreNode(node.id)}
+                            disabled={restoringNodeId === node.id || flowIsTrashed}
+                          >
+                            {restoringNodeId === node.id ? (
+                              <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <RotateCcw className="mr-2 h-3.5 w-3.5" />
+                            )}
+                            Restaurar
+                          </Button>
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

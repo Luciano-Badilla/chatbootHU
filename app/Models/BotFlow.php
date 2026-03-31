@@ -4,9 +4,12 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class BotFlow extends Model
 {
+    use SoftDeletes;
+
     protected $fillable = ['name', 'description', 'start_node_id', 'is_active', 'is_default'];
 
     public function nodes()

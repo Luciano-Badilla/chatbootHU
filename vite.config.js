@@ -24,7 +24,7 @@ export default defineConfig(({ mode }) => {
             }
         },
         server: {
-            host: 'localhost',
+            host: '172.22.115.103',
             port: 5173,
             strictPort: true,
             cors: true,

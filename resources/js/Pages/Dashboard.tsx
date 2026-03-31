@@ -117,6 +117,16 @@ export default function Dashboard() {
                  Se pueden enlazar a rutas de Inertia (por ejemplo route('users.index')) si se definen en Laravel.
               */}
               <Button
+                className="w-full justify-start bg-[#185e9c] text-white hover:bg-[#024a8a]"
+                size="lg"
+                onClick={() =>
+                  (window.location.href = `${import.meta.env.VITE_APP_URL}/bot/flows`)
+                }
+              >
+                <MessageSquare className="h-5 w-5 mr-3" />
+                Abrir Panel de Flujos del Bot
+              </Button>
+              <Button
                 variant="outline"
                 className="w-full justify-start border-[#013765] text-[#013765] hover:bg-[#f0f4f8]"
                 size="lg"
