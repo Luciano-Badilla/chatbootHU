@@ -1009,6 +1009,7 @@ class WhatsAppController extends Controller
 
 
             case 'input':
+            case 'person_lookup':
                 // devolvemos el mismo nodo (para que el bot lo envíe)
                 // y sendBotNode va a setear pending_input
                 return $currentNode;
@@ -1148,11 +1149,133 @@ class WhatsAppController extends Controller
             $this->sendWhatsAppList($chat, $node);
             return;
         }
+
+        // person lookup
+        if ($node->type === 'person_lookup') {
+            $this->sendPersonLookupNode($chat, $node);
+            return;
+        }
+    }
+
+    private function sendPersonLookupNode(Chat $chat, BotNode $node): void
+    {
+        $settings = $this->nodeSettings($node);
+        $vars = $this->getVars($chat);
+
+        $dniVariable = trim((string) ($settings['dni_variable'] ?? 'dni'));
+        $rawDni = (string) ($vars[$dniVariable] ?? '');
+        $dni = preg_replace('/\D+/u', '', $rawDni);
+
+        $baseVars = [
+            'persona_encontrada' => false,
+            'persona_lookup_status' => 'error',
+            'persona_id' => null,
+            'persona_nombres' => null,
+            'persona_apellidos' => null,
+            'persona_documento' => null,
+            'persona_fecha_nacimiento' => null,
+            'persona_genero' => null,
+            'persona_obra_social' => null,
+            'persona_obra_social_id' => null,
+            'persona_plan_id' => null,
+            'persona_email' => null,
+            'persona_contacto_telefono' => null,
+            'persona_contacto_telefono_2' => null,
+            'persona_planes_activos' => [],
+        ];
+
+        $targetNextNodeId = null;
+        $messageToSend = null;
+
+        if ($dni === '') {
+            $this->setVars($chat, $baseVars + ['persona_lookup_status' => 'missing_dni']);
+            $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos porque falta el DNI.');
+            $targetNextNodeId = $settings['error_next_node_id'] ?? null;
+        } else {
+            $apiBase = rtrim((string) env('HOSPITAL_PERSON_API_BASE', 'http://172.22.118.103/apiturnos/public/api/v1/personas'), '/');
+            $apiKey = (string) env('HOSPITAL_PERSON_API_KEY', 'Turnos2025');
+
+            try {
+                $response = Http::timeout(10)
+                    ->acceptJson()
+                    ->withHeaders([
+                        'X-API-KEY' => $apiKey,
+                    ])
+                    ->get("{$apiBase}/{$dni}");
+
+                if ($response->successful()) {
+                    $payload = $response->json();
+                    $person = is_array($payload) && isset($payload[0]) && is_array($payload[0]) ? $payload[0] : null;
+
+                    if ($person) {
+                        $this->setVars($chat, $baseVars + [
+                            'persona_encontrada' => true,
+                            'persona_lookup_status' => 'found',
+                            'persona_id' => $person['id'] ?? null,
+                            'persona_nombres' => $person['nombres'] ?? null,
+                            'persona_apellidos' => $person['apellidos'] ?? null,
+                            'persona_documento' => $person['documento'] ?? null,
+                            'persona_fecha_nacimiento' => $person['fecha_nacimiento'] ?? null,
+                            'persona_genero' => $person['genero'] ?? null,
+                            'persona_obra_social' => $person['obra_social'] ?? null,
+                            'persona_obra_social_id' => $person['obra_social_id'] ?? null,
+                            'persona_plan_id' => $person['plan_id'] ?? null,
+                            'persona_email' => $person['email'] ?? null,
+                            'persona_contacto_telefono' => $person['contacto_telefono'] ?? null,
+                            'persona_contacto_telefono_2' => $person['contacto_telefono_2'] ?? null,
+                            'persona_planes_activos' => is_array($person['planes_activos'] ?? null) ? $person['planes_activos'] : [],
+                        ]);
+
+                        $messageToSend = $node->body ? $this->renderTemplate($node->body, $chat, $node) : null;
+                        $targetNextNodeId = $node->next_node_id;
+                    } else {
+                        $this->setVars($chat, $baseVars + ['persona_lookup_status' => 'not_found']);
+                        $messageToSend = (string) ($settings['not_found_message'] ?? 'No encontramos datos personales para el DNI ingresado.');
+                        $targetNextNodeId = $settings['not_found_next_node_id'] ?? null;
+                    }
+                } elseif ($response->status() === 404) {
+                    $this->setVars($chat, $baseVars + ['persona_lookup_status' => 'not_found']);
+                    $messageToSend = (string) ($settings['not_found_message'] ?? 'No encontramos datos personales para el DNI ingresado.');
+                    $targetNextNodeId = $settings['not_found_next_node_id'] ?? null;
+                } else {
+                    $this->setVars($chat, $baseVars + ['persona_lookup_status' => 'error']);
+                    $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos en este momento.');
+                    $targetNextNodeId = $settings['error_next_node_id'] ?? null;
+
+                    Log::warning('Hospital API person lookup error response', [
+                        'chat_id' => $chat->id,
+                        'node_id' => $node->id,
+                        'dni' => $dni,
+                        'status' => $response->status(),
+                        'body' => $response->body(),
+                    ]);
+                }
+            } catch (\Throwable $e) {
+                $this->setVars($chat, $baseVars + ['persona_lookup_status' => 'error']);
+                $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos en este momento.');
+                $targetNextNodeId = $settings['error_next_node_id'] ?? null;
+
+                Log::error('Hospital API person lookup failed: ' . $e->getMessage(), [
+                    'chat_id' => $chat->id,
+                    'node_id' => $node->id,
+                    'dni' => $dni,
+                ]);
+            }
+        }
+
+        if ($messageToSend !== null && trim((string) $messageToSend) !== '') {
+            $renderedMessage = $this->renderTemplate(trim((string) $messageToSend), $chat, $node);
+            if ($renderedMessage !== '') {
+                $this->sendWhatsAppText($chat, $renderedMessage, 'user', 'bot', 'person_lookup');
+            }
+        }
+
+        $node->next_node_id = $targetNextNodeId ? (int) $targetNextNodeId : null;
     }
 
 
 
-    private function sendWhatsAppButtons(Chat $chat, BotNode $node): void
+        private function sendWhatsAppButtons(Chat $chat, BotNode $node): void
     {
         $contact = $chat->contact;
         if (!$contact || !$contact->whatsapp_id) {
@@ -1161,38 +1284,39 @@ class WhatsAppController extends Controller
 
         $settings = $node->settings ?? [];
         $buttons = $settings['buttons'] ?? [];
-
-        // ✅ Render del body con variables
         $bodyText = $this->renderTemplate($node->body ?? '', $chat, $node);
 
         if (empty($buttons)) {
-            // si no hay botones configurados, mandamos texto simple
             $this->sendWhatsAppText($chat, $bodyText, 'user', 'bot', 'buttons', []);
             return;
         }
 
         $accessToken = env('WHATSAPP_ACCESS_TOKEN');
         $url = 'https://graph.facebook.com/v22.0/' . env('WHATSAPP_PHONE_ID') . '/messages';
-
         $phoneNumber = $this->formatPhoneNumber($contact->whatsapp_id);
 
-        $waButtons = [];
-        foreach ($buttons as $btn) {
-            // ✅ opcional: también renderizar títulos
-            $title = $this->renderTemplate((string) ($btn['title'] ?? ''), $chat, $node);
+        $waButtons = $this->normalizeWhatsAppReplyButtons($buttons, $chat, $node);
 
-            $waButtons[] = [
-                'type' => 'reply',
-                'reply' => [
-                    'id' => $btn['id'],
-                    'title' => $title,
-                ],
-            ];
+        if (empty($waButtons)) {
+            Log::warning('sendWhatsAppButtons: no hay botones validos luego de normalizar', [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'raw_buttons' => $buttons,
+            ]);
+
+            $this->sendWhatsAppText($chat, $bodyText, 'user', 'bot', 'buttons', []);
+            return;
         }
+
+        $bodyText = trim((string) preg_replace('/\s+/u', ' ', (string) $bodyText));
+        if ($bodyText === '') {
+            $bodyText = 'Selecciona una opcion';
+        }
+        $bodyText = mb_substr($bodyText, 0, 1024);
 
         $interactiveOptions = array_map(function ($btn) {
             return [
-                'id' => (string) ($btn['id'] ?? ''),
+                'id' => (string) ($btn['reply']['id'] ?? ''),
                 'label' => (string) ($btn['reply']['title'] ?? ''),
                 'kind' => 'button',
             ];
@@ -1216,16 +1340,76 @@ class WhatsAppController extends Controller
         $response = Http::withToken($accessToken)->post($url, $payload);
 
         if ($response->failed()) {
-            Log::error('API Error (sendWhatsAppButtons): ' . $response->body());
+            Log::error('API Error (sendWhatsAppButtons): ' . $response->body(), [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'body_length' => mb_strlen($bodyText),
+                'payload' => $payload,
+            ]);
             return;
         }
 
         $waMessageId = $response->json()['messages'][0]['id'] ?? null;
-
-        // ✅ IMPORTANTE: persistimos el texto renderizado (no el raw)
         $this->persistAndPublishOutgoing($chat, $bodyText, $waMessageId, 'buttons', $interactiveOptions);
     }
 
+        private function normalizeWhatsAppReplyButtons(array $buttons, Chat $chat, BotNode $node): array
+    {
+        $normalized = [];
+        $usedIds = [];
+        $usedTitles = [];
+
+        foreach (array_slice($buttons, 0, 3) as $index => $btn) {
+            $rawTitle = $this->renderTemplate((string) ($btn['title'] ?? ''), $chat, $node);
+            $title = preg_replace('/\s+/u', ' ', trim($rawTitle));
+            $title = preg_replace('/[*_~`]/u', '', (string) $title);
+            $title = trim((string) $title);
+
+            if ($title === '') {
+                $title = 'Opcion ' . ($index + 1);
+            }
+
+            $title = mb_substr($title, 0, 20);
+            $baseTitle = $title;
+            $titleSuffix = 2;
+
+            while (isset($usedTitles[mb_strtolower($title)])) {
+                $title = mb_substr($baseTitle, 0, max(1, 20 - mb_strlen(' ' . $titleSuffix))) . ' ' . $titleSuffix;
+                $titleSuffix++;
+            }
+
+            $usedTitles[mb_strtolower($title)] = true;
+
+            $rawId = preg_replace('/\s+/u', '_', trim((string) ($btn['id'] ?? '')));
+            $rawId = preg_replace('/[^A-Za-z0-9_.:-]/u', '_', (string) $rawId);
+            $id = trim((string) $rawId, '_');
+
+            if ($id === '') {
+                $id = 'btn_' . ($index + 1);
+            }
+
+            $id = mb_substr($id, 0, 256);
+            $baseId = $id;
+            $suffix = 2;
+
+            while (isset($usedIds[$id])) {
+                $id = mb_substr($baseId . '_' . $suffix, 0, 256);
+                $suffix++;
+            }
+
+            $usedIds[$id] = true;
+
+            $normalized[] = [
+                'type' => 'reply',
+                'reply' => [
+                    'id' => $id,
+                    'title' => $title,
+                ],
+            ];
+        }
+
+        return $normalized;
+    }
 
     private function sendWhatsAppList(Chat $chat, BotNode $node): void
     {
@@ -1403,8 +1587,8 @@ class WhatsAppController extends Controller
         if (!$chat->bot_enabled)
             return false;
 
-        // ✅ SOLO text puede ser terminal automático
-        if ($sentNode->type === 'text' && empty($sentNode->next_node_id)) {
+        // ✅ text y person_lookup pueden ser terminales automáticos
+        if (in_array($sentNode->type, ['text', 'person_lookup'], true) && empty($sentNode->next_node_id)) {
             $this->resetChatToStartFromFlow($chat, $flow, 'terminal_text');
             return true;
         }
@@ -1421,6 +1605,10 @@ class WhatsAppController extends Controller
 
     private function shouldAutoAdvance(BotNode $node): bool
     {
+        if ($node->type === 'person_lookup') {
+            return true;
+        }
+
         $s = $this->nodeSettings($node);
         return !empty($s['auto_advance']);
     }
@@ -1523,11 +1711,14 @@ class WhatsAppController extends Controller
         return is_array($state['vars'] ?? null) ? $state['vars'] : [];
     }
 
-    private function setVar(Chat $chat, string $key, $value): void
+    private function setVars(Chat $chat, array $pairs): void
     {
+        if (empty($pairs)) {
+            return;
+        }
+
         $state = $this->getState($chat);
         $state['vars'] = is_array($state['vars'] ?? null) ? $state['vars'] : [];
-        $state['vars'][$key] = $value;
         $state['vars_by_date'] = is_array($state['vars_by_date'] ?? null) ? $state['vars_by_date'] : [];
 
         $isoNow = now()->toIso8601String();
@@ -1535,26 +1726,25 @@ class WhatsAppController extends Controller
         $state['vars_by_date'][$dateKey] = is_array($state['vars_by_date'][$dateKey] ?? null)
             ? $state['vars_by_date'][$dateKey]
             : [];
-        $state['vars_by_date'][$dateKey][$key] = [
-            'value' => $value,
-            'updated_at' => $isoNow,
-        ];
+
+        foreach ($pairs as $key => $value) {
+            $state['vars'][$key] = $value;
+            $state['vars_by_date'][$dateKey][$key] = [
+                'value' => $value,
+                'updated_at' => $isoNow,
+            ];
+        }
 
         $chat->bot_state = $state;
         $chat->save();
 
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_vars_' . uniqid());
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_vars_batch_' . uniqid());
             $mqtt->connect();
 
             $mqtt->publish("chat/{$chat->id}/vars", json_encode([
                 'chat_id' => $chat->id,
-                'var' => [
-                    'name' => $key,
-                    'value' => $value,
-                    'updated_at' => $isoNow,
-                    'date' => $dateKey,
-                ],
+                'updated_vars' => array_keys($pairs),
                 'vars' => $state['vars'],
                 'vars_by_date' => $state['vars_by_date'],
                 'timestamp' => $isoNow,
@@ -1562,8 +1752,13 @@ class WhatsAppController extends Controller
 
             $mqtt->disconnect();
         } catch (\Throwable $e) {
-            Log::error('MQTT Error (setVar vars): ' . $e->getMessage());
+            Log::error('MQTT Error (setVars vars): ' . $e->getMessage());
         }
+    }
+
+    private function setVar(Chat $chat, string $key, $value): void
+    {
+        $this->setVars($chat, [$key => $value]);
     }
 
 
@@ -1692,3 +1887,5 @@ class WhatsAppController extends Controller
     }
 
 }
+
+

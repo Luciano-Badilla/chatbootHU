@@ -913,7 +913,7 @@ export default function ChatMain({
             />
           </button>
           {message.body && (
-            <p className="text-sm leading-relaxed mt-1 break-words">
+            <p className="mt-1 text-sm leading-relaxed break-words [overflow-wrap:anywhere]">
               {message.body}
             </p>
           )}
@@ -943,7 +943,7 @@ export default function ChatMain({
             />
           </button>
           {message.body && (
-            <p className="text-sm leading-relaxed mt-1 break-words">
+            <p className="mt-1 text-sm leading-relaxed break-words [overflow-wrap:anywhere]">
               {message.body}
             </p>
           )}
@@ -994,7 +994,7 @@ export default function ChatMain({
     // Texto por defecto
 
   return (
-      <p className="text-sm leading-relaxed break-words">
+      <p className="text-sm leading-relaxed break-words [overflow-wrap:anywhere]">
         {message.body ?? ""}
       </p>
     )
@@ -1157,6 +1157,7 @@ export default function ChatMain({
 
                     <div
                       className={cn(
+                        "min-w-0 overflow-hidden",
                         isVisualMedia
                           ? "inline-flex flex-col items-end rounded-lg p-1"
                           : isAudio
@@ -1178,7 +1179,7 @@ export default function ChatMain({
                             {message.interactive_options.map((opt, idx) => (
                               <span
                                 key={`${message.id}-opt-${idx}-${opt.id}`}
-                                className="inline-flex items-center rounded-full border border-white/30 bg-white/15 px-2 py-0.5 text-[11px] text-white"
+                                className="inline-flex max-w-full items-center rounded-full border border-white/30 bg-white/15 px-2 py-0.5 text-[11px] text-white break-words [overflow-wrap:anywhere]"
                               >
                                 {opt.label}
                               </span>
@@ -1482,6 +1483,3 @@ export default function ChatMain({
     </div>
   )
 }
-
-
-

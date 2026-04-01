@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Plus, RefreshCcw, ChevronRight, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp } from "lucide-react"
+import { Plus, RefreshCcw, ChevronRight, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp, ArrowLeft } from "lucide-react"
 import { Button } from "shadcn/components/ui/button"
 import { Input } from "shadcn/components/ui/input"
 import { Textarea } from "shadcn/components/ui/textarea"
@@ -23,7 +23,7 @@ import {
 } from "shadcn/components/ui/card"
 import { cn } from "shadcn/lib/utils"
 
-type NodeType = "text" | "buttons" | "list" | "input" | "handoff"
+type NodeType = "text" | "buttons" | "list" | "input" | "handoff" | "person_lookup"
 
 interface BotFlow {
   id: number
@@ -55,10 +55,51 @@ interface TrashedNodeSummary {
   deleted_at?: string | null
 }
 
+interface TemplateVariableOption {
+  key: string
+  label: string
+  kind: "builtin" | "flow"
+}
+
 const API_BASE = (import.meta.env.VITE_APP_URL || "").replace(/\/$/, "")
 
-const MAX_BUTTONS = 2 // si querés 3 (lo que permite WhatsApp), poné 3
+const MAX_BUTTONS = 3 // WhatsApp/Meta permite hasta 3 botones reply
 const MAX_LIST_ROWS = 10
+const NODE_KEY_MAX = 80
+const TEXT_MESSAGE_MAX = 4096
+const INTERACTIVE_MESSAGE_MAX = 1024
+const INPUT_VARIABLE_MAX = 80
+const REGEX_MAX = 255
+const ERROR_MESSAGE_MAX = 4096
+const BUTTON_ID_MAX = 256
+const BUTTON_TITLE_MAX = 20
+const LIST_BUTTON_TEXT_MAX = 20
+const LIST_SECTION_TITLE_MAX = 24
+const LIST_ROW_ID_MAX = 200
+const LIST_ROW_TITLE_MAX = 24
+const LIST_ROW_DESCRIPTION_MAX = 72
+
+const getNodeBodyMaxLength = (type: NodeType) =>
+  type === "buttons" || type === "list" ? INTERACTIVE_MESSAGE_MAX : TEXT_MESSAGE_MAX
+
+const getNodeTypeLabel = (type: NodeType) => {
+  switch (type) {
+    case "text":
+      return "Texto"
+    case "buttons":
+      return "Botones"
+    case "list":
+      return "Lista"
+    case "input":
+      return "Capturar dato"
+    case "person_lookup":
+      return "Buscar datos personales"
+    case "handoff":
+      return "Desactivar bot"
+    default:
+      return type
+  }
+}
 
 const serializeNodeSnapshot = (node: BotNode | null) => {
   if (!node) return ""
@@ -99,6 +140,12 @@ export default function BotFlowBuilder() {
   >(null)
   const [createModal, setCreateModal] = useState<"flow" | "node" | null>(null)
   const [regexHelpOpen, setRegexHelpOpen] = useState(false)
+  const [messageHelpOpen, setMessageHelpOpen] = useState(false)
+  const [templateVariableOpen, setTemplateVariableOpen] = useState(false)
+  const [templateVariableQuery, setTemplateVariableQuery] = useState("")
+  const [templateVariableSelectedIndex, setTemplateVariableSelectedIndex] = useState(0)
+  const [templateVariableStart, setTemplateVariableStart] = useState<number | null>(null)
+  const [templateVariablePosition, setTemplateVariablePosition] = useState({ top: 0, left: 0 })
   const [pendingNavigation, setPendingNavigation] = useState<
     | { type: "flow"; id: number }
     | { type: "node"; id: number }
@@ -112,6 +159,7 @@ export default function BotFlowBuilder() {
   // Estado local editable del nodo
   const [editNode, setEditNode] = useState<BotNode | null>(null)
   const lastSavedNodeSnapshotRef = useRef("")
+  const messageTextareaRef = useRef<HTMLTextAreaElement | null>(null)
 
   // 🔹 Flow seleccionado
   const selectedFlow = useMemo(
@@ -133,6 +181,121 @@ export default function BotFlowBuilder() {
       label: n.key || `node_${n.id}`,
     }))
   }, [nodes])
+
+  const templateVariableOptions = useMemo<TemplateVariableOption[]>(() => {
+    const builtins: TemplateVariableOption[] = [
+      { key: "chat.id", label: "chat.id", kind: "builtin" },
+      { key: "chat.status", label: "chat.status", kind: "builtin" },
+      { key: "contact.name", label: "contact.name", kind: "builtin" },
+      { key: "contact.whatsapp_id", label: "contact.whatsapp_id", kind: "builtin" },
+      { key: "flow.id", label: "flow.id", kind: "builtin" },
+      { key: "node.id", label: "node.id", kind: "builtin" },
+      { key: "node.key", label: "node.key", kind: "builtin" },
+    ]
+
+    const personLookupVars: TemplateVariableOption[] = [
+      { key: "persona_encontrada", label: "persona_encontrada", kind: "flow" },
+      { key: "persona_lookup_status", label: "persona_lookup_status", kind: "flow" },
+      { key: "persona_id", label: "persona_id", kind: "flow" },
+      { key: "persona_nombres", label: "persona_nombres", kind: "flow" },
+      { key: "persona_apellidos", label: "persona_apellidos", kind: "flow" },
+      { key: "persona_documento", label: "persona_documento", kind: "flow" },
+      { key: "persona_fecha_nacimiento", label: "persona_fecha_nacimiento", kind: "flow" },
+      { key: "persona_genero", label: "persona_genero", kind: "flow" },
+      { key: "persona_obra_social", label: "persona_obra_social", kind: "flow" },
+      { key: "persona_obra_social_id", label: "persona_obra_social_id", kind: "flow" },
+      { key: "persona_plan_id", label: "persona_plan_id", kind: "flow" },
+      { key: "persona_email", label: "persona_email", kind: "flow" },
+      { key: "persona_contacto_telefono", label: "persona_contacto_telefono", kind: "flow" },
+      { key: "persona_contacto_telefono_2", label: "persona_contacto_telefono_2", kind: "flow" },
+      { key: "persona_planes_activos", label: "persona_planes_activos", kind: "flow" },
+    ]
+
+    const flowVars = nodes
+      .filter((node) => node.type === "input")
+      .map((node) => String(node?.settings?.variable ?? "").trim())
+      .filter(Boolean)
+      .filter((value, index, arr) => arr.indexOf(value) === index)
+      .map((value) => ({ key: value, label: value, kind: "flow" as const }))
+
+    const mergedFlowVars = [...flowVars, ...personLookupVars].filter(
+      (value, index, arr) => arr.findIndex((item) => item.key === value.key) === index,
+    )
+
+    return [...mergedFlowVars, ...builtins]
+  }, [nodes])
+
+  const filteredTemplateVariableOptions = useMemo(() => {
+    const q = templateVariableQuery.trim().toLowerCase()
+    if (!q) return templateVariableOptions
+    return templateVariableOptions.filter((item) => item.key.toLowerCase().includes(q))
+  }, [templateVariableOptions, templateVariableQuery])
+
+  const inputVariableValidation = useMemo(() => {
+    if (!editNode || editNode.type !== "input") {
+      return {
+        normalized: "",
+        isEmpty: false,
+        hasInvalidFormat: false,
+        collidesWithBuiltin: false,
+        alreadyExists: false,
+        isAvailable: true,
+        message: "",
+      }
+    }
+
+    const normalized = String(editNode.settings?.variable ?? "").trim()
+    const lower = normalized.toLowerCase()
+    const builtins = new Set(
+      templateVariableOptions
+        .filter((item) => item.kind === "builtin")
+        .map((item) => item.key.toLowerCase()),
+    )
+    const existingFlowVars = new Set(
+      nodes
+        .filter((node) => node.type === "input" && node.id !== editNode.id)
+        .map((node) => String(node.settings?.variable ?? "").trim().toLowerCase())
+        .filter(Boolean),
+    )
+
+    const isEmpty = normalized.length === 0
+    const hasInvalidFormat = normalized.length > 0 && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(normalized)
+    const collidesWithBuiltin = normalized.length > 0 && builtins.has(lower)
+    const alreadyExists = normalized.length > 0 && existingFlowVars.has(lower)
+    const isAvailable = !isEmpty && !hasInvalidFormat && !collidesWithBuiltin && !alreadyExists
+
+    let message = ""
+    if (isEmpty) {
+      message = "Ingresá un nombre para guardar el dato capturado."
+    } else if (hasInvalidFormat) {
+      message = "Usá letras, números y guion bajo, sin espacios, y empezá con una letra o _."
+    } else if (collidesWithBuiltin) {
+      message = "Ese nombre ya está reservado por una variable del sistema."
+    } else if (alreadyExists) {
+      message = "Ese nombre ya existe en otro nodo de captura de este flujo."
+    } else {
+      message = "Variable disponible para este flujo."
+    }
+
+    return {
+      normalized,
+      isEmpty,
+      hasInvalidFormat,
+      collidesWithBuiltin,
+      alreadyExists,
+      isAvailable,
+      message,
+    }
+  }, [editNode, nodes, templateVariableOptions])
+
+  const canSaveNode = useMemo(() => {
+    if (!editNode) return false
+    if (editNode.type === "input") {
+      return inputVariableValidation.isAvailable
+    }
+
+    return true
+  }, [editNode, inputVariableValidation.isAvailable])
 
 
   // 🔹 Cargar flows al inicio
@@ -231,6 +394,18 @@ export default function BotFlowBuilder() {
   useEffect(() => {
     setEditFlowName(selectedFlow?.name ?? "")
   }, [selectedFlow?.id, selectedFlow?.name])
+
+  useEffect(() => {
+    setTemplateVariableOpen(false)
+    setTemplateVariableQuery("")
+    setTemplateVariableStart(null)
+    setTemplateVariableSelectedIndex(0)
+  }, [selectedNodeId, selectedFlowId])
+
+  useEffect(() => {
+    if (templateVariableSelectedIndex < filteredTemplateVariableOptions.length) return
+    setTemplateVariableSelectedIndex(0)
+  }, [filteredTemplateVariableOptions.length, templateVariableSelectedIndex])
 
   useEffect(() => {
     if (!trashOpen) return
@@ -569,6 +744,7 @@ export default function BotFlowBuilder() {
 
   const handleSaveNode = async () => {
     if (!editNode) return
+    if (editNode.type === "input" && !inputVariableValidation.isAvailable) return false
 
     const snapshot = {
       ...editNode,
@@ -732,6 +908,136 @@ export default function BotFlowBuilder() {
     return nextSettings
   }
 
+  const getTextareaCaretPosition = (textarea: HTMLTextAreaElement, position: number) => {
+    const div = document.createElement("div")
+    const style = window.getComputedStyle(textarea)
+    const properties = [
+      "boxSizing",
+      "width",
+      "height",
+      "overflowX",
+      "overflowY",
+      "borderTopWidth",
+      "borderRightWidth",
+      "borderBottomWidth",
+      "borderLeftWidth",
+      "paddingTop",
+      "paddingRight",
+      "paddingBottom",
+      "paddingLeft",
+      "fontStyle",
+      "fontVariant",
+      "fontWeight",
+      "fontStretch",
+      "fontSize",
+      "fontSizeAdjust",
+      "lineHeight",
+      "fontFamily",
+      "textAlign",
+      "textTransform",
+      "textIndent",
+      "textDecoration",
+      "letterSpacing",
+      "wordSpacing",
+      "tabSize",
+      "whiteSpace",
+    ] as const
+
+    div.style.position = "absolute"
+    div.style.visibility = "hidden"
+    div.style.whiteSpace = "pre-wrap"
+    div.style.wordBreak = "break-word"
+
+    properties.forEach((prop) => {
+      // @ts-expect-error index access for style props
+      div.style[prop] = style[prop]
+    })
+
+    div.textContent = textarea.value.slice(0, position)
+
+    const span = document.createElement("span")
+    span.textContent = textarea.value.slice(position) || "."
+    div.appendChild(span)
+
+    document.body.appendChild(div)
+
+    const top = span.offsetTop - textarea.scrollTop + parseFloat(style.borderTopWidth || "0")
+    const left = span.offsetLeft - textarea.scrollLeft + parseFloat(style.borderLeftWidth || "0")
+
+    document.body.removeChild(div)
+
+    return { top, left, lineHeight: parseFloat(style.lineHeight || "20") }
+  }
+
+  const updateTemplateVariableAutocomplete = (value: string, cursorPosition: number | null) => {
+    if (cursorPosition === null || cursorPosition < 0) {
+      setTemplateVariableOpen(false)
+      setTemplateVariableQuery("")
+      setTemplateVariableStart(null)
+      setTemplateVariableSelectedIndex(0)
+      return
+    }
+
+    const textBeforeCursor = value.slice(0, cursorPosition)
+    const match = textBeforeCursor.match(/\{\{\s*([A-Za-z0-9._-]*)$/)
+
+    if (!match || match.index === undefined) {
+      setTemplateVariableOpen(false)
+      setTemplateVariableQuery("")
+      setTemplateVariableStart(null)
+      setTemplateVariableSelectedIndex(0)
+      return
+    }
+
+    const textarea = messageTextareaRef.current
+    if (textarea) {
+      const caret = getTextareaCaretPosition(textarea, cursorPosition)
+      setTemplateVariablePosition({
+        top: caret.top + caret.lineHeight + 8,
+        left: Math.min(caret.left, Math.max(16, textarea.clientWidth - 260)),
+      })
+    }
+
+    setTemplateVariableOpen(true)
+    setTemplateVariableQuery(match[1] ?? "")
+    setTemplateVariableStart(match.index)
+    setTemplateVariableSelectedIndex(0)
+  }
+
+  const insertTemplateVariable = (variableKey: string) => {
+    if (!editNode || templateVariableStart === null) return
+
+    const textarea = messageTextareaRef.current
+    const cursorPosition = textarea?.selectionStart ?? (editNode.body ?? "").length
+    const currentValue = editNode.body ?? ""
+    const replacement = `{{ ${variableKey} }}`
+    const nextValue =
+      currentValue.slice(0, templateVariableStart) +
+      replacement +
+      currentValue.slice(cursorPosition)
+
+    setEditNode((prev) =>
+      prev
+        ? {
+          ...prev,
+          body: nextValue.slice(0, getNodeBodyMaxLength(prev.type)),
+        }
+        : prev,
+    )
+
+    setTemplateVariableOpen(false)
+    setTemplateVariableQuery("")
+    setTemplateVariableStart(null)
+    setTemplateVariableSelectedIndex(0)
+
+    setTimeout(() => {
+      if (!textarea) return
+      const nextCursor = templateVariableStart + replacement.length
+      textarea.focus()
+      textarea.setSelectionRange(nextCursor, nextCursor)
+    }, 0)
+  }
+
   const trashSearchNormalized = trashSearch.trim().toLowerCase()
 
   const filteredTrashedFlows = useMemo(() => {
@@ -771,6 +1077,14 @@ export default function BotFlowBuilder() {
           ? { ...row, next_node_id: null }
           : row,
       )
+    }
+
+    if (Number(nextSettings.not_found_next_node_id) === deletedNodeId) {
+      nextSettings.not_found_next_node_id = null
+    }
+
+    if (Number(nextSettings.error_next_node_id) === deletedNodeId) {
+      nextSettings.error_next_node_id = null
     }
 
     return nextSettings
@@ -857,16 +1171,22 @@ export default function BotFlowBuilder() {
                 <div className="flex gap-2">
                   <Input
                     value={btn.id ?? ""}
-                    onChange={(e) => updateButton(index, "id", e.target.value)}
+                    onChange={(e) => updateButton(index, "id", e.target.value.slice(0, BUTTON_ID_MAX))}
                     placeholder="ID interno (ej: menu_horarios)"
+                    maxLength={BUTTON_ID_MAX}
                     className="text-xs"
                   />
                   <Input
                     value={btn.title ?? ""}
-                    onChange={(e) => updateButton(index, "title", e.target.value)}
+                    onChange={(e) => updateButton(index, "title", e.target.value.slice(0, BUTTON_TITLE_MAX))}
+                    maxLength={BUTTON_TITLE_MAX}
                     placeholder="Texto del botón"
                     className="text-xs"
                   />
+                </div>
+                <div className="flex justify-between gap-2 text-[10px] text-muted-foreground">
+                  <span>ID {(btn.id ?? "").length}/{BUTTON_ID_MAX}</span>
+                  <span>Título {(btn.title ?? "").length}/{BUTTON_TITLE_MAX}</span>
                 </div>
 
                 <div className="flex gap-2 items-center">
@@ -971,13 +1291,17 @@ export default function BotFlowBuilder() {
                     prev
                       ? {
                         ...prev,
-                        settings: { ...settings, button_text: e.target.value },
+                        settings: { ...settings, button_text: e.target.value.slice(0, LIST_BUTTON_TEXT_MAX) },
                       }
                       : prev,
                   )
                 }
+                maxLength={LIST_BUTTON_TEXT_MAX}
                 className="text-xs"
               />
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                {(settings.button_text ?? "").length}/{LIST_BUTTON_TEXT_MAX}
+              </p>
             </div>
 
             <div>
@@ -991,13 +1315,17 @@ export default function BotFlowBuilder() {
                     prev
                       ? {
                         ...prev,
-                        settings: { ...settings, section_title: e.target.value },
+                        settings: { ...settings, section_title: e.target.value.slice(0, LIST_SECTION_TITLE_MAX) },
                       }
                       : prev,
                   )
                 }
+                maxLength={LIST_SECTION_TITLE_MAX}
                 className="text-xs"
               />
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                {(settings.section_title ?? "").length}/{LIST_SECTION_TITLE_MAX}
+              </p>
             </div>
           </div>
 
@@ -1034,24 +1362,34 @@ export default function BotFlowBuilder() {
                 <div className="flex gap-2">
                   <Input
                     value={row.id ?? ""}
-                    onChange={(e) => updateRow(index, "id", e.target.value)}
+                    onChange={(e) => updateRow(index, "id", e.target.value.slice(0, LIST_ROW_ID_MAX))}
                     placeholder="ID interno"
+                    maxLength={LIST_ROW_ID_MAX}
                     className="text-xs"
                   />
                   <Input
                     value={row.title ?? ""}
-                    onChange={(e) => updateRow(index, "title", e.target.value)}
+                    onChange={(e) => updateRow(index, "title", e.target.value.slice(0, LIST_ROW_TITLE_MAX))}
+                    maxLength={LIST_ROW_TITLE_MAX}
                     placeholder="Título visible"
                     className="text-xs"
                   />
                 </div>
+                <div className="flex justify-between gap-2 text-[10px] text-muted-foreground">
+                  <span>ID {(row.id ?? "").length}/{LIST_ROW_ID_MAX}</span>
+                  <span>Título {(row.title ?? "").length}/{LIST_ROW_TITLE_MAX}</span>
+                </div>
 
                 <Input
                   value={row.description ?? ""}
-                  onChange={(e) => updateRow(index, "description", e.target.value)}
+                  onChange={(e) => updateRow(index, "description", e.target.value.slice(0, LIST_ROW_DESCRIPTION_MAX))}
                   placeholder="Descripción (opcional)"
+                  maxLength={LIST_ROW_DESCRIPTION_MAX}
                   className="text-xs mt-1"
                 />
+                <p className="text-[10px] text-muted-foreground">
+                  {(row.description ?? "").length}/{LIST_ROW_DESCRIPTION_MAX}
+                </p>
 
                 <div className="flex gap-2 items-center mt-1">
                   <Select
@@ -1130,10 +1468,34 @@ export default function BotFlowBuilder() {
             </label>
             <Input
               value={settings.variable ?? ""}
-              onChange={(e) => update("variable", e.target.value)}
+              onChange={(e) => update("variable", e.target.value.slice(0, INPUT_VARIABLE_MAX))}
               placeholder="Ej: dni, nro_historia, etc."
+              maxLength={INPUT_VARIABLE_MAX}
               className="text-xs"
             />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              {(settings.variable ?? "").length}/{INPUT_VARIABLE_MAX}
+            </p>
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <span
+                className={cn(
+                  "inline-flex rounded-full px-2.5 py-1 text-[10px] font-medium",
+                  inputVariableValidation.isAvailable
+                    ? "bg-emerald-100 text-emerald-700"
+                    : "bg-amber-100 text-amber-700",
+                )}
+              >
+                {inputVariableValidation.isAvailable ? "Disponible" : "No disponible"}
+              </span>
+              <p
+                className={cn(
+                  "text-right text-[10px]",
+                  inputVariableValidation.isAvailable ? "text-emerald-700" : "text-amber-700",
+                )}
+              >
+                {inputVariableValidation.message}
+              </p>
+            </div>
           </div>
           </div>
 
@@ -1152,10 +1514,14 @@ export default function BotFlowBuilder() {
             </div>
             <Input
               value={settings.validation_regex ?? ""}
-              onChange={(e) => update("validation_regex", e.target.value)}
+              onChange={(e) => update("validation_regex", e.target.value.slice(0, REGEX_MAX))}
               placeholder="Ej: ^[0-9]{7,9}$"
+              maxLength={REGEX_MAX}
               className="text-xs"
             />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              {(settings.validation_regex ?? "").length}/{REGEX_MAX}
+            </p>
           </div>
 
           <div>
@@ -1164,10 +1530,154 @@ export default function BotFlowBuilder() {
             </label>
             <Textarea
               value={settings.error_message ?? ""}
-              onChange={(e) => update("error_message", e.target.value)}
+              onChange={(e) => update("error_message", e.target.value.slice(0, ERROR_MESSAGE_MAX))}
               rows={2}
+              maxLength={ERROR_MESSAGE_MAX}
               className="text-xs"
             />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              {(settings.error_message ?? "").length}/{ERROR_MESSAGE_MAX}
+            </p>
+          </div>
+        </div>
+      )
+    }
+
+    if (t === "person_lookup") {
+      const settings = ensureSettings<{
+        dni_variable: string
+        not_found_message: string
+        not_found_next_node_id: number | null
+        error_message: string
+        error_next_node_id: number | null
+      }>({
+        dni_variable: "dni",
+        not_found_message: "No encontramos datos personales para el DNI ingresado.",
+        not_found_next_node_id: null,
+        error_message: "No pudimos consultar tus datos en este momento.",
+        error_next_node_id: null,
+      })
+
+      const update = (field: keyof typeof settings, value: string | number | null) => {
+        setEditNode((prev) =>
+          prev
+            ? {
+              ...prev,
+              settings: {
+                ...settings,
+                [field]: value,
+              },
+            }
+            : prev,
+        )
+      }
+
+      return (
+        <div className="space-y-3">
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">
+              Variable que contiene el DNI
+            </label>
+            <Input
+              value={settings.dni_variable ?? ""}
+              onChange={(e) => update("dni_variable", e.target.value.slice(0, INPUT_VARIABLE_MAX))}
+              placeholder="Ej: dni"
+              maxLength={INPUT_VARIABLE_MAX}
+              className="text-xs"
+            />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              {(settings.dni_variable ?? "").length}/{INPUT_VARIABLE_MAX}
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+            Este nodo consulta la API del hospital con el DNI guardado en esa variable, guarda los datos personales en variables como
+            {" "}
+            <span className="font-medium text-slate-700">{"{{ persona_nombres }}"}</span>
+            {" "}
+            y
+            {" "}
+            <span className="font-medium text-slate-700">{"{{ persona_apellidos }}"}</span>.
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">
+              Mensaje cuando no se encuentra la persona
+            </label>
+            <Textarea
+              value={settings.not_found_message ?? ""}
+              onChange={(e) => update("not_found_message", e.target.value.slice(0, TEXT_MESSAGE_MAX))}
+              rows={2}
+              maxLength={TEXT_MESSAGE_MAX}
+              className="text-xs"
+            />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              {(settings.not_found_message ?? "").length}/{TEXT_MESSAGE_MAX}
+            </p>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">
+              Siguiente nodo si no se encuentra
+            </label>
+            <Select
+              value={settings.not_found_next_node_id ? String(settings.not_found_next_node_id) : "none"}
+              onValueChange={(val) =>
+                update("not_found_next_node_id", val === "none" ? null : Number(val))
+              }
+            >
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue placeholder="Finalizar flujo" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Finalizar flujo</SelectItem>
+                {nextNodeOptions.map((opt) => (
+                  <SelectItem key={opt.id} value={String(opt.id)}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">
+              Mensaje cuando hay error en la consulta
+            </label>
+            <Textarea
+              value={settings.error_message ?? ""}
+              onChange={(e) => update("error_message", e.target.value.slice(0, ERROR_MESSAGE_MAX))}
+              rows={2}
+              maxLength={ERROR_MESSAGE_MAX}
+              className="text-xs"
+            />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              {(settings.error_message ?? "").length}/{ERROR_MESSAGE_MAX}
+            </p>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">
+              Siguiente nodo si hay error
+            </label>
+            <Select
+              value={settings.error_next_node_id ? String(settings.error_next_node_id) : "none"}
+              onValueChange={(val) =>
+                update("error_next_node_id", val === "none" ? null : Number(val))
+              }
+            >
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue placeholder="Finalizar flujo" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Finalizar flujo</SelectItem>
+                {nextNodeOptions.map((opt) => (
+                  <SelectItem key={opt.id} value={String(opt.id)}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </div>
       )
@@ -1177,14 +1687,23 @@ export default function BotFlowBuilder() {
     return null
   }
 
-  const isLinearType = (t: NodeType) => t === "text" || t === "input"
+  const isLinearType = (t: NodeType) => t === "text" || t === "input" || t === "person_lookup"
 
   // 🔹 Render: layout general
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-slate-100">
       {/* Barra superior estilo panel de mensajes */}
       <div className="flex items-center justify-between px-4 py-3 bg-[#013765] text-white">
-        <div>
+        <div className="flex items-center gap-3">
+          <Button
+            variant="outline"
+            className="h-8 w-8 shrink-0 border-white/20 bg-white/10 p-0 text-white hover:bg-white/20 hover:text-white"
+            onClick={() => window.history.back()}
+            title="Volver"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <div>
           <h1 className="font-semibold text-lg flex items-center gap-2">
             Constructor de flujo de bot
             <span className="text-xs font-normal opacity-80">(árbol de decisiones)</span>
@@ -1196,6 +1715,7 @@ export default function BotFlowBuilder() {
           ) : (
             <p className="text-xs mt-1 opacity-80">Selecciona un flujo o crea uno nuevo.</p>
           )}
+          </div>
         </div>
         <div>
           <Button
@@ -1214,7 +1734,7 @@ export default function BotFlowBuilder() {
       {/* Contenido */}
       <div className="flex flex-1 gap-4 overflow-hidden p-4 min-h-0">
         {/* Sidebar de Flows */}
-        <div className="w-64 min-h-0 flex flex-col border rounded-xl bg-white p-3 gap-3 shadow-sm">
+        <div className="w-80 min-h-0 flex flex-col border rounded-xl bg-white p-3 gap-3 shadow-sm">
           <div className="flex items-center justify-between">
             <h2 className="font-semibold text-sm text-[#013765]">Flujos del bot</h2>
             <div className="flex items-center gap-1">
@@ -1264,7 +1784,9 @@ export default function BotFlowBuilder() {
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <span className="block truncate font-medium">{flow.name}</span>
+                      <span className="block font-medium leading-tight break-words [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden">
+                        {flow.name}
+                      </span>
                       {flow.description ? (
                         <span className={cn(
                           "mt-1 block truncate text-[10px]",
@@ -1422,12 +1944,12 @@ export default function BotFlowBuilder() {
                         </div>
 
                         <span className="text-[10px] uppercase tracking-wide shrink-0">
-                          {node.type}
+                          {getNodeTypeLabel(node.type)}
                         </span>
                       </div>
 
                       <div className={cn(
-                        "rounded-md px-2 py-1.5 text-[10px]",
+                        "rounded-md px-2 py-1.5 text-[10px] break-words overflow-hidden [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]",
                         selectedNodeId === node.id ? "bg-white/10 text-white/85" : "bg-slate-50 text-slate-600",
                       )}>
                         {node.bodyPreview ? node.bodyPreview : "Sin mensaje configurado."}
@@ -1554,7 +2076,7 @@ export default function BotFlowBuilder() {
 
                       </div>
 
-                      <div className="mt-2 flex flex-col items-center gap-2">
+                      <div className="mt-4 flex shrink-0 flex-col items-center gap-2 border-t border-slate-200 bg-white pt-4">
                         <Button
                           size="sm"
                           className="w-full text-xs bg-[#013765] hover:bg-[#024a8a] text-white"
@@ -1590,13 +2112,14 @@ export default function BotFlowBuilder() {
                   </CardDescription>
                 </CardHeader>
 
-                <CardContent className="flex-1 flex flex-col gap-4 overflow-y-auto pt-4 bg-white rounded-b-xl">
+                <CardContent className="flex-1 flex flex-col overflow-hidden pt-4 bg-white rounded-b-xl">
                   {!editNode ? (
                     <p className="text-xs text-muted-foreground">
                       Selecciona un nodo en la lista de la izquierda para editarlo.
                     </p>
                   ) : (
                     <>
+                      <div className="flex-1 min-h-0 space-y-4 overflow-y-auto pr-1">
                       {/* Datos básicos */}
                       <div className="grid grid-cols-2 gap-3">
                         <div>
@@ -1607,11 +2130,15 @@ export default function BotFlowBuilder() {
                             value={editNode.key ?? ""}
                             onChange={(e) =>
                               setEditNode((prev) =>
-                                prev ? { ...prev, key: e.target.value } : prev,
+                                prev ? { ...prev, key: e.target.value.slice(0, NODE_KEY_MAX) } : prev,
                               )
                             }
+                            maxLength={NODE_KEY_MAX}
                             className="text-xs"
                           />
+                          <p className="mt-1 text-[10px] text-muted-foreground">
+                            {(editNode.key ?? "").length}/{NODE_KEY_MAX}
+                          </p>
                         </div>
 
                         <div>
@@ -1624,7 +2151,7 @@ export default function BotFlowBuilder() {
                               setEditNode((prev) => {
                                 if (!prev) return prev
 
-                                const linear = val === "text" || val === "input"
+                                const linear = val === "text" || val === "input" || val === "person_lookup"
 
                                 const cleanedSettings = (() => {
                                   const s = { ...(prev.settings ?? {}) }
@@ -1659,29 +2186,136 @@ export default function BotFlowBuilder() {
                               <SelectItem value="text">Texto</SelectItem>
                               <SelectItem value="buttons">Botones</SelectItem>
                               <SelectItem value="list">Lista</SelectItem>
-                              <SelectItem value="input">Input (capturar dato)</SelectItem>
-                              <SelectItem value="handoff">Handoff a operador</SelectItem>
+                              <SelectItem value="input">Capturar dato</SelectItem>
+                              <SelectItem value="person_lookup">Buscar datos personales por DNI</SelectItem>
+                              <SelectItem value="handoff">Desactivar bot y pasar a operador</SelectItem>
                             </SelectContent>
                           </Select>
                         </div>
                       </div>
 
                       {/* Texto principal */}
-                      <div>
-                        <label className="text-xs mb-1 block text-muted-foreground">
-                          Mensaje
-                        </label>
+                      <div className="relative">
+                        <div className="mb-1 flex items-center gap-2">
+                          <label className="text-xs block text-muted-foreground">
+                            Mensaje
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setMessageHelpOpen(true)}
+                            className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-[#013765] transition-colors hover:bg-slate-50"
+                          >
+                            <CircleHelp className="h-3.5 w-3.5" />
+                            Ayuda sobre variables
+                          </button>
+                        </div>
                         <Textarea
+                          ref={messageTextareaRef}
                           value={editNode.body ?? ""}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            const nextValue = e.target.value
+                            const cursorPosition = e.target.selectionStart
                             setEditNode((prev) =>
-                              prev ? { ...prev, body: e.target.value } : prev,
+                              prev
+                                ? {
+                                  ...prev,
+                                  body: nextValue.slice(0, getNodeBodyMaxLength(prev.type)),
+                                }
+                                : prev,
+                            )
+                            updateTemplateVariableAutocomplete(nextValue, cursorPosition)
+                          }}
+                          onClick={(e) =>
+                            updateTemplateVariableAutocomplete(
+                              e.currentTarget.value,
+                              e.currentTarget.selectionStart,
                             )
                           }
+                          onKeyUp={(e) =>
+                            updateTemplateVariableAutocomplete(
+                              e.currentTarget.value,
+                              e.currentTarget.selectionStart,
+                            )
+                          }
+                          onBlur={() => {
+                            setTimeout(() => setTemplateVariableOpen(false), 120)
+                          }}
+                          onKeyDown={(e) => {
+                            if (!templateVariableOpen || filteredTemplateVariableOptions.length === 0) return
+
+                            if (e.key === "ArrowDown") {
+                              e.preventDefault()
+                              setTemplateVariableSelectedIndex((prev) =>
+                                prev + 1 >= filteredTemplateVariableOptions.length ? 0 : prev + 1,
+                              )
+                            } else if (e.key === "ArrowUp") {
+                              e.preventDefault()
+                              setTemplateVariableSelectedIndex((prev) =>
+                                prev - 1 < 0 ? filteredTemplateVariableOptions.length - 1 : prev - 1,
+                              )
+                            } else if (e.key === "Enter" || e.key === "Tab") {
+                              e.preventDefault()
+                              const selected = filteredTemplateVariableOptions[templateVariableSelectedIndex]
+                              if (selected) insertTemplateVariable(selected.key)
+                            } else if (e.key === "Escape") {
+                              e.preventDefault()
+                              setTemplateVariableOpen(false)
+                            }
+                          }}
                           rows={4}
+                          maxLength={getNodeBodyMaxLength(editNode.type)}
                           className="text-xs"
                           placeholder="Texto que verá el paciente/usuario en este paso..."
                         />
+                        {templateVariableOpen && filteredTemplateVariableOptions.length > 0 && (
+                          <div
+                            className="absolute z-20 w-64 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg"
+                            style={{
+                              top: templateVariablePosition.top,
+                              left: templateVariablePosition.left,
+                            }}
+                          >
+                            <div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+                              Variables disponibles
+                            </div>
+                            <div className="max-h-56 overflow-y-auto py-1">
+                              {filteredTemplateVariableOptions.map((item, index) => (
+                                <button
+                                  key={`${item.kind}-${item.key}`}
+                                  type="button"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => insertTemplateVariable(item.key)}
+                                  className={cn(
+                                    "flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-xs transition-colors",
+                                    index === templateVariableSelectedIndex
+                                      ? "bg-[#013765] text-white"
+                                      : "text-slate-700 hover:bg-slate-50",
+                                  )}
+                                >
+                                  <span className="truncate font-medium">{item.label}</span>
+                                  <span
+                                    className={cn(
+                                      "shrink-0 rounded-full px-2 py-0.5 text-[10px]",
+                                      index === templateVariableSelectedIndex
+                                        ? "bg-white/15 text-white"
+                                        : item.kind === "flow"
+                                          ? "bg-emerald-100 text-emerald-700"
+                                          : "bg-slate-100 text-slate-600",
+                                    )}
+                                  >
+                                    {item.kind === "flow" ? "flujo" : "sistema"}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        <p className="mt-1 text-[10px] text-muted-foreground">
+                          {(editNode.body ?? "").length}/{getNodeBodyMaxLength(editNode.type)}
+                          {editNode.type === "buttons" || editNode.type === "list"
+                            ? " (mensaje interactivo)"
+                            : ""}
+                        </p>
                       </div>
 
                       {/* Settings específicos según tipo */}
@@ -1811,13 +2445,15 @@ export default function BotFlowBuilder() {
                         </div>
                       )}
 
+                      </div>
+
                       {/* Botón guardar */}
-                      <div className="mt-2 flex flex-col items-center gap-2">
+                      <div className="mt-4 flex shrink-0 flex-col items-center gap-2 border-t border-slate-200 bg-white pt-4">
                         <Button
                           size="sm"
                           className="w-full text-xs bg-[#013765] hover:bg-[#024a8a] text-white"
                           onClick={handleSaveNode}
-                          disabled={savingNode || !hasUnsavedChanges}
+                          disabled={savingNode || !hasUnsavedChanges || !canSaveNode}
                         >
                           {savingNode ? "Guardando..." : "Guardar nodo"}
                         </Button>
@@ -1974,14 +2610,14 @@ export default function BotFlowBuilder() {
               <div>
                 <p className="font-medium text-slate-900">Para qué funciona</p>
                 <p className="mt-1">
-                  Si el texto del usuario cumple el patrón, el nodo acepta la respuesta. Si no cumple, se muestra el mensaje de error y el bot vuelve a pedir el dato.
+                  Este campo sirve para validar que el usuario cargue correctamente el dato que le estas pidiendo en este paso.
                 </p>
               </div>
 
               <div>
-                <p className="font-medium text-slate-900">Cómo se usa</p>
+                <p className="font-medium text-slate-900">Que tenes que saber</p>
                 <p className="mt-1">
-                  Escribí una expresión regular que represente el formato esperado. Por ejemplo, podés exigir solo números, una cantidad exacta de caracteres o un correo con formato válido.
+                  Usa este campo cuando quieras controlar el formato del dato, por ejemplo un email, un DNI o un telefono.
                 </p>
               </div>
 
@@ -1996,9 +2632,9 @@ export default function BotFlowBuilder() {
               </div>
 
               <div>
-                <p className="font-medium text-slate-900">Cómo generarlo más fácil</p>
+                <p className="font-medium text-slate-900">Como generarlo con ChatGPT</p>
                 <p className="mt-1">
-                  Si no querés armar el regex a mano, podés pedírselo a ChatGPT. Ejemplo: "Generame un regex para validar un DNI argentino de 7 u 8 dígitos, y explicame qué acepta y qué no".
+                  Pedile a ChatGPT un regex para el dato que queres validar y luego copia el resultado aqui. Ejemplos: "Generame un regex para validar un email" o "Generame un regex para validar un DNI argentino de 7 u 8 digitos".
                 </p>
               </div>
             </div>
@@ -2007,6 +2643,54 @@ export default function BotFlowBuilder() {
               <button
                 type="button"
                 onClick={() => setRegexHelpOpen(false)}
+                className="inline-flex items-center rounded-lg bg-[#013765] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#024a8a]"
+              >
+                Entendido
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {messageHelpOpen && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]">
+          <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="border-b border-slate-200 bg-slate-50 px-5 py-4">
+              <h3 className="text-base font-semibold text-slate-900">Ayuda sobre variables en mensajes</h3>
+              <p className="mt-1 text-sm text-slate-600">
+                Podés mostrar datos guardados del chat dentro del texto del nodo.
+              </p>
+            </div>
+
+            <div className="space-y-4 px-5 py-4 text-sm text-slate-700">
+              <div>
+                <p className="font-medium text-slate-900">Cómo se usan</p>
+                <p className="mt-1">
+                  Escribí la variable entre dobles llaves. Ejemplo: <code>{'{{ nombre }}'}</code>
+                </p>
+              </div>
+
+              <div>
+                <p className="font-medium text-slate-900">Ejemplos</p>
+                <div className="mt-2 space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-[13px]">
+                  <p><code>Hola {'{{ nombre }}'}</code></p>
+                  <p><code>Tu DNI es {'{{ dni }}'}</code></p>
+                  <p><code>Hola {'{{ nombre|paciente }}'}</code> usa <span className="font-medium">paciente</span> si la variable está vacía.</p>
+                </div>
+              </div>
+
+              <div>
+                <p className="font-medium text-slate-900">Variables disponibles</p>
+                <p className="mt-1">
+                  Podés usar variables guardadas por nodos de captura de datos y también algunas variables del sistema, como <code>{'{{ contact.name }}'}</code> o <code>{'{{ chat.id }}'}</code>.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setMessageHelpOpen(false)}
                 className="inline-flex items-center rounded-lg bg-[#013765] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#024a8a]"
               >
                 Entendido
@@ -2183,3 +2867,5 @@ export default function BotFlowBuilder() {
     </div>
   )
 }
+
+

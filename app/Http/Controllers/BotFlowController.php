@@ -335,6 +335,12 @@ class BotFlowController extends Controller
     {
         $settings = is_array($settings) ? $settings : [];
 
+        foreach (['not_found_next_node_id', 'error_next_node_id'] as $singleNextKey) {
+            if ((int) ($settings[$singleNextKey] ?? 0) === $deletedNodeId) {
+                $settings[$singleNextKey] = null;
+            }
+        }
+
         if (isset($settings['buttons']) && is_array($settings['buttons'])) {
             $settings['buttons'] = array_map(function ($button) use ($deletedNodeId) {
                 if (!is_array($button)) {
