@@ -726,8 +726,7 @@ class WhatsAppController extends Controller
         string $senderSubtype = 'bot',
         ?string $botNodeType = null,
         ?array $interactiveOptions = null
-    ): Message
-    {
+    ): Message {
         $contact = $chat->contact;
 
         if (!$contact || !$contact->whatsapp_id) {
@@ -807,8 +806,7 @@ class WhatsAppController extends Controller
         ?string $waMessageId = null,
         ?string $botNodeType = null,
         ?array $interactiveOptions = null
-    ): void
-    {
+    ): void {
         $contact = $chat->contact;
 
         $message = Message::create([
@@ -1014,7 +1012,7 @@ class WhatsAppController extends Controller
                 // y sendBotNode va a setear pending_input
                 return $currentNode;
 
-            // 3) Texto plano
+                // 3) Texto plano
             case 'text':
                 if (in_array(mb_strtolower($text), ['menú', 'menu'], true)) {
                     $menuNode = BotNode::where('flow_id', $currentNode->flow_id)
@@ -1187,8 +1185,9 @@ class WhatsAppController extends Controller
         $targetNextNodeId = null;
         $messageToSend = null;
 
+
         if ($dni === '') {
-            $this->setVars($chat, $baseVars + ['persona_lookup_status' => 'missing_dni']);
+            $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'missing_dni']));
             $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos porque falta el DNI.');
             $targetNextNodeId = $settings['error_next_node_id'] ?? null;
         } else {
@@ -1196,19 +1195,30 @@ class WhatsAppController extends Controller
             $apiKey = (string) env('HOSPITAL_PERSON_API_KEY', 'Turnos2025');
 
             try {
-                $response = Http::timeout(10)
+                $response = Http::timeout(100000)
                     ->acceptJson()
                     ->withHeaders([
                         'X-API-KEY' => $apiKey,
                     ])
                     ->get("{$apiBase}/{$dni}");
 
+                Log::info('Hospital API person lookup response', [
+                    'chat_id' => $chat->id,
+                    'node_id' => $node->id,
+                    'dni' => $dni,
+                    'url' => "{$apiBase}/{$dni}",
+                    'status' => $response->status(),
+                    'ok' => $response->successful(),
+                    'json' => $response->json(),
+                    'body' => $response->body(),
+                ]);
+
                 if ($response->successful()) {
                     $payload = $response->json();
                     $person = is_array($payload) && isset($payload[0]) && is_array($payload[0]) ? $payload[0] : null;
 
                     if ($person) {
-                        $this->setVars($chat, $baseVars + [
+                        $this->setVars($chat, array_merge($baseVars, [
                             'persona_encontrada' => true,
                             'persona_lookup_status' => 'found',
                             'persona_id' => $person['id'] ?? null,
@@ -1224,21 +1234,21 @@ class WhatsAppController extends Controller
                             'persona_contacto_telefono' => $person['contacto_telefono'] ?? null,
                             'persona_contacto_telefono_2' => $person['contacto_telefono_2'] ?? null,
                             'persona_planes_activos' => is_array($person['planes_activos'] ?? null) ? $person['planes_activos'] : [],
-                        ]);
+                        ]));
 
                         $messageToSend = $node->body ? $this->renderTemplate($node->body, $chat, $node) : null;
                         $targetNextNodeId = $node->next_node_id;
                     } else {
-                        $this->setVars($chat, $baseVars + ['persona_lookup_status' => 'not_found']);
+                        $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'not_found']));
                         $messageToSend = (string) ($settings['not_found_message'] ?? 'No encontramos datos personales para el DNI ingresado.');
                         $targetNextNodeId = $settings['not_found_next_node_id'] ?? null;
                     }
                 } elseif ($response->status() === 404) {
-                    $this->setVars($chat, $baseVars + ['persona_lookup_status' => 'not_found']);
+                    $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'not_found']));
                     $messageToSend = (string) ($settings['not_found_message'] ?? 'No encontramos datos personales para el DNI ingresado.');
                     $targetNextNodeId = $settings['not_found_next_node_id'] ?? null;
                 } else {
-                    $this->setVars($chat, $baseVars + ['persona_lookup_status' => 'error']);
+                    $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'error']));
                     $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos en este momento.');
                     $targetNextNodeId = $settings['error_next_node_id'] ?? null;
 
@@ -1251,7 +1261,7 @@ class WhatsAppController extends Controller
                     ]);
                 }
             } catch (\Throwable $e) {
-                $this->setVars($chat, $baseVars + ['persona_lookup_status' => 'error']);
+                $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'error']));
                 $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos en este momento.');
                 $targetNextNodeId = $settings['error_next_node_id'] ?? null;
 
@@ -1275,7 +1285,7 @@ class WhatsAppController extends Controller
 
 
 
-        private function sendWhatsAppButtons(Chat $chat, BotNode $node): void
+    private function sendWhatsAppButtons(Chat $chat, BotNode $node): void
     {
         $contact = $chat->contact;
         if (!$contact || !$contact->whatsapp_id) {
@@ -1353,7 +1363,7 @@ class WhatsAppController extends Controller
         $this->persistAndPublishOutgoing($chat, $bodyText, $waMessageId, 'buttons', $interactiveOptions);
     }
 
-        private function normalizeWhatsAppReplyButtons(array $buttons, Chat $chat, BotNode $node): array
+    private function normalizeWhatsAppReplyButtons(array $buttons, Chat $chat, BotNode $node): array
     {
         $normalized = [];
         $usedIds = [];
@@ -1885,7 +1895,4 @@ class WhatsAppController extends Controller
             default => $value, // pipes desconocidos: no hacen nada
         };
     }
-
 }
-
-
