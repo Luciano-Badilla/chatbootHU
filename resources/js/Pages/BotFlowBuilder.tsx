@@ -285,7 +285,7 @@ const CanvasBotNode = memo(function CanvasBotNode({ data }: NodeProps<FlowNode<C
         {hoveredItem === "auto-advance" ? (
           <div className="pointer-events-none absolute right-12 top-10 z-30">
             <div className="rounded-xl border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 shadow-lg">
-              {data.autoAdvanceEnabled ? "Desactivar autodisparo de siguiente nodo" : "Activar autodisparo de siguiente nodo"}
+              {data.autoAdvanceEnabled ? "Desactivar autodisparo de la salida" : "Activar autodisparo de la salida"}
             </div>
           </div>
         ) : null}
