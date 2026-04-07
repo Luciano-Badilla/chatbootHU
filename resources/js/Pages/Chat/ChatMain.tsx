@@ -6,6 +6,7 @@ import { Bot, ChevronDown, ChevronUp, FileText, Headset, Mic, Paperclip, Search,
 import { Button } from "shadcn/components/ui/button"
 import { Input } from "shadcn/components/ui/input"
 import { Avatar } from "shadcn/components/ui/avatar"
+import { Badge } from "shadcn/components/ui/badge"
 import type { Chat, Message } from "./ChatPanel"
 import { cn } from "shadcn/lib/utils"
 import mqtt from "mqtt"
@@ -775,14 +776,19 @@ export default function ChatMain({
 
   if (!chat) {
 
-  return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-center">
-          <h3 className="text-lg font-medium text-foreground mb-2">
-            Selecciona una conversación
+    return (
+      <div className="flex h-full items-center justify-center p-6">
+        <div className="w-full max-w-sm rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-8 text-center shadow-sm">
+          <div className="mb-3 flex justify-center">
+            <Badge variant="secondary" className="bg-[#dce8f5] text-[#013765]">
+              Chat vacio
+            </Badge>
+          </div>
+          <h3 className="mb-2 text-lg font-medium text-foreground">
+            Selecciona una conversacion
           </h3>
-          <p className="text-muted-foreground">
-            Elige un chat de la lista para comenzar a conversar
+          <p className="text-sm text-muted-foreground">
+            Elegi un chat de la lista para comenzar a conversar.
           </p>
         </div>
       </div>

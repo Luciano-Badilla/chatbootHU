@@ -674,12 +674,17 @@ export default function ChatInfo({
     </div>
   )
 
-    if (!chat) {
+  if (!chat) {
     return (
       <div className="flex items-center justify-center h-full p-4">
-        <div className="text-center">
-          <h3 className="text-lg font-medium text-foreground mb-2">Información del Chat</h3>
-          <p className="text-muted-foreground text-sm">Selecciona una conversación para ver los detalles</p>
+        <div className="w-full rounded-2xl border border-dashed border-gray-300 bg-white px-5 py-7 text-center shadow-sm">
+          <div className="mb-3 flex justify-center">
+            <Badge variant="secondary" className="bg-[#dce8f5] text-[#013765]">
+              Sin seleccion
+            </Badge>
+          </div>
+          <h3 className="mb-2 text-lg font-medium text-foreground">Informacion del chat</h3>
+          <p className="text-sm text-muted-foreground">Selecciona una conversacion para ver los detalles.</p>
         </div>
       </div>
     )

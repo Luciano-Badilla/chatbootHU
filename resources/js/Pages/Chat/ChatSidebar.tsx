@@ -131,7 +131,7 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
             placeholder="Buscar... nombre/numero"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="pl-10 bg-muted/50 border-gray-300 bg-gray-100 text-black"
+            className="pl-10 border-gray-300 bg-white text-black"
           />
         </div>
       </div>
@@ -235,9 +235,17 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
               )
             })
           ) : (
-            <p className="text-center text-sm text-muted-foreground mt-4">
-              No se encontraron conversaciones
-            </p>
+            <div className="mx-2 mt-4 rounded-2xl border border-dashed border-gray-300 bg-white px-4 py-6 text-center shadow-sm">
+              <div className="mb-3 flex justify-center">
+                <Badge variant="secondary" className="bg-[#dce8f5] text-[#013765]">
+                  Sin resultados
+                </Badge>
+              </div>
+              <p className="text-sm font-medium text-foreground">No se encontraron conversaciones</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Probá con otro nombre, número o fragmento del mensaje.
+              </p>
+            </div>
           )}
         </div>
       </div>
