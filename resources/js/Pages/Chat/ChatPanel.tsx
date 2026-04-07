@@ -55,7 +55,7 @@ export type Message = {
 }
 
 interface ChatPanelProps {
-  // Lista inicial de chats enviada desde Laravel vÃ­a Inertia.
+  // Lista inicial de chats enviada desde Laravel vía Inertia.
   chats: Chat[]
 }
 
@@ -113,7 +113,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     Number(selectedChat.operator_id) === Number(authUser?.id ?? 0),
   )
 
-  // ðŸ”¹ NUEVO: marcar como leÃ­dos al abrir el chat
+  // NUEVO: marcar como leídos al abrir el chat
   useEffect(() => {
     if (!selectedChatId) return
 
@@ -307,7 +307,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
                   lastMessage: data.lastMessage,
                   timestamp: data.timestamp,
                   unread:
-                    // si estÃ¡ abierto, siempre 0
+                    // si está abierto, siempre 0
                     chatId === selectedChatIdRef.current
                       ? 0
                       // si es un update duplicado, no sumamos
@@ -655,5 +655,4 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     </div>
   )
 }
-
 
