@@ -527,6 +527,7 @@ export default function BotFlowBuilder() {
   const [editNode, setEditNode] = useState<BotNode | null>(null)
   const lastSavedNodeSnapshotRef = useRef("")
   const messageTextareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const templateVariableOptionRefs = useRef<Array<HTMLButtonElement | null>>([])
 
   // Flow seleccionado
   const selectedFlow = useMemo(
@@ -597,6 +598,12 @@ export default function BotFlowBuilder() {
     if (!q) return templateVariableOptions
     return templateVariableOptions.filter((item) => item.key.toLowerCase().includes(q))
   }, [templateVariableOptions, templateVariableQuery])
+
+  useEffect(() => {
+    if (!templateVariableOpen) return
+    const current = templateVariableOptionRefs.current[templateVariableSelectedIndex]
+    current?.scrollIntoView({ block: "nearest" })
+  }, [templateVariableOpen, templateVariableSelectedIndex])
 
   const inputVariableValidation = useMemo(() => {
     if (!editNode || editNode.type !== "input") {
@@ -2104,12 +2111,20 @@ export default function BotFlowBuilder() {
                 className="border rounded-lg p-3 bg-muted/30 space-y-2"
               >
                 <div className="flex gap-2">
+                  <label className="flex-1 text-[11px] font-medium text-slate-600">
+                    ID
+                  </label>
+                  <label className="flex-1 text-[11px] font-medium text-slate-600">
+                    Texto de la opción
+                  </label>
+                </div>
+                <div className="flex gap-2">
                   <Input
                     value={btn.id ?? ""}
-                    onChange={(e) => updateButton(index, "id", e.target.value.slice(0, BUTTON_ID_MAX))}
+                    readOnly
                     placeholder="ID interno (ej: menu_horarios)"
                     maxLength={BUTTON_ID_MAX}
-                    className="text-xs"
+                    className="text-xs bg-slate-100 text-slate-500"
                   />
                   <Input
                     value={btn.title ?? ""}
@@ -2124,6 +2139,9 @@ export default function BotFlowBuilder() {
                   <span>Título {(btn.title ?? "").length}/{BUTTON_TITLE_MAX}</span>
                 </div>
 
+                <label className="block text-[11px] font-medium text-slate-600">
+                  Siguiente nodo
+                </label>
                 <div className="flex gap-2 items-center">
                   <Select
                     value={btn.next_node_id ? String(btn.next_node_id) : "none"}
@@ -2295,12 +2313,20 @@ export default function BotFlowBuilder() {
                 className="border rounded-lg p-3 bg-muted/30 space-y-2"
               >
                 <div className="flex gap-2">
+                  <label className="flex-1 text-[11px] font-medium text-slate-600">
+                    ID
+                  </label>
+                  <label className="flex-1 text-[11px] font-medium text-slate-600">
+                    Texto de la opción
+                  </label>
+                </div>
+                <div className="flex gap-2">
                   <Input
                     value={row.id ?? ""}
-                    onChange={(e) => updateRow(index, "id", e.target.value.slice(0, LIST_ROW_ID_MAX))}
+                    readOnly
                     placeholder="ID interno"
                     maxLength={LIST_ROW_ID_MAX}
-                    className="text-xs"
+                    className="text-xs bg-slate-100 text-slate-500"
                   />
                   <Input
                     value={row.title ?? ""}
@@ -2326,6 +2352,9 @@ export default function BotFlowBuilder() {
                   {(row.description ?? "").length}/{LIST_ROW_DESCRIPTION_MAX}
                 </p>
 
+                <label className="block text-[11px] font-medium text-slate-600">
+                  Siguiente nodo
+                </label>
                 <div className="flex gap-2 items-center mt-1">
                   <Select
                     value={row.next_node_id ? String(row.next_node_id) : "none"}
@@ -3312,7 +3341,7 @@ export default function BotFlowBuilder() {
                                   }
 
                                 >
-                                  <SelectTrigger className="h-8 text-xs">
+                                  <SelectTrigger className="h-9 text-xs">
                                     <SelectValue />
                                   </SelectTrigger>
                                   <SelectContent>
@@ -3364,12 +3393,22 @@ export default function BotFlowBuilder() {
                                     e.currentTarget.selectionStart,
                                   )
                                 }
-                                onKeyUp={(e) =>
+                                onKeyUp={(e) => {
+                                  if (
+                                    e.key === "ArrowDown" ||
+                                    e.key === "ArrowUp" ||
+                                    e.key === "Enter" ||
+                                    e.key === "Tab" ||
+                                    e.key === "Escape"
+                                  ) {
+                                    return
+                                  }
+
                                   updateTemplateVariableAutocomplete(
                                     e.currentTarget.value,
                                     e.currentTarget.selectionStart,
                                   )
-                                }
+                                }}
                                 onBlur={() => {
                                   setTimeout(() => setTemplateVariableOpen(false), 120)
                                 }}
@@ -3414,6 +3453,9 @@ export default function BotFlowBuilder() {
                                   <div className="max-h-56 overflow-y-auto py-1">
                                     {filteredTemplateVariableOptions.map((item, index) => (
                                       <button
+                                        ref={(el) => {
+                                          templateVariableOptionRefs.current[index] = el
+                                        }}
                                         key={`${item.kind}-${item.key}`}
                                         type="button"
                                         onMouseDown={(e) => e.preventDefault()}
@@ -3585,7 +3627,12 @@ export default function BotFlowBuilder() {
                             <Button
                               size="sm"
                               className="w-full text-xs bg-[#013765] hover:bg-[#024a8a] text-white"
-                              onClick={handleSaveNode}
+                              onClick={async () => {
+                                const saved = await handleSaveNode()
+                                if (saved) {
+                                  setSelectedNodeId(null)
+                                }
+                              }}
                               disabled={savingNode || !hasUnsavedChanges || !canSaveNode}
                             >
                               {savingNode ? "Guardando..." : "Guardar nodo"}
@@ -3994,8 +4041,3 @@ export default function BotFlowBuilder() {
     </div>
   )
 }
-
-
-
-
-
