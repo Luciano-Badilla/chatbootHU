@@ -80,6 +80,7 @@ interface TemplateVariableOption {
 interface CanvasNodeData extends Record<string, unknown> {
   label: string
   preview: string
+  type: NodeType
   typeLabel: string
   isStart: boolean
   isSelected: boolean
@@ -199,6 +200,8 @@ const CanvasBotNode = memo(function CanvasBotNode({ data }: NodeProps<FlowNode<C
         "relative min-w-[320px] max-w-[320px] rounded-2xl border bg-white px-3.5 py-3.5 shadow-[0_10px_30px_rgba(15,23,42,0.08)] transition-all",
         data.isStart
           ? "border-emerald-400 shadow-[0_0_0_2px_rgba(52,211,153,0.18),0_10px_30px_rgba(15,23,42,0.08)]"
+          : isAlephooNodeType(data.type)
+            ? "border-amber-400 bg-gradient-to-b from-amber-50/80 to-white shadow-[0_0_0_2px_rgba(251,191,36,0.18),0_10px_30px_rgba(15,23,42,0.08)]"
           : data.isSelected
             ? "border-[#013765] ring-2 ring-[#013765]/15"
             : "border-slate-200",
@@ -206,6 +209,11 @@ const CanvasBotNode = memo(function CanvasBotNode({ data }: NodeProps<FlowNode<C
     >
       {data.isStart ? (
         <div className="pointer-events-none absolute inset-x-5 top-0 h-1 rounded-b-full bg-emerald-400" />
+      ) : null}
+      {!data.isStart && isAlephooNodeType(data.type) ? (
+        <>
+          <div className="pointer-events-none absolute inset-x-5 top-0 h-1.5 rounded-b-full bg-amber-400" />
+        </>
       ) : null}
 
       <Handle
@@ -241,9 +249,16 @@ const CanvasBotNode = memo(function CanvasBotNode({ data }: NodeProps<FlowNode<C
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-slate-900">{data.label}</p>
-            <span className="mt-1 inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
-              {data.typeLabel}
-            </span>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+              <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
+                {data.typeLabel}
+              </span>
+              {isAlephooNodeType(data.type) ? (
+                <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+                  Impacta en Alephoo
+                </span>
+              ) : null}
+            </div>
           </div>
 
           <div className="flex items-center gap-1">
@@ -465,6 +480,10 @@ const getNodeTypeLabel = (type: NodeType) => {
   }
 }
 
+const isAlephooNodeType = (type: NodeType) => {
+  return type === "person_lookup"
+}
+
 const serializeNodeSnapshot = (node: BotNode | null) => {
   if (!node) return ""
 
@@ -486,7 +505,6 @@ export default function BotFlowBuilder() {
   const [savingNode, setSavingNode] = useState(false)
   const [creatingFlow, setCreatingFlow] = useState(false)
   const [creatingNode, setCreatingNode] = useState(false)
-  const [savingStartNode, setSavingStartNode] = useState(false)
   const [savingFlow, setSavingFlow] = useState(false)
   const [deletingFlowId, setDeletingFlowId] = useState<number | null>(null)
   const [deletingNodeId, setDeletingNodeId] = useState<number | null>(null)
@@ -522,6 +540,7 @@ export default function BotFlowBuilder() {
   const [newFlowName, setNewFlowName] = useState("")
   const [newNodeKey, setNewNodeKey] = useState("")
   const [editFlowName, setEditFlowName] = useState("")
+  const [editFlowStartNodeId, setEditFlowStartNodeId] = useState<number | null>(null)
 
   // Estado local editable del nodo
   const [editNode, setEditNode] = useState<BotNode | null>(null)
@@ -540,8 +559,11 @@ export default function BotFlowBuilder() {
   }, [editNode])
 
   const hasUnsavedFlowChanges = useMemo(() => {
-    return editFlowName.trim() !== (selectedFlow?.name ?? "")
-  }, [editFlowName, selectedFlow?.name])
+    return (
+      editFlowName.trim() !== (selectedFlow?.name ?? "") ||
+      editFlowStartNodeId !== (selectedFlow?.start_node_id ?? null)
+    )
+  }, [editFlowName, editFlowStartNodeId, selectedFlow?.name, selectedFlow?.start_node_id])
 
   const startNodeOptions = useMemo(() => {
     return nodes.map((n) => ({
@@ -746,7 +768,8 @@ export default function BotFlowBuilder() {
 
   useEffect(() => {
     setEditFlowName(selectedFlow?.name ?? "")
-  }, [selectedFlow?.id, selectedFlow?.name])
+    setEditFlowStartNodeId(selectedFlow?.start_node_id ?? null)
+  }, [selectedFlow?.id, selectedFlow?.name, selectedFlow?.start_node_id])
 
   useEffect(() => {
     setTemplateVariableOpen(false)
@@ -813,66 +836,58 @@ export default function BotFlowBuilder() {
     }
   }
 
-  const handleSetStartNode = async (nodeId: number | null) => {
-    if (!selectedFlowId) return
-
-    setSavingStartNode(true)
-    try {
-      const res = await fetch(`${API_BASE}/api/bot/flows/${selectedFlowId}/start-node`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start_node_id: nodeId }),
-      })
-
-      if (!res.ok) {
-        console.error("Error seteando start node", await res.text())
-        return
-      }
-
-      const data = await res.json()
-      const updatedFlow: BotFlow = data.flow ?? data
-
-      // actualizar flows local
-      setFlows((prev) => prev.map((f) => (f.id === updatedFlow.id ? { ...f, ...updatedFlow } : f)))
-
-      // opcional UX: si el usuario cambia start, seleccionamos ese nodo en el editor
-      if (nodeId) {
-        setSelectedNodeId(nodeId)
-      }
-    } catch (err) {
-      console.error("Error de red seteando start node:", err)
-    } finally {
-      setSavingStartNode(false)
-    }
-  }
-
   const handleSaveFlow = async () => {
     if (!selectedFlow) return
 
     const name = editFlowName.trim()
-    if (!name || name === selectedFlow.name) return
+    const startNodeId = editFlowStartNodeId ?? null
+    const nameChanged = name !== (selectedFlow.name ?? "")
+    const startNodeChanged = startNodeId !== (selectedFlow.start_node_id ?? null)
+    if (!name || (!nameChanged && !startNodeChanged)) return
 
     setSavingFlow(true)
     try {
-      const res = await fetch(`${API_BASE}/api/bot/flows/${selectedFlow.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name,
-          description: selectedFlow.description ?? null,
-        }),
-      })
+      let updatedFlow: BotFlow = selectedFlow
 
-      if (!res.ok) {
-        console.error("Error al guardar flow", await res.text())
-        return
+      if (nameChanged) {
+        const res = await fetch(`${API_BASE}/api/bot/flows/${selectedFlow.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name,
+            description: selectedFlow.description ?? null,
+          }),
+        })
+
+        if (!res.ok) {
+          console.error("Error al guardar flow", await res.text())
+          return
+        }
+
+        const data = await res.json()
+        updatedFlow = { ...updatedFlow, ...(data.flow ?? data) }
       }
 
-      const data = await res.json()
-      const updatedFlow: BotFlow = data.flow ?? data
+      if (startNodeChanged) {
+        const startNodeRes = await fetch(`${API_BASE}/api/bot/flows/${selectedFlow.id}/start-node`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ start_node_id: startNodeId }),
+        })
+
+        if (!startNodeRes.ok) {
+          console.error("Error seteando start node", await startNodeRes.text())
+          return
+        }
+
+        const startNodeData = await startNodeRes.json()
+        updatedFlow = { ...updatedFlow, ...(startNodeData.flow ?? startNodeData) }
+      }
 
       setFlows((prev) => prev.map((flow) => (flow.id === updatedFlow.id ? { ...flow, ...updatedFlow } : flow)))
       setEditFlowName(updatedFlow.name)
+      setEditFlowStartNodeId(updatedFlow.start_node_id ?? null)
+      setFlowConfigOpen(false)
     } catch (err) {
       console.error("Error de red guardando flow:", err)
     } finally {
@@ -1410,6 +1425,7 @@ export default function BotFlowBuilder() {
         data: {
           label: node.key || `node_${node.id}`,
           preview: getNodePreview(node),
+          type: node.type,
           typeLabel: getNodeTypeLabel(node.type),
           isStart: selectedFlow?.start_node_id === node.id,
           isSelected: selectedNodeId === node.id,
@@ -2723,6 +2739,18 @@ export default function BotFlowBuilder() {
               >
                 {getNodeTypeLabel(node.type)}
               </div>
+              {isAlephooNodeType(node.type) ? (
+                <div
+                  className={cn(
+                    "mt-1 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium",
+                    selectedNodeId === node.id
+                      ? "border-amber-300/40 bg-amber-400/10 text-amber-100"
+                      : "border-amber-200 bg-amber-50 text-amber-700",
+                  )}
+                >
+                  Alephoo
+                </div>
+              ) : null}
             </div>
 
             <div className="flex items-center gap-2">
@@ -2837,8 +2865,8 @@ export default function BotFlowBuilder() {
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-slate-100">
       {/* Barra superior estilo panel de mensajes */}
-      <div className="flex items-center justify-between px-4 py-3 bg-[#013765] text-white">
-        <div className="flex items-center gap-3">
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4 px-4 py-3 bg-[#013765] text-white">
+        <div className="flex items-center gap-2 justify-self-start">
           <Button
             variant="outline"
             className="h-8 w-8 shrink-0 border-white/20 bg-white/10 p-0 text-white hover:bg-white/20 hover:text-white"
@@ -2847,21 +2875,7 @@ export default function BotFlowBuilder() {
           >
             <ArrowLeft className="h-4 w-4" />
           </Button>
-          <div>
-            <h1 className="font-semibold text-lg flex items-center gap-2">
-              Constructor de flujo de bot
-              <span className="text-xs font-normal opacity-80">(árbol de decisiones)</span>
-            </h1>
-            {selectedFlow ? (
-              <p className="text-xs mt-1 opacity-80">
-                Editando flujo: <span className="font-semibold">{selectedFlow.name}</span>
-              </p>
-            ) : (
-              <p className="text-xs mt-1 opacity-80">Selecciona un flujo o crea uno nuevo.</p>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
+
           <HoverTooltip label="Ver flujos">
             <Button
               variant="outline"
@@ -2882,20 +2896,34 @@ export default function BotFlowBuilder() {
               <Settings2 className="h-4 w-4" />
             </Button>
           </HoverTooltip>
+        </div>
 
+        <div className="min-w-0 text-center">
+          <h1 className="flex items-center justify-center gap-2 text-lg font-semibold">
+            Constructor de flujo de bot
+          </h1>
+          {selectedFlow ? (
+            <p className="mt-1 text-xs opacity-80">
+              Editando flujo: <span className="font-semibold">{selectedFlow.name}</span>
+            </p>
+          ) : (
+            <p className="mt-1 text-xs opacity-80">Selecciona un flujo o crea uno nuevo.</p>
+          )}
+        </div>
+
+        <div className="justify-self-end">
           <HoverTooltip label="Abrir papelera">
             <Button
               variant="outline"
-              className="h-8 w-8 shrink-0 border-white/20 bg-white/10 p-0 text-white hover:bg-white/20 hover:text-white"
+              className="h-8 shrink-0 border-white/20 bg-white/10 px-3 text-white hover:bg-white/20 hover:text-white"
               onClick={() => setTrashOpen(true)}
             >
-              <Trash2 className="h-4 w-4" />
+              <Trash2 className="mr-1.5 h-4 w-4" />
+              <span className="text-xs">Papelera</span>
             </Button>
           </HoverTooltip>
         </div>
-
       </div>
-
       {flowsDrawerOpen && (
         <button
           type="button"
@@ -3196,9 +3224,9 @@ export default function BotFlowBuilder() {
                               </label>
                               <div className="relative">
                                 <Select
-                                  value={selectedFlow.start_node_id ? String(selectedFlow.start_node_id) : "none"}
-                                  onValueChange={(val) => handleSetStartNode(val === "none" ? null : Number(val))}
-                                  disabled={savingStartNode || nodes.length === 0}
+                                  value={editFlowStartNodeId ? String(editFlowStartNodeId) : "none"}
+                                  onValueChange={(val) => setEditFlowStartNodeId(val === "none" ? null : Number(val))}
+                                  disabled={savingFlow || nodes.length === 0}
                                 >
                                   <SelectTrigger className="h-8 text-xs pr-8">
                                     <SelectValue placeholder="Elegí nodo..." />
@@ -3213,7 +3241,7 @@ export default function BotFlowBuilder() {
                                   </SelectContent>
                                 </Select>
 
-                                {savingStartNode && (
+                                {savingFlow && (
                                   <div className="absolute right-2 top-1/2 -translate-y-1/2">
                                     <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-500" />
                                   </div>
@@ -3349,10 +3377,22 @@ export default function BotFlowBuilder() {
                                     <SelectItem value="buttons">Botones</SelectItem>
                                     <SelectItem value="list">Lista</SelectItem>
                                     <SelectItem value="input">Capturar dato</SelectItem>
-                                    <SelectItem value="person_lookup">Buscar datos personales por DNI</SelectItem>
+                                    <SelectItem value="person_lookup">
+                                      <div className="flex w-full items-center justify-between gap-2">
+                                        <span>Buscar datos personales por DNI</span>
+                                        <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+                                          Alephoo
+                                        </span>
+                                      </div>
+                                    </SelectItem>
                                     <SelectItem value="handoff">Desactivar bot y pasar a operador</SelectItem>
                                   </SelectContent>
                                 </Select>
+                                {isAlephooNodeType(editNode.type) ? (
+                                  <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                                    Este nodo consulta Alephoo. Conviene editarlo con cuidado.
+                                  </div>
+                                ) : null}
                               </div>
                             </div>
 
