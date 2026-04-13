@@ -3,6 +3,7 @@
 use App\Http\Controllers\BotFlowController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\ChatMediaController;
+use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\WhatsAppController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -27,6 +28,8 @@ Route::post('/message/send', [WhatsAppController::class, 'sendMessage']);
 Route::post('/message/send-media', [WhatsAppController::class, 'sendMedia']);
 Route::post('/chats/{chat}/bot', [WhatsAppController::class, 'updateBotStatus']);
 Route::post('/chats/{chat}/operator', [ChatController::class, 'updateOperator']);
+Route::post('/settings/general', [SettingsController::class, 'saveGeneral']);
+Route::post('/settings/integrations', [SettingsController::class, 'saveIntegrations']);
 
 Route::get('/bot/flows', [BotFlowController::class, 'apiIndex']);
 Route::get('/bot/trash', [BotFlowController::class, 'trash']);

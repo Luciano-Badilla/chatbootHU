@@ -2,28 +2,30 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
-use Illuminate\Support\Env;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Storage;
-use App\Models\Contact;
-use App\Models\Chat;
-use App\Models\Message;
-use PhpMqtt\Client\MqttClient;
-use PhpMqtt\Client\Exceptions\MqttClientException;
 use App\Models\BotFlow;
 use App\Models\BotNode;
+use App\Models\Chat;
+use App\Models\Contact;
+use App\Models\Message;
+use App\Models\SystemSetting;
 use Carbon\Carbon;
+use Illuminate\Http\Request;
+use Illuminate\Support\Env;
 use Illuminate\Support\Facades\DB;
-
-
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
+use PhpMqtt\Client\Exceptions\MqttClientException;
+use PhpMqtt\Client\MqttClient;
 
 class WhatsAppController extends Controller
 {
+    private ?array $runtimeSettingsCache = null;
+
     public function verify(Request $request)
     {
-        $verifyToken = env('WHATSAPP_VERIFY_TOKEN');
+        $verifyToken = $this->whatsappVerifyToken();
 
         $mode = $request->query('hub_mode');
         $token = $request->query('hub_verify_token');
@@ -236,7 +238,7 @@ class WhatsAppController extends Controller
 
         if ($mediaUrl) {
             try {
-                $accessToken = env('WHATSAPP_ACCESS_TOKEN');
+                $accessToken = $this->whatsappAccessToken();
                 $fileResponse = Http::withToken($accessToken)->get($mediaUrl);
 
                 if ($fileResponse->successful()) {
@@ -441,8 +443,8 @@ class WhatsAppController extends Controller
         $originalName = (string) ($file->getClientOriginalName() ?? ('file_' . uniqid()));
         $sniff = $this->sniffAudioContainer($file->getRealPath());
 
-        $accessToken = env('WHATSAPP_ACCESS_TOKEN');
-        $phoneId = env('WHATSAPP_PHONE_ID');
+        $accessToken = $this->whatsappAccessToken();
+        $phoneId = $this->whatsappPhoneId();
         $phoneNumber = $this->formatPhoneNumber($contact->whatsapp_id);
 
         if ($messageType === 'audio') {
@@ -733,8 +735,8 @@ class WhatsAppController extends Controller
             throw new \RuntimeException('Contacto sin whatsapp_id');
         }
 
-        $accessToken = env('WHATSAPP_ACCESS_TOKEN');
-        $url = 'https://graph.facebook.com/v22.0/' . env('WHATSAPP_PHONE_ID') . '/messages';
+        $accessToken = $this->whatsappAccessToken();
+        $url = 'https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages';
         Log::info($url);
 
         $phoneNumber = $this->formatPhoneNumber($contact->whatsapp_id);
@@ -1191,85 +1193,95 @@ class WhatsAppController extends Controller
             $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos porque falta el DNI.');
             $targetNextNodeId = $settings['error_next_node_id'] ?? null;
         } else {
-            $apiBase = rtrim((string) env('HOSPITAL_PERSON_API_BASE', 'http://172.22.118.103/apiturnos/public/api/v1/personas'), '/');
-            $apiKey = (string) env('HOSPITAL_PERSON_API_KEY', 'Turnos2025');
+            $lookupUrl = $this->alephooPersonLookupUrl($dni);
+            $apiKey = $this->alephooApiKey();
 
-            try {
-                $response = Http::timeout(100000)
-                    ->acceptJson()
-                    ->withHeaders([
-                        'X-API-KEY' => $apiKey,
-                    ])
-                    ->get("{$apiBase}/{$dni}");
+            if (!$this->isAlephooEndpointEnabled('/personas/{dni}')) {
+                $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'endpoint_disabled']));
+                $messageToSend = (string) ($settings['error_message'] ?? 'La consulta de datos personales no esta habilitada en este momento.');
+                $targetNextNodeId = $settings['error_next_node_id'] ?? null;
+            } elseif ($lookupUrl === '' || $apiKey === '') {
+                $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'misconfigured']));
+                $messageToSend = (string) ($settings['error_message'] ?? 'La integracion con Alephoo no esta configurada correctamente.');
+                $targetNextNodeId = $settings['error_next_node_id'] ?? null;
+            } else {
+                try {
+                    $response = Http::timeout($this->alephooTimeout())
+                        ->acceptJson()
+                        ->withHeaders([
+                            'X-API-KEY' => $apiKey,
+                        ])
+                        ->get($lookupUrl);
 
-                Log::info('Hospital API person lookup response', [
-                    'chat_id' => $chat->id,
-                    'node_id' => $node->id,
-                    'dni' => $dni,
-                    'url' => "{$apiBase}/{$dni}",
-                    'status' => $response->status(),
-                    'ok' => $response->successful(),
-                    'json' => $response->json(),
-                    'body' => $response->body(),
-                ]);
+                    Log::info('Hospital API person lookup response', [
+                        'chat_id' => $chat->id,
+                        'node_id' => $node->id,
+                        'dni' => $dni,
+                        'url' => $lookupUrl,
+                        'status' => $response->status(),
+                        'ok' => $response->successful(),
+                        'json' => $response->json(),
+                        'body' => $response->body(),
+                    ]);
 
-                if ($response->successful()) {
-                    $payload = $response->json();
-                    $person = is_array($payload) && isset($payload[0]) && is_array($payload[0]) ? $payload[0] : null;
+                    if ($response->successful()) {
+                        $payload = $response->json();
+                        $person = is_array($payload) && isset($payload[0]) && is_array($payload[0]) ? $payload[0] : null;
 
-                    if ($person) {
-                        $this->setVars($chat, array_merge($baseVars, [
-                            'persona_encontrada' => true,
-                            'persona_lookup_status' => 'found',
-                            'persona_id' => $person['id'] ?? null,
-                            'persona_nombres' => $person['nombres'] ?? null,
-                            'persona_apellidos' => $person['apellidos'] ?? null,
-                            'persona_documento' => $person['documento'] ?? null,
-                            'persona_fecha_nacimiento' => $person['fecha_nacimiento'] ?? null,
-                            'persona_genero' => $person['genero'] ?? null,
-                            'persona_obra_social' => $person['obra_social'] ?? null,
-                            'persona_obra_social_id' => $person['obra_social_id'] ?? null,
-                            'persona_plan_id' => $person['plan_id'] ?? null,
-                            'persona_email' => $person['email'] ?? null,
-                            'persona_contacto_telefono' => $person['contacto_telefono'] ?? null,
-                            'persona_contacto_telefono_2' => $person['contacto_telefono_2'] ?? null,
-                            'persona_planes_activos' => is_array($person['planes_activos'] ?? null) ? $person['planes_activos'] : [],
-                        ]));
+                        if ($person) {
+                            $this->setVars($chat, array_merge($baseVars, [
+                                'persona_encontrada' => true,
+                                'persona_lookup_status' => 'found',
+                                'persona_id' => $person['id'] ?? null,
+                                'persona_nombres' => $person['nombres'] ?? null,
+                                'persona_apellidos' => $person['apellidos'] ?? null,
+                                'persona_documento' => $person['documento'] ?? null,
+                                'persona_fecha_nacimiento' => $person['fecha_nacimiento'] ?? null,
+                                'persona_genero' => $person['genero'] ?? null,
+                                'persona_obra_social' => $person['obra_social'] ?? null,
+                                'persona_obra_social_id' => $person['obra_social_id'] ?? null,
+                                'persona_plan_id' => $person['plan_id'] ?? null,
+                                'persona_email' => $person['email'] ?? null,
+                                'persona_contacto_telefono' => $person['contacto_telefono'] ?? null,
+                                'persona_contacto_telefono_2' => $person['contacto_telefono_2'] ?? null,
+                                'persona_planes_activos' => is_array($person['planes_activos'] ?? null) ? $person['planes_activos'] : [],
+                            ]));
 
-                        $messageToSend = $node->body ? $this->renderTemplate($node->body, $chat, $node) : null;
-                        $targetNextNodeId = $node->next_node_id;
-                    } else {
+                            $messageToSend = $node->body ? $this->renderTemplate($node->body, $chat, $node) : null;
+                            $targetNextNodeId = $node->next_node_id;
+                        } else {
+                            $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'not_found']));
+                            $messageToSend = (string) ($settings['not_found_message'] ?? 'No encontramos datos personales para el DNI ingresado.');
+                            $targetNextNodeId = $settings['not_found_next_node_id'] ?? null;
+                        }
+                    } elseif ($response->status() === 404) {
                         $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'not_found']));
                         $messageToSend = (string) ($settings['not_found_message'] ?? 'No encontramos datos personales para el DNI ingresado.');
                         $targetNextNodeId = $settings['not_found_next_node_id'] ?? null;
+                    } else {
+                        $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'error']));
+                        $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos en este momento.');
+                        $targetNextNodeId = $settings['error_next_node_id'] ?? null;
+
+                        Log::warning('Hospital API person lookup error response', [
+                            'chat_id' => $chat->id,
+                            'node_id' => $node->id,
+                            'dni' => $dni,
+                            'status' => $response->status(),
+                            'body' => $response->body(),
+                        ]);
                     }
-                } elseif ($response->status() === 404) {
-                    $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'not_found']));
-                    $messageToSend = (string) ($settings['not_found_message'] ?? 'No encontramos datos personales para el DNI ingresado.');
-                    $targetNextNodeId = $settings['not_found_next_node_id'] ?? null;
-                } else {
+                } catch (\Throwable $e) {
                     $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'error']));
                     $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos en este momento.');
                     $targetNextNodeId = $settings['error_next_node_id'] ?? null;
 
-                    Log::warning('Hospital API person lookup error response', [
+                    Log::error('Hospital API person lookup failed: ' . $e->getMessage(), [
                         'chat_id' => $chat->id,
                         'node_id' => $node->id,
                         'dni' => $dni,
-                        'status' => $response->status(),
-                        'body' => $response->body(),
                     ]);
                 }
-            } catch (\Throwable $e) {
-                $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'error']));
-                $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos en este momento.');
-                $targetNextNodeId = $settings['error_next_node_id'] ?? null;
-
-                Log::error('Hospital API person lookup failed: ' . $e->getMessage(), [
-                    'chat_id' => $chat->id,
-                    'node_id' => $node->id,
-                    'dni' => $dni,
-                ]);
             }
         }
 
@@ -1301,8 +1313,8 @@ class WhatsAppController extends Controller
             return;
         }
 
-        $accessToken = env('WHATSAPP_ACCESS_TOKEN');
-        $url = 'https://graph.facebook.com/v22.0/' . env('WHATSAPP_PHONE_ID') . '/messages';
+        $accessToken = $this->whatsappAccessToken();
+        $url = 'https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages';
         $phoneNumber = $this->formatPhoneNumber($contact->whatsapp_id);
 
         $waButtons = $this->normalizeWhatsAppReplyButtons($buttons, $chat, $node);
@@ -1444,8 +1456,8 @@ class WhatsAppController extends Controller
             return;
         }
 
-        $accessToken = env('WHATSAPP_ACCESS_TOKEN');
-        $url = 'https://graph.facebook.com/v22.0/' . env('WHATSAPP_PHONE_ID') . '/messages';
+        $accessToken = $this->whatsappAccessToken();
+        $url = 'https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages';
 
         $phoneNumber = $this->formatPhoneNumber($contact->whatsapp_id);
 
@@ -1894,5 +1906,119 @@ class WhatsAppController extends Controller
             'trim' => trim($value),
             default => $value, // pipes desconocidos: no hacen nada
         };
+    }
+
+    private function runtimeSetting(string $key, ?string $fallback = null): ?string
+    {
+        if ($this->runtimeSettingsCache === null) {
+            $this->runtimeSettingsCache = [];
+
+            try {
+                if (Schema::hasTable('system_settings')) {
+                    $this->runtimeSettingsCache = SystemSetting::query()
+                        ->whereIn('key', [
+                            'integrations.whatsapp.token',
+                            'integrations.whatsapp.phone_number_id',
+                            'integrations.whatsapp.webhook_verify_token',
+                            'integrations.alephoo.base_url',
+                            'integrations.alephoo.api_key',
+                            'integrations.alephoo.timeout',
+                            'integrations.alephoo.enabled_endpoints',
+                        ])
+                        ->pluck('value', 'key')
+                        ->toArray();
+                }
+            } catch (\Throwable $e) {
+                $this->runtimeSettingsCache = [];
+            }
+        }
+
+        $value = $this->runtimeSettingsCache[$key] ?? null;
+        if (is_string($value) && trim($value) !== '') {
+            return $value;
+        }
+
+        return $fallback;
+    }
+
+    private function whatsappAccessToken(): string
+    {
+        return (string) $this->runtimeSetting('integrations.whatsapp.token', env('WHATSAPP_ACCESS_TOKEN', ''));
+    }
+
+    private function whatsappPhoneId(): string
+    {
+        return (string) $this->runtimeSetting('integrations.whatsapp.phone_number_id', env('WHATSAPP_PHONE_ID', ''));
+    }
+
+    private function whatsappVerifyToken(): string
+    {
+        return (string) $this->runtimeSetting('integrations.whatsapp.webhook_verify_token', env('WHATSAPP_VERIFY_TOKEN', ''));
+    }
+
+    private function alephooBaseUrl(): string
+    {
+        return rtrim((string) $this->runtimeSetting(
+            'integrations.alephoo.base_url',
+            env('HOSPITAL_PERSON_API_BASE', 'http://172.22.118.103/apiturnos/public/api/v1/personas')
+        ), '/');
+    }
+
+    private function alephooApiKey(): string
+    {
+        return (string) $this->runtimeSetting('integrations.alephoo.api_key', env('HOSPITAL_PERSON_API_KEY', 'Turnos2025'));
+    }
+
+    private function alephooTimeout(): int
+    {
+        $timeout = (int) $this->runtimeSetting('integrations.alephoo.timeout', '30');
+
+        return max(1, min(300, $timeout));
+    }
+
+    private function alephooPersonLookupUrl(string $dni): string
+    {
+        $baseUrl = $this->alephooBaseUrl();
+        if ($baseUrl === '') {
+            return '';
+        }
+
+        if (str_ends_with($baseUrl, '/personas')) {
+            return $baseUrl . '/' . urlencode($dni);
+        }
+
+        return $baseUrl . '/personas/' . urlencode($dni);
+    }
+
+    private function isAlephooEndpointEnabled(string $endpoint): bool
+    {
+        $raw = (string) $this->runtimeSetting('integrations.alephoo.enabled_endpoints', '');
+        $lines = array_values(array_filter(array_map(
+            fn($line) => trim(str_replace('\\', '/', (string) $line)),
+            preg_split('/\r\n|\r|\n/', $raw) ?: []
+        )));
+
+        if (empty($lines)) {
+            return true;
+        }
+
+        $normalizedEndpoint = '/' . ltrim(str_replace('\\', '/', trim($endpoint)), '/');
+
+        foreach ($lines as $line) {
+            $normalizedLine = '/' . ltrim($line, '/');
+
+            if ($normalizedLine === $normalizedEndpoint) {
+                return true;
+            }
+
+            if (str_ends_with($normalizedLine, '/*')) {
+                $prefix = substr($normalizedLine, 0, -1);
+                if (str_starts_with($normalizedEndpoint, $prefix)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 }

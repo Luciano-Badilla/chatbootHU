@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\WhatsAppController;
 use App\Models\Chat;
 use App\Models\Message;
@@ -39,6 +40,9 @@ Route::middleware('auth')->group(function () {
     Route::get('/chat-panel', [ChatController::class, 'index']);
 
     Route::get('/bot/flows', [BotFlowController::class, 'index']);
+    Route::get('/settings-panel', [SettingsController::class, 'index']);
+    Route::put('/settings-panel/general', [SettingsController::class, 'saveGeneral']);
+    Route::post('/settings-panel/general', [SettingsController::class, 'saveGeneral']);
     
 
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');

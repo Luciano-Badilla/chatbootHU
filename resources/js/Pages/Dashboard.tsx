@@ -130,6 +130,17 @@ export default function Dashboard() {
                 variant="outline"
                 className="w-full justify-start border-[#013765] text-[#013765] hover:bg-[#f0f4f8]"
                 size="lg"
+                onClick={() =>
+                  (window.location.href = `${import.meta.env.VITE_APP_URL}/settings-panel`)
+                }
+              >
+                <Settings className="h-5 w-5 mr-3" />
+                Abrir Configuración
+              </Button>
+              <Button
+                variant="outline"
+                className="w-full justify-start border-[#013765] text-[#013765] hover:bg-[#f0f4f8]"
+                size="lg"
               >
                 <Users className="h-5 w-5 mr-3" />
                 Gestionar Usuarios
