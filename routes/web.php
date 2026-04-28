@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\AuditController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\WhatsAppController;
 use App\Models\Chat;
@@ -39,10 +40,11 @@ Route::middleware('auth')->group(function () {
     // routes/web.php
     Route::get('/chat-panel', [ChatController::class, 'index']);
 
-    Route::get('/bot/flows', [BotFlowController::class, 'index']);
-    Route::get('/settings-panel', [SettingsController::class, 'index']);
-    Route::put('/settings-panel/general', [SettingsController::class, 'saveGeneral']);
-    Route::post('/settings-panel/general', [SettingsController::class, 'saveGeneral']);
+    Route::get('/bot/flows', [BotFlowController::class, 'index'])->middleware('permission:can_view_flows');
+    Route::get('/settings-panel', [SettingsController::class, 'index'])->middleware('permission:can_manage_settings');
+    Route::get('/audit-panel', [AuditController::class, 'index'])->middleware('permission:can_view_audit');
+    Route::put('/settings-panel/general', [SettingsController::class, 'saveGeneral'])->middleware('permission:can_manage_settings');
+    Route::post('/settings-panel/general', [SettingsController::class, 'saveGeneral'])->middleware('permission:can_manage_settings');
     
 
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');

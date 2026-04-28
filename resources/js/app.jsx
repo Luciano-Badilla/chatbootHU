@@ -1,6 +1,7 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import { createInertiaApp } from '@inertiajs/react'
+import { Toaster } from 'sonner'
 
 createInertiaApp({
   resolve: (name) => {
@@ -14,6 +15,18 @@ createInertiaApp({
     return page().then((module) => module.default)
   },
   setup({ el, App, props }) {
-    createRoot(el).render(<App {...props} />)
+    createRoot(el).render(
+      <>
+        <App {...props} />
+        <Toaster
+          position="top-right"
+          richColors
+          closeButton
+          toastOptions={{
+            className: 'font-sans',
+          }}
+        />
+      </>,
+    )
   },
 })

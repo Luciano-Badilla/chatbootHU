@@ -12,12 +12,13 @@ use Inertia\Inertia;
 
 class BotFlowController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
         $flows = BotFlow::orderBy('id')->get();
 
         return Inertia::render('BotFlowBuilder', [
-            'flows' => $flows
+            'flows' => $flows,
+            'readOnly' => !$request->user()?->hasPermission('can_manage_flows'),
         ]);
     }
 

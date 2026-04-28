@@ -8,7 +8,7 @@ use App\Models\Chat;
 use App\Models\Contact;
 use App\Models\Message;
 use App\Models\SystemSetting;
-use Carbon\Carbon;
+use App\Services\BotInactivityService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Env;
 use Illuminate\Support\Facades\DB;
@@ -22,6 +22,10 @@ use PhpMqtt\Client\MqttClient;
 class WhatsAppController extends Controller
 {
     private ?array $runtimeSettingsCache = null;
+
+    public function __construct(private readonly BotInactivityService $botInactivityService)
+    {
+    }
 
     public function verify(Request $request)
     {
@@ -209,14 +213,8 @@ class WhatsAppController extends Controller
             // 1) Asegurar que use flow default y que tenga nodo
             $flow = $this->ensureChatUsesDefaultFlow($chat) ?? $flow;
 
-            // 2) Reset por timeout 24hs (ANTES de procesar el bot)
-            if ($this->shouldResetByTimeout($chat, 24)) {
-
-                // si estaba en handoff, con este reset también se reactiva (bot_enabled=true)
-                $reason = $chat->bot_enabled ? 'timeout_24h' : 'handoff_timeout_24h';
-
-                $this->resetChatToStartFromFlow($chat, $flow, $reason);
-            }
+            // 2) Reset por timeout configurable (ANTES de procesar el bot)
+            $this->botInactivityService->processExpiredChat($chat, $flow);
 
 
             // 3) Actualizar última interacción del usuario (entrante)
@@ -1568,14 +1566,6 @@ class WhatsAppController extends Controller
         $chat->save();
     }
 
-    private function shouldResetByTimeout(Chat $chat, int $hours = 24): bool
-    {
-        if (!$chat->last_user_message_at)
-            return false;
-
-        return Carbon::parse($chat->last_user_message_at)->diffInHours(now()) >= $hours;
-    }
-
     private function resetChatToStartFromFlow(Chat $chat, BotFlow $flow, string $reason = null): void
     {
         if (!$flow->start_node_id)
@@ -1924,6 +1914,8 @@ class WhatsAppController extends Controller
                             'integrations.alephoo.api_key',
                             'integrations.alephoo.timeout',
                             'integrations.alephoo.enabled_endpoints',
+                            'bot.inactivity_timeout_minutes',
+                            'bot.inactivity_timeout_message',
                         ])
                         ->pluck('value', 'key')
                         ->toArray();

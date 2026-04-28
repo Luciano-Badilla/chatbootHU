@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\BotFlowController;
+use App\Http\Controllers\AuditController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\ChatMediaController;
 use App\Http\Controllers\SettingsController;
@@ -21,30 +22,60 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/webhook', [WhatsAppController::class, 'verify']);
 Route::post('/webhook', [WhatsAppController::class, 'receiveMessage']);
-Route::post('/message/markAsRead/{chatId}', [ChatController::class, 'markAsReadMessages']);
-Route::get('/chat/messages/{chatId}', [ChatController::class, 'getMessages']);
-Route::get('/chats/snapshot', [ChatController::class, 'snapshot']);
-Route::post('/message/send', [WhatsAppController::class, 'sendMessage']);
-Route::post('/message/send-media', [WhatsAppController::class, 'sendMedia']);
-Route::post('/chats/{chat}/bot', [WhatsAppController::class, 'updateBotStatus']);
-Route::post('/chats/{chat}/operator', [ChatController::class, 'updateOperator']);
-Route::post('/settings/general', [SettingsController::class, 'saveGeneral']);
-Route::post('/settings/integrations', [SettingsController::class, 'saveIntegrations']);
 
-Route::get('/bot/flows', [BotFlowController::class, 'apiIndex']);
-Route::get('/bot/trash', [BotFlowController::class, 'trash']);
-Route::post('/bot/flows', [BotFlowController::class, 'store']);
-Route::put('/bot/flows/{flow}', [BotFlowController::class, 'updateFlow']);
-Route::delete('/bot/flows/{flow}', [BotFlowController::class, 'destroyFlow']);
-Route::post('/bot/flows/{flowId}/restore', [BotFlowController::class, 'restoreFlow']);
-Route::post('/bot/flows/{flow}/make-default', [BotFlowController::class, 'makeDefault']);
-Route::put('/bot/flows/{flow}/start-node', [BotFlowController::class, 'setStartNode']);
-Route::get('/bot/flows/{flow}/nodes', [BotFlowController::class, 'nodes']);
-Route::post('/bot/flows/{flow}/nodes', [BotFlowController::class, 'storeNode']);
-Route::put('/bot/nodes/{node}', [BotFlowController::class, 'updateNode']);
-Route::delete('/bot/nodes/{node}', [BotFlowController::class, 'destroyNode']);
-Route::post('/bot/nodes/{nodeId}/restore', [BotFlowController::class, 'restoreNode']);
-Route::get('/chats/{chat}/media', [ChatMediaController::class, 'index']);
+$sessionAuthenticated = [
+    \App\Http\Middleware\EncryptCookies::class,
+    \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
+    \Illuminate\Session\Middleware\StartSession::class,
+    \App\Http\Middleware\Authenticate::class,
+];
+
+Route::middleware($sessionAuthenticated)->group(function () {
+    Route::post('/message/markAsRead/{chatId}', [ChatController::class, 'markAsReadMessages']);
+    Route::get('/chat/messages/{chatId}', [ChatController::class, 'getMessages']);
+    Route::get('/chats/snapshot', [ChatController::class, 'snapshot']);
+    Route::post('/message/send', [WhatsAppController::class, 'sendMessage']);
+    Route::post('/message/send-media', [WhatsAppController::class, 'sendMedia']);
+    Route::post('/chats/{chat}/bot', [WhatsAppController::class, 'updateBotStatus'])->middleware('permission:can_toggle_bot');
+    Route::post('/chats/{chat}/operator', [ChatController::class, 'updateOperator'])->middleware('permission:can_assign_chats');
+    Route::get('/chats/{chat}/media', [ChatMediaController::class, 'index']);
+
+    Route::middleware('permission:can_view_audit')->group(function () {
+        Route::get('/audit/logs', [AuditController::class, 'logs']);
+        Route::get('/audit/logs/tail', [AuditController::class, 'applicationLogs']);
+    });
+
+    Route::middleware('permission:can_manage_settings')->group(function () {
+        Route::get('/settings/export', [SettingsController::class, 'exportConfiguration']);
+        Route::post('/settings/import', [SettingsController::class, 'importConfiguration']);
+        Route::post('/settings/general', [SettingsController::class, 'saveGeneral']);
+        Route::post('/settings/integrations', [SettingsController::class, 'saveIntegrations']);
+        Route::post('/settings/bot', [SettingsController::class, 'saveBot']);
+    });
+
+    Route::middleware('permission:can_manage_users')->group(function () {
+        Route::put('/settings/users/{user}/role', [SettingsController::class, 'updateUserRole']);
+    });
+
+    Route::middleware('permission:can_view_flows')->group(function () {
+        Route::get('/bot/flows', [BotFlowController::class, 'apiIndex']);
+        Route::get('/bot/trash', [BotFlowController::class, 'trash']);
+        Route::get('/bot/flows/{flow}/nodes', [BotFlowController::class, 'nodes']);
+    });
+
+    Route::middleware('permission:can_manage_flows')->group(function () {
+        Route::post('/bot/flows', [BotFlowController::class, 'store']);
+        Route::put('/bot/flows/{flow}', [BotFlowController::class, 'updateFlow']);
+        Route::delete('/bot/flows/{flow}', [BotFlowController::class, 'destroyFlow']);
+        Route::post('/bot/flows/{flowId}/restore', [BotFlowController::class, 'restoreFlow']);
+        Route::post('/bot/flows/{flow}/make-default', [BotFlowController::class, 'makeDefault']);
+        Route::put('/bot/flows/{flow}/start-node', [BotFlowController::class, 'setStartNode']);
+        Route::post('/bot/flows/{flow}/nodes', [BotFlowController::class, 'storeNode']);
+        Route::put('/bot/nodes/{node}', [BotFlowController::class, 'updateNode']);
+        Route::delete('/bot/nodes/{node}', [BotFlowController::class, 'destroyNode']);
+        Route::post('/bot/nodes/{nodeId}/restore', [BotFlowController::class, 'restoreNode']);
+    });
+});
 
 
 

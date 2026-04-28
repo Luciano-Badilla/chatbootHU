@@ -19,13 +19,15 @@ class Chat extends Model
         'bot_enabled',
         'operator_id',
         'bot_step',
-        'bot_state'
+        'bot_state',
+        'last_user_message_at',
     ];
 
 
     protected $casts = [
         'bot_enabled' => 'boolean',
         'bot_state' => 'array',
+        'last_user_message_at' => 'datetime',
     ];
 
     public function contact()

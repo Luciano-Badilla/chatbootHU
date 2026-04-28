@@ -3,27 +3,22 @@ import { Button } from "shadcn/components/ui/button"
 import { Badge } from "shadcn/components/ui/badge"
 import { MessageSquare, Users, BarChart3, Settings, Bell, FileText, Plus } from "lucide-react"
 
-// Vista principal del Dashboard de la SPA (React + Inertia + Laravel) ES TODO PLACEHOLDER no son datos reales
+// Vista principal del Dashboard de la SPA (React + Inertia + Laravel). Todo es placeholder.
 export default function Dashboard() {
   return (
     <div className="min-h-screen bg-[#f4f8fb]">
-      {/* Header del Dashboard */}
       <header className="border-b border-[#dbe5ef] bg-[#013765] backdrop-blur-sm">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
-              <div className="h-8 w-8 rounded-lg bg-white flex items-center justify-center">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white">
                 <MessageSquare className="h-4 w-4 text-[#013765]" />
               </div>
               <h1 className="text-xl font-semibold text-white">Dashboard</h1>
             </div>
             <div className="flex items-center space-x-3">
-              {/* 
-                Botón genérico de "Nuevo".
-                Actualmente solo UI; si se desea, acá se puede conectar con alguna ruta de Inertia o acción concreta.
-              */}
               <Button variant="outline" size="sm" className="border-white text-white hover:bg-[#024a8a]">
-                <Plus className="h-4 w-4 mr-2" />
+                <Plus className="mr-2 h-4 w-4" />
                 Nuevo
               </Button>
               <Button variant="ghost" size="sm" className="text-white hover:bg-[#024a8a]">
@@ -38,11 +33,7 @@ export default function Dashboard() {
       </header>
 
       <div className="container mx-auto px-6 py-8">
-        {/* Tarjetas de métricas principales.
-           Actualmente los datos son estáticos (placeholders).
-           Se pueden reemplazar por valores reales viniendo desde Laravel vía Inertia (props).
-        */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <div className="mb-8 grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
           <Card className="bg-white">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium text-[#013765]">Mensajes Totales</CardTitle>
@@ -88,15 +79,10 @@ export default function Dashboard() {
           </Card>
         </div>
 
-        {/* Acciones rápidas:
-           El botón principal navega al panel de chat.
-           Se arma la URL usando la variable de entorno de Vite (VITE_APP_URL),
-           que debe apuntar al dominio/base URL configurado en Laravel.
-        */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        <div className="mb-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
           <Card className="bg-white">
             <CardHeader>
-              <CardTitle className="text-[#013765]">Acciones Rápidas</CardTitle>
+              <CardTitle className="text-[#013765]">Acciones Rapidas</CardTitle>
               <CardDescription className="text-[#013765]/70">
                 Accede a las funciones principales del sistema
               </CardDescription>
@@ -105,71 +91,72 @@ export default function Dashboard() {
               <Button
                 className="w-full justify-start bg-[#013765] text-white hover:bg-[#024a8a]"
                 size="lg"
-                onClick={() =>
-                  (window.location.href = `${import.meta.env.VITE_APP_URL}/chat-panel`)
-                }
+                onClick={() => (window.location.href = `${import.meta.env.VITE_APP_URL}/chat-panel`)}
               >
-                <MessageSquare className="h-5 w-5 mr-3" />
+                <MessageSquare className="mr-3 h-5 w-5" />
                 Abrir Panel de Mensajes
               </Button>
 
-              {/* Estos botones son sólo UI por ahora.
-                 Se pueden enlazar a rutas de Inertia (por ejemplo route('users.index')) si se definen en Laravel.
-              */}
               <Button
                 className="w-full justify-start bg-[#185e9c] text-white hover:bg-[#024a8a]"
                 size="lg"
-                onClick={() =>
-                  (window.location.href = `${import.meta.env.VITE_APP_URL}/bot/flows`)
-                }
+                onClick={() => (window.location.href = `${import.meta.env.VITE_APP_URL}/bot/flows`)}
               >
-                <MessageSquare className="h-5 w-5 mr-3" />
+                <MessageSquare className="mr-3 h-5 w-5" />
                 Abrir Panel de Flujos del Bot
               </Button>
+
               <Button
                 variant="outline"
                 className="w-full justify-start border-[#013765] text-[#013765] hover:bg-[#f0f4f8]"
                 size="lg"
-                onClick={() =>
-                  (window.location.href = `${import.meta.env.VITE_APP_URL}/settings-panel`)
-                }
+                onClick={() => (window.location.href = `${import.meta.env.VITE_APP_URL}/settings-panel`)}
               >
-                <Settings className="h-5 w-5 mr-3" />
-                Abrir Configuración
+                <Settings className="mr-3 h-5 w-5" />
+                Abrir Configuracion
               </Button>
+
+              <Button
+                variant="outline"
+                className="w-full justify-start border-[#013765] text-[#013765] hover:bg-[#f0f4f8]"
+                size="lg"
+                onClick={() => (window.location.href = `${import.meta.env.VITE_APP_URL}/audit-panel`)}
+              >
+                <FileText className="mr-3 h-5 w-5" />
+                Abrir Auditoria
+              </Button>
+
               <Button
                 variant="outline"
                 className="w-full justify-start border-[#013765] text-[#013765] hover:bg-[#f0f4f8]"
                 size="lg"
               >
-                <Users className="h-5 w-5 mr-3" />
+                <Users className="mr-3 h-5 w-5" />
                 Gestionar Usuarios
               </Button>
+
               <Button
                 variant="outline"
                 className="w-full justify-start border-[#013765] text-[#013765] hover:bg-[#f0f4f8]"
                 size="lg"
               >
-                <BarChart3 className="h-5 w-5 mr-3" />
-                Ver Analíticas
+                <BarChart3 className="mr-3 h-5 w-5" />
+                Ver Analiticas
               </Button>
             </CardContent>
           </Card>
 
-          {/* Actividad reciente: datos mockeados. 
-             Sirve como ejemplo visual; se puede alimentar con eventos reales desde la base.
-          */}
           <Card className="bg-white">
             <CardHeader>
               <CardTitle className="text-[#013765]">Actividad Reciente</CardTitle>
               <CardDescription className="text-[#013765]/70">
-                Últimas acciones en el sistema
+                Ultimas acciones en el sistema
               </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
                 <div className="flex items-center space-x-3">
-                  <div className="h-2 w-2 rounded-full bg-green-500"></div>
+                  <div className="h-2 w-2 rounded-full bg-green-500" />
                   <div className="flex-1">
                     <p className="text-sm font-medium text-[#013765]">Nuevo chat iniciado</p>
                     <p className="text-xs text-[#013765]/70">hace 2 minutos</p>
@@ -178,20 +165,20 @@ export default function Dashboard() {
                     Chat
                   </Badge>
                 </div>
+
                 <div className="flex items-center space-x-3">
-                  <div className="h-2 w-2 rounded-full bg-[#013765]"></div>
+                  <div className="h-2 w-2 rounded-full bg-[#013765]" />
                   <div className="flex-1">
-                    <p className="text-sm font-medium text-[#013765]">
-                      Variable generada: user_preference
-                    </p>
+                    <p className="text-sm font-medium text-[#013765]">Variable generada: user_preference</p>
                     <p className="text-xs text-[#013765]/70">hace 5 minutos</p>
                   </div>
                   <Badge variant="secondary" className="text-[#013765]">
                     Variable
                   </Badge>
                 </div>
+
                 <div className="flex items-center space-x-3">
-                  <div className="h-2 w-2 rounded-full bg-orange-500"></div>
+                  <div className="h-2 w-2 rounded-full bg-orange-500" />
                   <div className="flex-1">
                     <p className="text-sm font-medium text-[#013765]">Usuario conectado</p>
                     <p className="text-xs text-[#013765]/70">hace 8 minutos</p>
@@ -200,10 +187,11 @@ export default function Dashboard() {
                     Usuario
                   </Badge>
                 </div>
+
                 <div className="flex items-center space-x-3">
-                  <div className="h-2 w-2 rounded-full bg-purple-500"></div>
+                  <div className="h-2 w-2 rounded-full bg-purple-500" />
                   <div className="flex-1">
-                    <p className="text-sm font-medium text-[#013765]">Análisis completado</p>
+                    <p className="text-sm font-medium text-[#013765]">Analisis completado</p>
                     <p className="text-xs text-[#013765]/70">hace 12 minutos</p>
                   </div>
                   <Badge variant="secondary" className="text-[#013765]">
@@ -215,7 +203,6 @@ export default function Dashboard() {
           </Card>
         </div>
 
-        {/* Estado del sistema: también es una sección visual, pensada para mostrar healthchecks reales si se integran más adelante */}
         <Card className="bg-white">
           <CardHeader>
             <CardTitle className="text-[#013765]">Estado del Sistema</CardTitle>
@@ -224,23 +211,25 @@ export default function Dashboard() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
               <div className="flex items-center space-x-3">
-                <div className="h-3 w-3 rounded-full bg-green-500"></div>
+                <div className="h-3 w-3 rounded-full bg-green-500" />
                 <div>
                   <p className="text-sm font-medium text-[#013765]">API de Mensajes</p>
                   <p className="text-xs text-[#013765]/70">Operativo</p>
                 </div>
               </div>
+
               <div className="flex items-center space-x-3">
-                <div className="h-3 w-3 rounded-full bg-green-500"></div>
+                <div className="h-3 w-3 rounded-full bg-green-500" />
                 <div>
                   <p className="text-sm font-medium text-[#013765]">Base de Datos</p>
                   <p className="text-xs text-[#013765]/70">Operativo</p>
                 </div>
               </div>
+
               <div className="flex items-center space-x-3">
-                <div className="h-3 w-3 rounded-full bg-yellow-500"></div>
+                <div className="h-3 w-3 rounded-full bg-yellow-500" />
                 <div>
                   <p className="text-sm font-medium text-[#013765]">Procesamiento IA</p>
                   <p className="text-xs text-[#013765]/70">Carga Alta</p>

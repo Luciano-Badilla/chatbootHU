@@ -2,7 +2,8 @@
 
 import { createPortal } from "react-dom"
 import { memo, useEffect, useMemo, useRef, useState } from "react"
-import { Plus, RefreshCcw, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp, ArrowLeft, PanelLeft, Settings2, X, ArrowDown } from "lucide-react"
+import { usePage } from "@inertiajs/react"
+import { Plus, RefreshCcw, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp, ArrowLeft, PanelLeft, Settings2, X, ArrowDown, InfoIcon } from "lucide-react"
 import {
   applyNodeChanges,
   ReactFlow,
@@ -38,6 +39,7 @@ import {
   CardContent,
 } from "shadcn/components/ui/card"
 import { cn } from "shadcn/lib/utils"
+import { Badge } from "shadcn/components/ui/badge"
 
 type NodeType = "text" | "buttons" | "list" | "input" | "handoff" | "person_lookup"
 
@@ -84,6 +86,8 @@ interface CanvasNodeData extends Record<string, unknown> {
   typeLabel: string
   isStart: boolean
   isSelected: boolean
+  isReadOnly: boolean
+  canDelete: boolean
   canSource: boolean
   canToggleAutoAdvance: boolean
   autoAdvanceEnabled: boolean
@@ -202,9 +206,9 @@ const CanvasBotNode = memo(function CanvasBotNode({ data }: NodeProps<FlowNode<C
           ? "border-emerald-400 shadow-[0_0_0_2px_rgba(52,211,153,0.18),0_10px_30px_rgba(15,23,42,0.08)]"
           : isAlephooNodeType(data.type)
             ? "border-amber-400 bg-gradient-to-b from-amber-50/80 to-white shadow-[0_0_0_2px_rgba(251,191,36,0.18),0_10px_30px_rgba(15,23,42,0.08)]"
-          : data.isSelected
-            ? "border-[#013765] ring-2 ring-[#013765]/15"
-            : "border-slate-200",
+            : data.isSelected
+              ? "border-[#013765] ring-2 ring-[#013765]/15"
+              : "border-slate-200",
       )}
     >
       {data.isStart ? (
@@ -282,18 +286,20 @@ const CanvasBotNode = memo(function CanvasBotNode({ data }: NodeProps<FlowNode<C
               </button>
             ) : null}
 
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation()
-                data.onDelete()
-              }}
-              onMouseEnter={() => setHoveredItem("delete")}
-              onMouseLeave={() => setHoveredItem((current) => (current === "delete" ? null : current))}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-xl border border-red-200 bg-red-50 text-red-600 transition-colors hover:bg-red-100"
-            >
-              {data.deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-            </button>
+            {data.canDelete ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  data.onDelete()
+                }}
+                onMouseEnter={() => setHoveredItem("delete")}
+                onMouseLeave={() => setHoveredItem((current) => (current === "delete" ? null : current))}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-xl border border-red-200 bg-red-50 text-red-600 transition-colors hover:bg-red-100"
+              >
+                {data.deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              </button>
+            ) : null}
           </div>
         </div>
 
@@ -305,7 +311,7 @@ const CanvasBotNode = memo(function CanvasBotNode({ data }: NodeProps<FlowNode<C
           </div>
         ) : null}
 
-        {hoveredItem === "delete" ? (
+        {data.canDelete && hoveredItem === "delete" ? (
           <div className="pointer-events-none absolute right-1 top-10 z-30">
             <div className="rounded-xl border border-red-200 bg-white px-2.5 py-1 text-[11px] font-medium text-red-600 shadow-lg">
               Eliminar nodo
@@ -412,6 +418,7 @@ const CanvasBotNode = memo(function CanvasBotNode({ data }: NodeProps<FlowNode<C
       {data.canSource
         ? data.sourceHandles.map((handle, index) => {
           if (hoveredItem !== handle.id || !handle.hasConnection) return null
+          if (data.isReadOnly) return null
 
           const left =
             data.sourceHandles.length === 1
@@ -493,7 +500,9 @@ const serializeNodeSnapshot = (node: BotNode | null) => {
   })
 }
 
-export default function BotFlowBuilder() {
+export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolean }) {
+  const { props } = usePage() as any
+  const isReadOnly = Boolean(readOnly || !props?.auth?.permissions?.can_manage_flows)
   const [flows, setFlows] = useState<BotFlow[]>([])
   const [selectedFlowId, setSelectedFlowId] = useState<number | null>(null)
 
@@ -810,6 +819,7 @@ export default function BotFlowBuilder() {
 
   // Crear flujo nuevo
   const handleCreateFlow = async () => {
+    if (isReadOnly) return
     const name = newFlowName.trim()
     if (!name) return
 
@@ -837,6 +847,7 @@ export default function BotFlowBuilder() {
   }
 
   const handleSaveFlow = async () => {
+    if (isReadOnly) return
     if (!selectedFlow) return
 
     const name = editFlowName.trim()
@@ -897,6 +908,7 @@ export default function BotFlowBuilder() {
 
 
   const handleMakeDefault = async (flowId: number) => {
+    if (isReadOnly) return
     try {
       const res = await fetch(`${API_BASE}/api/bot/flows/${flowId}/make-default`, {
         method: "POST",
@@ -916,6 +928,7 @@ export default function BotFlowBuilder() {
   }
 
   const handleDeleteFlow = async (flowId: number) => {
+    if (isReadOnly) return
     setDeletingFlowId(flowId)
     try {
       const res = await fetch(`${API_BASE}/api/bot/flows/${flowId}`, {
@@ -958,6 +971,7 @@ export default function BotFlowBuilder() {
   }
 
   const handleRestoreFlow = async (flowId: number) => {
+    if (isReadOnly) return
     setRestoringFlowId(flowId)
     try {
       const res = await fetch(`${API_BASE}/api/bot/flows/${flowId}/restore`, {
@@ -989,6 +1003,7 @@ export default function BotFlowBuilder() {
 
   // Crear nodo nuevo
   const handleCreateNode = async () => {
+    if (isReadOnly) return
     if (!selectedFlowId) return
     const key = newNodeKey.trim()
     if (!key) return
@@ -1027,6 +1042,7 @@ export default function BotFlowBuilder() {
 
   // Guardar cambios del nodo
   const handleDeleteNode = async (nodeId: number) => {
+    if (isReadOnly) return
     setDeletingNodeId(nodeId)
     try {
       const res = await fetch(`${API_BASE}/api/bot/nodes/${nodeId}`, {
@@ -1066,6 +1082,7 @@ export default function BotFlowBuilder() {
   }
 
   const handleRestoreNode = async (nodeId: number) => {
+    if (isReadOnly) return
     setRestoringNodeId(nodeId)
     try {
       const res = await fetch(`${API_BASE}/api/bot/nodes/${nodeId}/restore`, {
@@ -1112,6 +1129,7 @@ export default function BotFlowBuilder() {
   }
 
   const handleSaveNode = async () => {
+    if (isReadOnly) return false
     if (!editNode) return
     if (editNode.type === "input" && !inputVariableValidation.isAvailable) return false
 
@@ -1421,7 +1439,7 @@ export default function BotFlowBuilder() {
         id: String(node.id),
         type: "botNode",
         position,
-        draggable: true,
+        draggable: !isReadOnly,
         data: {
           label: node.key || `node_${node.id}`,
           preview: getNodePreview(node),
@@ -1429,13 +1447,15 @@ export default function BotFlowBuilder() {
           typeLabel: getNodeTypeLabel(node.type),
           isStart: selectedFlow?.start_node_id === node.id,
           isSelected: selectedNodeId === node.id,
+          isReadOnly,
+          canDelete: !isReadOnly,
           canSource:
             node.type === "text" ||
             node.type === "input" ||
             node.type === "person_lookup" ||
             node.type === "buttons" ||
             node.type === "list",
-          canToggleAutoAdvance: node.type === "text",
+          canToggleAutoAdvance: !isReadOnly && node.type === "text",
           autoAdvanceEnabled: Boolean(node.settings?.auto_advance),
           sourceHandles:
             node.type === "person_lookup"
@@ -1481,6 +1501,7 @@ export default function BotFlowBuilder() {
           onToggleAutoAdvance: () => handleToggleCanvasAutoAdvance(node.id),
           onRemoveConnection: (handleId) => handleCanvasDisconnect(node.id, handleId),
           onDelete: () =>
+            !isReadOnly &&
             setConfirmDelete({
               type: "node",
               id: node.id,
@@ -1489,7 +1510,7 @@ export default function BotFlowBuilder() {
         },
       }
     })
-  }, [nodes, selectedFlow?.start_node_id, selectedNodeId, deletingNodeId])
+  }, [nodes, selectedFlow?.start_node_id, selectedNodeId, deletingNodeId, isReadOnly])
 
   const flowCanvasEdges = useMemo<Edge[]>(() => {
     const edges: Edge[] = []
@@ -1556,6 +1577,7 @@ export default function BotFlowBuilder() {
   }, [nodes])
 
   const handleCanvasNodesChange = (changes: NodeChange<FlowNode<CanvasNodeData>>[]) => {
+    if (isReadOnly) return
     setNodes((prev) => {
       const canvasNodes = prev.map((node, index) => ({
         id: String(node.id),
@@ -1587,6 +1609,7 @@ export default function BotFlowBuilder() {
   }
 
   const handleCanvasNodeDragStop = (_event: unknown, flowNode: FlowNode<CanvasNodeData>) => {
+    if (isReadOnly) return
     const nodeId = Number(flowNode.id)
     if (!Number.isFinite(nodeId)) return
 
@@ -1613,6 +1636,7 @@ export default function BotFlowBuilder() {
   }
 
   const handleCanvasConnect = (connection: Connection) => {
+    if (isReadOnly) return
     const sourceId = Number(connection.source)
     const targetId = Number(connection.target)
     if (!sourceId || !targetId) return
@@ -1726,6 +1750,7 @@ export default function BotFlowBuilder() {
   }
 
   const handleCanvasDisconnect = (sourceId: number, sourceHandle: string) => {
+    if (isReadOnly) return
     const sourceNode = nodesById.get(sourceId)
     if (!sourceNode) return
 
@@ -1825,6 +1850,7 @@ export default function BotFlowBuilder() {
   }
 
   const handleCanvasEdgeClick = (_event: unknown, edge: Edge) => {
+    if (isReadOnly) return
     const sourceId = Number(edge.source)
     if (!sourceId) return
     handleCanvasDisconnect(sourceId, edge.sourceHandle ?? "next")
@@ -2764,31 +2790,33 @@ export default function BotFlowBuilder() {
                   Inicio
                 </span>
               ) : null}
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setConfirmDelete({
-                    type: "node",
-                    id: node.id,
-                    name: node.key || `node_${node.id}`,
-                  })
-                }}
-                disabled={deletingNodeId === node.id}
-                className={cn(
-                  "inline-flex h-7 w-7 items-center justify-center rounded-full border transition-colors",
-                  selectedNodeId === node.id
-                    ? "border-white/20 bg-white/10 text-white hover:bg-white/15"
-                    : "border-red-200 bg-red-50 text-red-600 hover:bg-red-100",
-                )}
-                title="Eliminar nodo"
-              >
-                {deletingNodeId === node.id ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Trash2 className="h-3.5 w-3.5" />
-                )}
-              </button>
+              {!isReadOnly ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setConfirmDelete({
+                      type: "node",
+                      id: node.id,
+                      name: node.key || `node_${node.id}`,
+                    })
+                  }}
+                  disabled={deletingNodeId === node.id}
+                  className={cn(
+                    "inline-flex h-7 w-7 items-center justify-center rounded-full border transition-colors",
+                    selectedNodeId === node.id
+                      ? "border-white/20 bg-white/10 text-white hover:bg-white/15"
+                      : "border-red-200 bg-red-50 text-red-600 hover:bg-red-100",
+                  )}
+                  title="Eliminar nodo"
+                >
+                  {deletingNodeId === node.id ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              ) : null}
             </div>
           </div>
 
@@ -2902,27 +2930,32 @@ export default function BotFlowBuilder() {
           <h1 className="flex items-center justify-center gap-2 text-lg font-semibold">
             Constructor de flujo de bot
           </h1>
+          
           {selectedFlow ? (
             <p className="mt-1 text-xs opacity-80">
-              Editando flujo: <span className="font-semibold">{selectedFlow.name}</span>
+              {isReadOnly ? "Supervisando flujo: " : "Editando flujo: "}
+              <span className="font-semibold">{selectedFlow.name}</span>
             </p>
           ) : (
             <p className="mt-1 text-xs opacity-80">Selecciona un flujo o crea uno nuevo.</p>
           )}
+          
         </div>
 
-        <div className="justify-self-end">
-          <HoverTooltip label="Abrir papelera">
-            <Button
-              variant="outline"
-              className="h-8 shrink-0 border-white/20 bg-white/10 px-3 text-white hover:bg-white/20 hover:text-white"
-              onClick={() => setTrashOpen(true)}
-            >
-              <Trash2 className="mr-1.5 h-4 w-4" />
-              <span className="text-xs">Papelera</span>
-            </Button>
-          </HoverTooltip>
-        </div>
+        {!isReadOnly ? (
+          <div className="justify-self-end">
+            <HoverTooltip label="Abrir papelera">
+              <Button
+                variant="outline"
+                className="h-8 shrink-0 border-white/20 bg-white/10 px-3 text-white hover:bg-white/20 hover:text-white"
+                onClick={() => setTrashOpen(true)}
+              >
+                <Trash2 className="mr-1.5 h-4 w-4" />
+                <span className="text-xs">Papelera</span>
+              </Button>
+            </HoverTooltip>
+          </div>
+        ) : null}
       </div>
       {flowsDrawerOpen && (
         <button
@@ -2951,6 +2984,7 @@ export default function BotFlowBuilder() {
                   variant="outline"
                   className="h-7 w-7 border-slate-200 text-[#013765] hover:bg-slate-100"
                   onClick={() => setCreateModal("flow")}
+                  disabled={isReadOnly}
                 >
                   <Plus className="h-3 w-3" />
                 </Button>
@@ -3036,36 +3070,39 @@ export default function BotFlowBuilder() {
                               e.stopPropagation()
                               handleMakeDefault(flow.id)
                             }}
+                            disabled={isReadOnly}
                           >
                             Activar
                           </button>
                         )}
 
-                        <button
-                          type="button"
-                          className={cn(
-                            "inline-flex h-6 w-6 items-center justify-center rounded-md border transition-colors",
-                            selectedFlowId === flow.id
-                              ? "border-white/30 bg-white/10 text-white hover:bg-white/15"
-                              : "border-red-200 bg-red-50 text-red-600 hover:bg-red-100",
-                          )}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setConfirmDelete({
-                              type: "flow",
-                              id: flow.id,
-                              name: flow.name,
-                            })
-                          }}
-                          disabled={deletingFlowId === flow.id}
-                          title="Eliminar flujo"
-                        >
-                          {deletingFlowId === flow.id ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <Trash2 className="h-3 w-3" />
-                          )}
-                        </button>
+                        {!isReadOnly ? (
+                          <button
+                            type="button"
+                            className={cn(
+                              "inline-flex h-6 w-6 items-center justify-center rounded-md border transition-colors",
+                              selectedFlowId === flow.id
+                                ? "border-white/30 bg-white/10 text-white hover:bg-white/15"
+                                : "border-red-200 bg-red-50 text-red-600 hover:bg-red-100",
+                            )}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setConfirmDelete({
+                                type: "flow",
+                                id: flow.id,
+                                name: flow.name,
+                              })
+                            }}
+                            disabled={deletingFlowId === flow.id}
+                            title="Eliminar flujo"
+                          >
+                            {deletingFlowId === flow.id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3 w-3" />
+                            )}
+                          </button>
+                        ) : null}
                       </div>
                     </div>
 
@@ -3080,7 +3117,7 @@ export default function BotFlowBuilder() {
                       </span>
                       {selectedFlowId === flow.id ? (
                         <span className="rounded-full border border-white/20 bg-white/10 px-1.5 py-0.5 text-[10px]">
-                          Editando
+                          {isReadOnly ? "Supervisando" : "Editando"}
                         </span>
                       ) : null}
                     </div>
@@ -3111,7 +3148,7 @@ export default function BotFlowBuilder() {
                       variant="outline"
                       className="h-7 w-7 border-slate-200 text-[#013765] hover:bg-slate-100"
                       onClick={() => setCreateModal("node")}
-                      disabled={!selectedFlowId}
+                      disabled={isReadOnly || !selectedFlowId}
                     >
                       <Plus className="h-3 w-3" />
                     </Button>
@@ -3157,8 +3194,8 @@ export default function BotFlowBuilder() {
                     maxZoom={1.6}
                     connectionRadius={42}
                     connectOnClick
-                    nodesDraggable
-                    nodesConnectable
+                    nodesDraggable={!isReadOnly}
+                    nodesConnectable={!isReadOnly}
                     elementsSelectable
                     onNodesChange={handleCanvasNodesChange}
                     onConnect={handleCanvasConnect}
@@ -3204,7 +3241,7 @@ export default function BotFlowBuilder() {
                           Seleccioná un flujo en la lista de la izquierda para editar su configuración.
                         </p>
                       ) : (
-                        <div className="space-y-4">
+                        <fieldset disabled={isReadOnly} className="space-y-4">
                           <div className="grid gap-3 md:grid-cols-2">
                             <div>
                               <label className="text-xs mb-1 block text-muted-foreground">
@@ -3255,11 +3292,16 @@ export default function BotFlowBuilder() {
                           </div>
 
                           <div className="mt-4 flex shrink-0 flex-col items-center gap-2 border-t border-slate-200 bg-white pt-4">
+                            {isReadOnly ? (
+                              <div className="w-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-800">
+                                Este flujo esta en modo solo lectura para tu rol.
+                              </div>
+                            ) : null}
                             <Button
                               size="sm"
                               className="w-full text-xs bg-[#013765] hover:bg-[#024a8a] text-white"
                               onClick={handleSaveFlow}
-                              disabled={savingFlow || !hasUnsavedFlowChanges || !editFlowName.trim()}
+                              disabled={isReadOnly || savingFlow || !hasUnsavedFlowChanges || !editFlowName.trim()}
                             >
                               {savingFlow ? "Guardando..." : "Guardar flujo"}
                             </Button>
@@ -3270,7 +3312,7 @@ export default function BotFlowBuilder() {
                               </div>
                             )}
                           </div>
-                        </div>
+                        </fieldset>
                       )}
                     </CardContent>
                   </Card>
@@ -3308,7 +3350,12 @@ export default function BotFlowBuilder() {
                         </p>
                       ) : (
                         <>
-                          <div className="flex-1 min-h-0 space-y-4 overflow-y-auto pr-1">
+                          {isReadOnly ? (
+                            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-800">
+                              Vista de supervisor: podes recorrer el flujo y leer su configuracion, pero no editarla.
+                            </div>
+                          ) : null}
+                          <fieldset disabled={isReadOnly} className="flex-1 min-h-0 space-y-4 overflow-y-auto pr-1">
                             {/* Datos básicos */}
                             <div className="grid grid-cols-2 gap-3">
                               <div>
@@ -3660,7 +3707,7 @@ export default function BotFlowBuilder() {
                               </div>
                             )}
 
-                          </div>
+                          </fieldset>
 
                           {/* Botón guardar */}
                           <div className="mt-4 flex shrink-0 flex-col items-center gap-2 border-t border-slate-200 bg-white pt-4">
@@ -3673,7 +3720,7 @@ export default function BotFlowBuilder() {
                                   setSelectedNodeId(null)
                                 }
                               }}
-                              disabled={savingNode || !hasUnsavedChanges || !canSaveNode}
+                              disabled={isReadOnly || savingNode || !hasUnsavedChanges || !canSaveNode}
                             >
                               {savingNode ? "Guardando..." : "Guardar nodo"}
                             </Button>
@@ -4010,7 +4057,7 @@ export default function BotFlowBuilder() {
                           variant="outline"
                           className="shrink-0 border-[#013765] text-[#013765] hover:bg-[#013765] hover:text-white"
                           onClick={() => handleRestoreFlow(flow.id)}
-                          disabled={restoringFlowId === flow.id}
+                          disabled={isReadOnly || restoringFlowId === flow.id}
                         >
                           {restoringFlowId === flow.id ? (
                             <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
@@ -4059,7 +4106,7 @@ export default function BotFlowBuilder() {
                             variant="outline"
                             className="shrink-0 border-[#013765] text-[#013765] hover:bg-[#013765] hover:text-white"
                             onClick={() => handleRestoreNode(node.id)}
-                            disabled={restoringNodeId === node.id || flowIsTrashed}
+                            disabled={isReadOnly || restoringNodeId === node.id || flowIsTrashed}
                           >
                             {restoringNodeId === node.id ? (
                               <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
