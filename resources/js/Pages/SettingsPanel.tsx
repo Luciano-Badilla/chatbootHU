@@ -26,6 +26,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "s
 import { Textarea } from "shadcn/components/ui/textarea"
 import { toast } from "sonner"
 import { cn } from "shadcn/lib/utils"
+import { AppShell, AppShellBackButton } from "../components/AppShell"
 
 interface SettingsPanelProps {
   settings?: {
@@ -79,6 +80,7 @@ interface SettingsPanelProps {
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || ""
+const APP_URL = import.meta.env.VITE_APP_URL || ""
 
 function getErrorMessage(payload: any, fallback: string): string {
   return payload?.errors?.file?.[0] ?? payload?.message ?? fallback
@@ -548,59 +550,42 @@ export default function SettingsPanel({
   }
 
   return (
-    <div className="min-h-screen bg-[#f4f8fb]">
-      <header className="border-b border-[#dbe5ef] bg-[#013765]">
-        <div className="container mx-auto flex items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              size="icon"
-              className="h-9 w-9 border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white"
-              onClick={() => window.history.back()}
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-            <div>
-              <h1 className="text-xl font-semibold text-white">Configuracion</h1>
-              <p className="text-sm text-white/75">
-                Modulo central para administrar opciones globales del sistema.
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="outline"
-              className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white"
-              onClick={() => {
-                window.location.href = "/audit-panel"
-              }}
-            >
-              <CalendarDays className="mr-2 h-4 w-4" />
-              Ver auditoria
-            </Button>
-            <Button
-              variant="outline"
-              className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white"
-              onClick={() => {
-                setImportError("")
-                setImportDialogOpen(true)
-              }}
-            >
-              <Upload className="mr-2 h-4 w-4" />
-              Importar configuracion
-            </Button>
-            <Button
-              className="bg-white text-[#013765] hover:bg-slate-100"
-              onClick={() => setExportDialogOpen(true)}
-            >
-              <Download className="mr-2 h-4 w-4" />
-              Exportar configuracion
-            </Button>
-          </div>
-        </div>
-      </header>
-
-      <main className="container mx-auto flex flex-col gap-6 px-6 py-8">
+    <AppShell
+      currentPath="/settings-panel"
+      title="Configuracion"
+      subtitle="Modulo central para administrar opciones globales del sistema."
+      leading={<AppShellBackButton onClick={() => window.history.back()} />}
+      actions={
+        <>
+          <Button
+            variant="outline"
+            className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white"
+            onClick={() => {
+              window.location.href = `${APP_URL}/audit-panel`
+            }}
+          >
+            <CalendarDays className="mr-2 h-4 w-4" />
+            Ver auditoria
+          </Button>
+          <Button
+            variant="outline"
+            className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white"
+            onClick={() => {
+              setImportError("")
+              setImportDialogOpen(true)
+            }}
+          >
+            <Upload className="mr-2 h-4 w-4" />
+            Importar configuracion
+          </Button>
+          <Button className="bg-white text-[#013765] hover:bg-slate-100" onClick={() => setExportDialogOpen(true)}>
+            <Download className="mr-2 h-4 w-4" />
+            Exportar configuracion
+          </Button>
+        </>
+      }
+      contentClassName="container mx-auto flex flex-col gap-6 px-6 py-8"
+    >
         <Card className="order-4 border-[#dbe5ef] bg-white">
           <CardHeader>
             <div className="flex items-center justify-between gap-3">
@@ -613,7 +598,7 @@ export default function SettingsPanel({
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="rounded-2xl border border-[#dbe5ef]">
+            <div className="rounded-xl border border-[#dbe5ef]">
               <div className="grid grid-cols-1 gap-3 border-b border-[#dbe5ef] bg-[#013765]/[0.03] px-4 py-3 text-xs font-medium text-[#013765]/70 md:grid-cols-[minmax(0,1.4fr)_180px_160px]">
                 <span>Usuario</span>
                 <span>Rol</span>
@@ -915,7 +900,7 @@ export default function SettingsPanel({
             </div>
           </CardHeader>
           <CardContent className="space-y-6">
-            <div className="rounded-2xl border border-[#dbe5ef] p-4">
+            <div className="rounded-xl border border-[#dbe5ef] p-4">
               <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-semibold text-[#013765]">WhatsApp</h3>
@@ -952,7 +937,7 @@ export default function SettingsPanel({
               </div>
             </div>
 
-            <div className="rounded-2xl border border-[#dbe5ef] p-4">
+            <div className="rounded-xl border border-[#dbe5ef] p-4">
               <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-semibold text-[#013765]">Alephoo</h3>
@@ -1029,7 +1014,7 @@ export default function SettingsPanel({
             </div>
           </CardContent>
         </Card>
-      </main>
+      
 
       <Dialog open={exportDialogOpen} onOpenChange={setExportDialogOpen}>
         <DialogContent className="max-w-xl">
@@ -1162,6 +1147,6 @@ export default function SettingsPanel({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </AppShell>
   )
 }

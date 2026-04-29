@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Chat;
 use App\Models\Contact;
 use App\Models\Message;
+use App\Services\AuditService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
@@ -12,6 +13,10 @@ use PhpMqtt\Client\MqttClient;
 
 class ChatController extends Controller
 {
+    public function __construct(private readonly AuditService $auditService)
+    {
+    }
+
     public function index()
     {
         $chats = Contact::with([
@@ -51,9 +56,63 @@ class ChatController extends Controller
         ]);
     }
 
-    public function markAsReadMessages($chatId)
+    public function markAsReadMessages(Request $request, $chatId)
     {
-        Message::where('chat_id', $chatId)->where('status', 'received')->update(['status' => 'read']);
+        $chat = Chat::with('contact', 'operator')->findOrFail($chatId);
+        $updated = Message::where('chat_id', $chatId)->where('status', 'received')->update(['status' => 'read']);
+
+        if ($updated > 0) {
+            $this->auditService->recordMessageAction(
+                'marked_read',
+                'Marco mensajes como leidos',
+                $chat,
+                $request->user(),
+                null,
+                [
+                    'meta' => [
+                        'read_messages_count' => $updated,
+                    ],
+                ],
+            );
+        }
+
+        return response()->json([
+            'ok' => true,
+            'read_messages_count' => $updated,
+        ]);
+    }
+
+    public function open(Request $request, Chat $chat)
+    {
+        $actor = $request->user();
+        $currentOperatorId = (int) ($chat->operator_id ?? 0);
+        $actorId = (int) ($actor?->id ?? 0);
+
+        $mode = 'editable';
+        if ($chat->bot_enabled) {
+            $mode = 'bot_enabled';
+        } elseif ($currentOperatorId > 0 && $currentOperatorId !== $actorId) {
+            $mode = 'operator_locked';
+        }
+
+        $this->auditService->recordChatAction(
+            'opened',
+            'Abrio chat desde el panel',
+            $chat,
+            $actor,
+            [
+                'meta' => [
+                    'mode' => $mode,
+                    'operator_locked' => $mode === 'operator_locked',
+                    'bot_enabled' => (bool) $chat->bot_enabled,
+                ],
+            ],
+        );
+
+        return response()->json([
+            'ok' => true,
+            'mode' => $mode,
+        ]);
     }
 
     public function updateOperator(Request $request, Chat $chat)
@@ -67,6 +126,9 @@ class ChatController extends Controller
         $authUser = $request->user();
         $operatorId = $authUser?->id ?? ($data['operator_id'] ?? null);
         $operatorName = $authUser?->name ?? ($data['operator_name'] ?? null);
+        $chat->loadMissing('operator');
+        $beforeOperatorId = $chat->operator_id ? (int) $chat->operator_id : null;
+        $beforeOperatorName = $chat->operator?->name ?? null;
 
         if ($data['active']) {
             if (!$operatorId) {
@@ -78,6 +140,27 @@ class ChatController extends Controller
 
             if ($chat->operator_id && (int) $chat->operator_id !== (int) $operatorId) {
                 $chat->load('operator');
+                $this->auditService->recordChatAction(
+                    'operator_assignment_conflict',
+                    'Intento tomar un chat ocupado por otro operador',
+                    $chat,
+                    $authUser,
+                    [
+                        'before' => [
+                            'operator_id' => $beforeOperatorId,
+                            'operator_name' => $beforeOperatorName,
+                        ],
+                        'after' => [
+                            'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null,
+                            'operator_name' => $chat->operator?->name,
+                        ],
+                        'meta' => [
+                            'requested_active' => true,
+                            'requested_operator_id' => $operatorId,
+                            'requested_operator_name' => $operatorName,
+                        ],
+                    ],
+                );
                 return response()->json([
                     'ok' => false,
                     'conflict' => true,
@@ -97,6 +180,23 @@ class ChatController extends Controller
 
         $chat->save();
         $chat->load('operator');
+
+        $this->auditService->recordChatAction(
+            $data['active'] ? 'operator_assigned' : 'operator_released',
+            $data['active'] ? 'Tomo el chat' : 'Libero el chat',
+            $chat,
+            $authUser,
+            [
+                'before' => [
+                    'operator_id' => $beforeOperatorId,
+                    'operator_name' => $beforeOperatorName,
+                ],
+                'after' => [
+                    'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null,
+                    'operator_name' => $chat->operator?->name ?? $operatorName,
+                ],
+            ],
+        );
 
         $payload = [
             'chat_id' => (int) $chat->id,

@@ -8,6 +8,7 @@ use App\Models\Chat;
 use App\Models\Contact;
 use App\Models\Message;
 use App\Models\SystemSetting;
+use App\Services\AuditService;
 use App\Services\BotInactivityService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Env;
@@ -23,7 +24,10 @@ class WhatsAppController extends Controller
 {
     private ?array $runtimeSettingsCache = null;
 
-    public function __construct(private readonly BotInactivityService $botInactivityService)
+    public function __construct(
+        private readonly BotInactivityService $botInactivityService,
+        private readonly AuditService $auditService,
+    )
     {
     }
 
@@ -393,12 +397,42 @@ class WhatsAppController extends Controller
         $messageBody = $validated['message'];
 
         $chat = Chat::with('contact')->findOrFail($validated['chat_id']);
+        $actor = $request->user();
 
         try {
             $message = $this->sendWhatsAppText($chat, $messageBody, 'user', 'operator');
         } catch (\Throwable $e) {
+            $this->auditService->recordMessageAction(
+                'message_send_failed',
+                'Fallo al enviar mensaje manual',
+                $chat,
+                $actor,
+                null,
+                [
+                    'meta' => [
+                        'message_type' => 'text',
+                        'body_preview' => mb_substr($messageBody, 0, 160),
+                        'error' => $e->getMessage(),
+                    ],
+                ],
+            );
             return response()->json(['error' => $e->getMessage()], 500);
         }
+
+        $this->auditService->recordMessageAction(
+            'message_sent',
+            'Envio mensaje manual',
+            $chat,
+            $actor,
+            $message,
+            [
+                'meta' => [
+                    'message_type' => 'text',
+                    'body_preview' => mb_substr((string) $message->body, 0, 160),
+                    'message_id' => $message->id,
+                ],
+            ],
+        );
 
         return response()->json([
             'ok' => true,
@@ -427,8 +461,21 @@ class WhatsAppController extends Controller
 
         $chat = Chat::with('contact')->findOrFail($validated['chat_id']);
         $contact = $chat->contact;
+        $actor = $request->user();
 
         if (!$contact || !$contact->whatsapp_id) {
+            $this->auditService->recordMessageAction(
+                'media_send_failed',
+                'Fallo al enviar archivo al chat',
+                $chat,
+                $actor,
+                null,
+                [
+                    'meta' => [
+                        'error' => 'Contacto sin whatsapp_id',
+                    ],
+                ],
+            );
             return response()->json(['error' => 'Contacto sin whatsapp_id'], 422);
         }
 
@@ -506,11 +553,39 @@ class WhatsAppController extends Controller
 
             if ($uploadResponse->failed()) {
                 Log::error('API Error (sendMedia upload): ' . $uploadResponse->body());
+                $this->auditService->recordMessageAction(
+                    'media_send_failed',
+                    'Fallo al enviar archivo al chat',
+                    $chat,
+                    $actor,
+                    null,
+                    [
+                        'meta' => [
+                            'message_type' => $messageType,
+                            'file_name' => $originalName,
+                            'error' => 'Error subiendo media a WhatsApp',
+                        ],
+                    ],
+                );
                 return response()->json(['error' => 'Error subiendo media a WhatsApp'], 500);
             }
 
             $mediaId = $uploadResponse->json('id');
             if (!$mediaId) {
+                $this->auditService->recordMessageAction(
+                    'media_send_failed',
+                    'Fallo al enviar archivo al chat',
+                    $chat,
+                    $actor,
+                    null,
+                    [
+                        'meta' => [
+                            'message_type' => $messageType,
+                            'file_name' => $originalName,
+                            'error' => 'No se obtuvo media_id de WhatsApp',
+                        ],
+                    ],
+                );
                 return response()->json(['error' => 'No se obtuvo media_id de WhatsApp'], 500);
             }
 
@@ -547,6 +622,20 @@ class WhatsAppController extends Controller
             $sendResponse = Http::withToken($accessToken)->post($sendUrl, $payload);
             if ($sendResponse->failed()) {
                 Log::error('API Error (sendMedia message): ' . $sendResponse->body());
+                $this->auditService->recordMessageAction(
+                    'media_send_failed',
+                    'Fallo al enviar archivo al chat',
+                    $chat,
+                    $actor,
+                    null,
+                    [
+                        'meta' => [
+                            'message_type' => $messageType,
+                            'file_name' => $originalName,
+                            'error' => 'Error enviando media a WhatsApp',
+                        ],
+                    ],
+                );
                 return response()->json(['error' => 'Error enviando media a WhatsApp'], 500);
             }
 
@@ -571,6 +660,23 @@ class WhatsAppController extends Controller
                 'media_name' => $originalName,
                 'whatsapp_message_id' => $sendResponse->json('messages.0.id'),
             ]);
+
+            $this->auditService->recordMessageAction(
+                'media_sent',
+                'Envio archivo manual',
+                $chat,
+                $actor,
+                $message,
+                [
+                    'meta' => [
+                        'message_type' => $messageType,
+                        'file_name' => $originalName,
+                        'file_size' => $file->getSize(),
+                        'caption_preview' => $caption !== '' ? mb_substr($caption, 0, 160) : null,
+                        'message_id' => $message->id,
+                    ],
+                ],
+            );
 
             // 5) MQTT (sidebar + chat)
             $previewText = match ($messageType) {
@@ -630,6 +736,20 @@ class WhatsAppController extends Controller
             ], 200);
         } catch (\Throwable $e) {
             Log::error('Error sendMedia: ' . $e->getMessage());
+            $this->auditService->recordMessageAction(
+                'media_send_failed',
+                'Fallo al enviar archivo al chat',
+                $chat,
+                $actor,
+                null,
+                [
+                    'meta' => [
+                        'message_type' => $messageType,
+                        'file_name' => $originalName,
+                        'error' => $e->getMessage(),
+                    ],
+                ],
+            );
             return response()->json(['error' => 'Error interno al enviar media'], 500);
         }
     }
@@ -1519,6 +1639,8 @@ class WhatsAppController extends Controller
         $data = $request->validate([
             'bot_enabled' => 'required|boolean',
         ]);
+        $actor = $request->user();
+        $before = (bool) $chat->bot_enabled;
 
         try {
             $chat->bot_enabled = $data['bot_enabled'];
@@ -1536,6 +1658,22 @@ class WhatsAppController extends Controller
         } catch (\Throwable $e) {
             Log::error('MQTT Error (setVar vars): ' . $e->getMessage());
         }
+
+        $this->auditService->recordChatAction(
+            $chat->bot_enabled ? 'bot_enabled' : 'bot_disabled',
+            $chat->bot_enabled ? 'Activo el bot del chat' : 'Pauso el bot del chat',
+            $chat,
+            $actor,
+            [
+                'before' => [
+                    'bot_enabled' => $before,
+                ],
+                'after' => [
+                    'bot_enabled' => (bool) $chat->bot_enabled,
+                ],
+            ],
+        );
+
         return response()->json([
             'ok' => true,
             'chat' => $chat,

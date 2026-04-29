@@ -34,6 +34,7 @@ Route::middleware($sessionAuthenticated)->group(function () {
     Route::post('/message/markAsRead/{chatId}', [ChatController::class, 'markAsReadMessages']);
     Route::get('/chat/messages/{chatId}', [ChatController::class, 'getMessages']);
     Route::get('/chats/snapshot', [ChatController::class, 'snapshot']);
+    Route::post('/chats/{chat}/open', [ChatController::class, 'open']);
     Route::post('/message/send', [WhatsAppController::class, 'sendMessage']);
     Route::post('/message/send-media', [WhatsAppController::class, 'sendMedia']);
     Route::post('/chats/{chat}/bot', [WhatsAppController::class, 'updateBotStatus'])->middleware('permission:can_toggle_bot');

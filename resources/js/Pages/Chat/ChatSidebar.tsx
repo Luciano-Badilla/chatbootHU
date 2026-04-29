@@ -108,6 +108,15 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
     window.dispatchEvent(new CustomEvent("chat:read", { detail: { chatId: normalizedChatId } }))
 
     try {
+      await fetch(`${import.meta.env.VITE_APP_URL}/api/chats/${normalizedChatId}/open`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      })
+    } catch (err) {
+      console.error("Error auditando apertura de chat:", err)
+    }
+
+    try {
       await fetch(`${import.meta.env.VITE_APP_URL}/api/message/markAsRead/${normalizedChatId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

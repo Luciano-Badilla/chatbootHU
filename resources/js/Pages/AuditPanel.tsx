@@ -7,6 +7,7 @@ import { Input } from "shadcn/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "shadcn/components/ui/select"
 import { cn } from "shadcn/lib/utils"
 import { toast } from "sonner"
+import { AppShell, AppShellBackButton } from "../components/AppShell"
 
 interface AuditEntry {
   id: number
@@ -25,6 +26,21 @@ interface AuditEntry {
       name?: string
       email?: string
     }
+    chat?: {
+      id?: number
+      contact_name?: string
+      contact_number?: string
+      bot_enabled?: boolean
+      operator_id?: number | null
+      operator_name?: string | null
+    }
+    changes_human?: Array<{
+      key?: string
+      label: string
+      before?: string | null
+      after?: string | null
+      value?: string | null
+    }>
     before?: Record<string, unknown>
     after?: Record<string, unknown>
     meta?: Record<string, unknown>
@@ -148,16 +164,27 @@ export default function AuditPanel({
       const actor = String(entry.causer_name ?? "Sistema")
       const targetUserName = String(entry.properties?.target_user?.name ?? "")
       const targetUserEmail = String(entry.properties?.target_user?.email ?? "")
+      const chatContactName = String(entry.properties?.chat?.contact_name ?? "")
+      const chatContactNumber = String(entry.properties?.chat?.contact_number ?? "")
       const changedKeyLabels = (entry.properties?.changed_keys ?? []).map((key) => getAuditFieldLabel(key))
+      const humanChanges = (entry.properties?.changes_human ?? []).flatMap((change) => [
+        change.label ?? "",
+        change.before ?? "",
+        change.after ?? "",
+        change.value ?? "",
+      ])
       const haystack = [
         entry.description,
         actor,
         entry.causer_email ?? "",
         targetUserName,
         targetUserEmail,
+        chatContactName,
+        chatContactNumber,
         entry.event ?? "",
         ...(entry.properties?.changed_keys ?? []),
         ...changedKeyLabels,
+        ...humanChanges,
       ]
         .join(" ")
         .toLowerCase()
@@ -262,36 +289,17 @@ export default function AuditPanel({
   const activeMeta = activeScope !== "logs" ? scopeMeta[activeScope] : null
 
   return (
-    <div className="min-h-screen bg-[#f4f8fb]">
-      <header className="border-b border-[#dbe5ef] bg-[#013765]">
-        <div className="container mx-auto flex items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              size="icon"
-              className="h-9 w-9 border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white"
-              onClick={() => window.history.back()}
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-            <div>
-              <h1 className="text-xl font-semibold text-white">Auditoria</h1>
-              <p className="text-sm text-white/75">
-                Modulo central para revisar trazabilidad operativa, tecnica y administrativa.
-              </p>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      <main className="container mx-auto flex flex-col gap-6 px-6 py-8">
+    <AppShell
+      currentPath="/audit-panel"
+      title="Auditoria"
+      subtitle="Modulo central para revisar trazabilidad operativa, tecnica y administrativa."
+      leading={<AppShellBackButton onClick={() => window.history.back()} />}
+      contentClassName="container mx-auto flex flex-col gap-6 px-6 py-8"
+    >
         <Card className="border-[#dbe5ef] bg-white">
           <CardHeader className="space-y-4">
             <div>
               <CardTitle className="text-[#013765]">Fuentes de auditoria</CardTitle>
-              <CardDescription className="text-[#013765]/70">
-                Separa lo administrativo de lo operativo para que despues podamos profundizar mensajes y flujos.
-              </CardDescription>
             </div>
             <div className="flex flex-wrap gap-2">
               {([
@@ -344,7 +352,7 @@ export default function AuditPanel({
               </div>
             </CardHeader>
             <CardContent className="space-y-5">
-              <div className="rounded-2xl border border-[#dbe5ef] overflow-hidden">
+              <div className="rounded-xl border border-[#dbe5ef] overflow-hidden">
                 <div className="grid grid-cols-1 gap-3 border-b border-[#dbe5ef] bg-slate-50 px-4 py-3 md:grid-cols-[minmax(0,1fr)_180px]">
                   <Input
                     value={auditSearch}
@@ -392,6 +400,12 @@ export default function AuditPanel({
                                 {entry.properties?.target_user?.email ? ` · ${entry.properties.target_user.email}` : ""}
                               </p>
                             ) : null}
+                            {entry.properties?.chat?.contact_name || entry.properties?.chat?.contact_number ? (
+                              <p className="mt-1 truncate text-xs text-slate-600">
+                                Chat: {entry.properties.chat?.contact_name ?? "Sin nombre"}
+                                {entry.properties?.chat?.contact_number ? ` · ${entry.properties.chat.contact_number}` : ""}
+                              </p>
+                            ) : null}
                             <p className="mt-1 truncate text-xs text-[#013765]/65">
                               {entry.created_at_human ?? entry.created_at ?? "sin fecha"}
                             </p>
@@ -425,7 +439,38 @@ export default function AuditPanel({
                               </div>
                             ) : null}
 
-                            {(entry.properties?.before || entry.properties?.after || entry.properties?.meta) ? (
+                            {entry.properties?.changes_human?.length ? (
+                              <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                                <div className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)] gap-3 border-b border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                  <span>Campo</span>
+                                  <span>Antes</span>
+                                  <span>Despues</span>
+                                </div>
+                                {entry.properties.changes_human.map((change, index) => {
+                                  const hasBeforeAfter = change.before !== undefined || change.after !== undefined
+
+                                  return (
+                                    <div
+                                      key={`${entry.id}-${change.key ?? change.label}-${index}`}
+                                      className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)] gap-3 border-b border-slate-100 px-3 py-2 text-sm last:border-b-0"
+                                    >
+                                      <div className="font-medium text-slate-700">{change.label}</div>
+                                      {hasBeforeAfter ? (
+                                        <>
+                                          <div className="text-slate-600">{change.before ?? "—"}</div>
+                                          <div className="text-slate-900">{change.after ?? "—"}</div>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <div className="text-slate-400">—</div>
+                                          <div className="text-slate-900">{change.value ?? "—"}</div>
+                                        </>
+                                      )}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            ) : (entry.properties?.before || entry.properties?.after || entry.properties?.meta) ? (
                               <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
                                 {entry.properties?.before ? (
                                   <div className="rounded-xl bg-white p-3">
@@ -538,7 +583,7 @@ export default function AuditPanel({
               </div>
               <div
                 ref={logsViewportRef}
-                className="max-h-[520px] overflow-auto rounded-2xl bg-slate-950 px-4 py-3 font-mono text-[12px] leading-5 text-emerald-300 shadow-inner"
+                className="max-h-[520px] overflow-auto rounded-xl bg-slate-950 px-4 py-3 font-mono text-[12px] leading-5 text-emerald-300 shadow-inner"
               >
                 {(logTailState?.lines ?? []).length > 0 ? (
                   (logTailState?.lines ?? []).map((line, index) => (
@@ -553,7 +598,6 @@ export default function AuditPanel({
             </CardContent>
           </Card>
         )}
-      </main>
-    </div>
+    </AppShell>
   )
 }

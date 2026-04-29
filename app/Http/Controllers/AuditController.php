@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\AuditService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\File;
@@ -10,6 +11,10 @@ use Spatie\Activitylog\Models\Activity;
 
 class AuditController extends Controller
 {
+    public function __construct(private readonly AuditService $auditService)
+    {
+    }
+
     public function index(Request $request)
     {
         return Inertia::render('AuditPanel', [
@@ -61,7 +66,11 @@ class AuditController extends Controller
                 'created_at_human' => optional($activity->created_at)?->diffForHumans(),
                 'causer_name' => $activity->causer?->name,
                 'causer_email' => $activity->causer?->email,
-                'properties' => $activity->properties?->toArray() ?? [],
+                'properties' => $this->auditService->presentProperties(
+                    (string) $activity->log_name,
+                    $activity->event,
+                    $activity->properties?->toArray() ?? [],
+                ),
             ])
             ->values()
             ->all();

@@ -516,7 +516,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
 
   return (
     // Antes: <div className="flex flex-1">
-    <div className="relative flex h-[calc(100vh-64px)] min-h-0">
+    <div className="relative flex h-full min-h-0">
       {/* Sidebar de chats */}
       <div className="w-80 border-r border-gray-300 bg-gray-100 flex flex-col min-h-0">
         <ChatSidebar
@@ -655,4 +655,3 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     </div>
   )
 }
-
