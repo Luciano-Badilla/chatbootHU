@@ -1,7 +1,7 @@
 import type { ReactNode } from "react"
 
 import { Button } from "shadcn/components/ui/button"
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "shadcn/components/ui/sidebar"
+import { SidebarInset, SidebarProvider } from "shadcn/components/ui/sidebar"
 import { ArrowLeft } from "lucide-react"
 
 import { AppSidebar } from "./AppSidebar"
@@ -37,7 +37,6 @@ export function AppShell({
             <header className="sticky top-0 z-30 border-b border-[#dbe5ef] bg-[#013765] shadow-sm">
               <div className="flex h-20 items-center justify-between gap-4 px-4 lg:px-6">
                 <div className="flex min-w-0 items-center gap-3">
-                  <SidebarTrigger className="shrink-0 border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white" />
                   {leading}
                   <div className="min-w-0">
                     <h1 className="truncate text-xl font-semibold text-white">{title}</h1>

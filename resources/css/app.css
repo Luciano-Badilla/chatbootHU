@@ -64,3 +64,11 @@
     @apply bg-background text-foreground;
   }
 }
+
+@layer components {
+  [data-sonner-toast] [data-close-button] {
+    left: auto;
+    right: 0;
+    transform: translate(35%, -35%);
+  }
+}

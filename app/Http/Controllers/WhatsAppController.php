@@ -75,6 +75,7 @@ class WhatsAppController extends Controller
         // --------------------------------
         $body = null;
         $messageType = 'text';
+        $mediaId = null;
         $mediaUrl = null;
         $mediaName = null;
         $mime = null;
@@ -114,24 +115,27 @@ class WhatsAppController extends Controller
             case 'image':
                 $body = $messageData['image']['caption'] ?? null;
                 $messageType = 'image';
+                $mediaId = $messageData['image']['id'] ?? null;
                 $mediaUrl = $messageData['image']['url'] ?? null;
-                $mediaName = $messageData['image']['id'] ?? null;
+                $mediaName = $mediaId;
                 $mime = $messageData['image']['mime_type'] ?? null;
                 break;
 
             case 'video':
                 $body = $messageData['video']['caption'] ?? null;
                 $messageType = 'video';
+                $mediaId = $messageData['video']['id'] ?? null;
                 $mediaUrl = $messageData['video']['url'] ?? null;
-                $mediaName = $messageData['video']['id'] ?? null;
+                $mediaName = $mediaId;
                 $mime = $messageData['video']['mime_type'] ?? null;
                 break;
 
             case 'audio':
                 $messageType = 'audio';
                 $body = '[Audio]';
+                $mediaId = $messageData['audio']['id'] ?? null;
                 $mediaUrl = $messageData['audio']['url'] ?? null;
-                $mediaName = $messageData['audio']['id'] ?? null;
+                $mediaName = $mediaId;
                 $mime = $messageData['audio']['mime_type'] ?? null;
                 break;
 
@@ -139,17 +143,19 @@ class WhatsAppController extends Controller
                 $messageType = 'document';
                 $body = $messageData['document']['caption']
                     ?? ($messageData['document']['filename'] ?? '[Documento]');
+                $mediaId = $messageData['document']['id'] ?? null;
                 $mediaUrl = $messageData['document']['url'] ?? null;
                 $mediaName = $messageData['document']['filename']
-                    ?? ($messageData['document']['id'] ?? null);
+                    ?? $mediaId;
                 $mime = $messageData['document']['mime_type'] ?? null;
                 break;
 
             case 'sticker':
                 $messageType = 'image';
                 $body = '[Sticker]';
+                $mediaId = $messageData['sticker']['id'] ?? null;
                 $mediaUrl = $messageData['sticker']['url'] ?? null;
-                $mediaName = $messageData['sticker']['id'] ?? null;
+                $mediaName = $mediaId;
                 $mime = $messageData['sticker']['mime_type'] ?? null;
                 break;
 
@@ -237,6 +243,10 @@ class WhatsAppController extends Controller
         // 6) Descargar media (si hay) y generar URL pública
         // --------------------------------
         $publicMediaUrl = null;  // lo que va a la DB y al front
+
+        if (!$mediaUrl && $mediaId) {
+            $mediaUrl = $this->resolveWhatsAppMediaUrl($mediaId);
+        }
 
         if ($mediaUrl) {
             try {
@@ -2084,6 +2094,29 @@ class WhatsAppController extends Controller
     private function whatsappVerifyToken(): string
     {
         return (string) $this->runtimeSetting('integrations.whatsapp.webhook_verify_token', env('WHATSAPP_VERIFY_TOKEN', ''));
+    }
+
+    private function resolveWhatsAppMediaUrl(string $mediaId): ?string
+    {
+        try {
+            $response = Http::withToken($this->whatsappAccessToken())
+                ->get("https://graph.facebook.com/v22.0/{$mediaId}");
+
+            if ($response->successful()) {
+                return $response->json('url');
+            }
+
+            Log::warning('No se pudo resolver URL de media WhatsApp: ' . $response->status(), [
+                'media_id' => $mediaId,
+                'response' => $response->body(),
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Error resolviendo URL de media WhatsApp: ' . $e->getMessage(), [
+                'media_id' => $mediaId,
+            ]);
+        }
+
+        return null;
     }
 
     private function alephooBaseUrl(): string

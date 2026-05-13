@@ -54,14 +54,27 @@ export function AppSidebar({ currentPath = "/dashboard" }: { currentPath?: strin
       } | null
     }
   }>()
-  const { open, isMobile, setOpenMobile } = useSidebar()
+  const { open, isMobile, setOpen, setOpenMobile } = useSidebar()
   const compact = !open && !isMobile
   const user = props.auth?.user
   const userName = user?.name?.trim() || "Usuario"
   const userRole = user?.role_label?.trim() || user?.role_name?.trim() || "Usuario"
 
   return (
-    <Sidebar collapsible="icon" className="bg-[#013765] text-white">
+    <Sidebar
+      collapsible="icon"
+      className="bg-[#013765] text-white"
+      onMouseEnter={() => {
+        if (!isMobile) {
+          setOpen(true)
+        }
+      }}
+      onMouseLeave={() => {
+        if (!isMobile) {
+          setOpen(false)
+        }
+      }}
+    >
       <SidebarHeader className="h-20 border-b border-white/10 bg-[#013765] p-0">
         <div
           className={cn(

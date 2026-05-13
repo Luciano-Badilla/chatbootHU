@@ -31,6 +31,10 @@ Route::get('/test-broadcast', function () {
     return "Evento enviado";
 });
 
+Route::get('/', function () {
+    return redirect('/dashboard');
+});
+
 Route::middleware('auth')->group(function () {
     Route::get('/dashboard', function () {
         return Inertia::render('Dashboard');
