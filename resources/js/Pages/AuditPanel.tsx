@@ -34,6 +34,23 @@ interface AuditEntry {
       operator_id?: number | null
       operator_name?: string | null
     }
+    flow?: {
+      id?: number
+      name?: string
+      is_active?: boolean
+      is_default?: boolean
+      start_node_id?: number | null
+      start_node_key?: string | null
+    } | null
+    node?: {
+      id?: number
+      flow_id?: number
+      flow_name?: string
+      key?: string | null
+      type?: string | null
+      next_node_id?: number | null
+      next_node_key?: string | null
+    } | null
     changes_human?: Array<{
       key?: string
       label: string
@@ -77,10 +94,62 @@ const AUDIT_FIELD_LABELS: Record<string, string> = {
   inactivity_timeout_minutes: "Tiempo de inactividad",
   inactivity_timeout_message: "Mensaje de inactividad",
   role: "Rol",
+  flow_id: "ID del flujo",
+  flow_name: "Flujo",
+  name: "Nombre",
+  description: "Descripcion",
+  is_active: "Activo",
+  is_default: "Flujo por defecto",
+  start_node_id: "Nodo inicial",
+  start_node_key: "Clave del nodo inicial",
+  key: "Clave",
+  type: "Tipo",
+  body: "Contenido",
+  settings: "Configuracion del nodo",
+  "settings.auto_advance": "Auto-disparar siguiente mensaje",
+  "settings.auto_advance_delay_ms": "Demora del auto-disparo",
+  "settings.auto_advance_max_hops": "Maximo de saltos automaticos",
+  "settings.canvas_position": "Posicion en canvas",
+  "settings.variable": "Variable capturada",
+  "settings.validation_regex": "Regex de validacion",
+  "settings.error_message": "Mensaje de error",
+  "settings.button_text": "Texto del boton de lista",
+  "settings.section_title": "Titulo de la seccion",
+  "settings.dni_variable": "Variable con DNI",
+  "settings.not_found_message": "Mensaje si no se encuentra",
+  "settings.not_found_next_node_id": "Siguiente nodo si no se encuentra",
+  "settings.error_next_node_id": "Siguiente nodo si hay error",
+  next_node_id: "Siguiente nodo",
+  next_node_key: "Siguiente nodo",
+  deleted_at: "Fecha de eliminacion",
+  deleted_nodes_count: "Nodos eliminados",
+  replacement_default_flow_id: "Flujo por defecto reemplazante",
+  replacement_node_id: "Nodo reemplazante",
 }
 
 function getAuditFieldLabel(key: string): string {
-  return AUDIT_FIELD_LABELS[key] ?? key.replace(/_/g, " ")
+  if (AUDIT_FIELD_LABELS[key]) return AUDIT_FIELD_LABELS[key]
+
+  const buttonMatch = key.match(/^settings\.buttons\.(\d+)\.(.+)$/)
+  if (buttonMatch) {
+    return `Boton ${Number(buttonMatch[1]) + 1} - ${getAuditFieldLabel(buttonMatch[2])}`
+  }
+
+  const rowMatch = key.match(/^settings\.rows\.(\d+)\.(.+)$/)
+  if (rowMatch) {
+    return `Opcion ${Number(rowMatch[1]) + 1} - ${getAuditFieldLabel(rowMatch[2])}`
+  }
+
+  const leafLabels: Record<string, string> = {
+    id: "ID interno",
+    title: "Texto",
+    description: "Descripcion",
+    next_node_id: "Siguiente nodo",
+    x: "X",
+    y: "Y",
+  }
+
+  return leafLabels[key] ?? key.replace(/\./g, " - ").replace(/_/g, " ")
 }
 
 const scopeMeta: Record<Exclude<AuditScope, "logs">, { title: string; description: string; icon: typeof ShieldCheck }> = {
@@ -166,6 +235,8 @@ export default function AuditPanel({
       const targetUserEmail = String(entry.properties?.target_user?.email ?? "")
       const chatContactName = String(entry.properties?.chat?.contact_name ?? "")
       const chatContactNumber = String(entry.properties?.chat?.contact_number ?? "")
+      const flowName = String(entry.properties?.flow?.name ?? entry.properties?.node?.flow_name ?? "")
+      const nodeKey = String(entry.properties?.node?.key ?? "")
       const changedKeyLabels = (entry.properties?.changed_keys ?? []).map((key) => getAuditFieldLabel(key))
       const humanChanges = (entry.properties?.changes_human ?? []).flatMap((change) => [
         change.label ?? "",
@@ -181,6 +252,8 @@ export default function AuditPanel({
         targetUserEmail,
         chatContactName,
         chatContactNumber,
+        flowName,
+        nodeKey,
         entry.event ?? "",
         ...(entry.properties?.changed_keys ?? []),
         ...changedKeyLabels,
@@ -404,6 +477,12 @@ export default function AuditPanel({
                               <p className="mt-1 truncate text-xs text-slate-600">
                                 Chat: {entry.properties.chat?.contact_name ?? "Sin nombre"}
                                 {entry.properties?.chat?.contact_number ? ` · ${entry.properties.chat.contact_number}` : ""}
+                              </p>
+                            ) : null}
+                            {entry.properties?.flow?.name || entry.properties?.node?.flow_name ? (
+                              <p className="mt-1 truncate text-xs text-slate-600">
+                                Flujo: {entry.properties?.flow?.name ?? entry.properties?.node?.flow_name}
+                                {entry.properties?.node?.key ? ` · Nodo: ${entry.properties.node.key}` : ""}
                               </p>
                             ) : null}
                             <p className="mt-1 truncate text-xs text-[#013765]/65">

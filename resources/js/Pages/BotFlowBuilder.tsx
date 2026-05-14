@@ -1428,7 +1428,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     })
   }
 
-  const flowCanvasNodes = useMemo<FlowNode<CanvasNodeData>[]>(() => {
+  const computedCanvasNodes = useMemo<FlowNode<CanvasNodeData>[]>(() => {
     return nodes.map((node, index) => {
       const position = node.settings?.canvas_position ?? {
         x: 120 + (index % 4) * 320,
@@ -1512,6 +1512,12 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     })
   }, [nodes, selectedFlow?.start_node_id, selectedNodeId, deletingNodeId, isReadOnly])
 
+  const [flowCanvasNodes, setFlowCanvasNodes] = useState<FlowNode<CanvasNodeData>[]>([])
+
+  useEffect(() => {
+    setFlowCanvasNodes(computedCanvasNodes)
+  }, [computedCanvasNodes])
+
   const flowCanvasEdges = useMemo<Edge[]>(() => {
     const edges: Edge[] = []
 
@@ -1578,34 +1584,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
   const handleCanvasNodesChange = (changes: NodeChange<FlowNode<CanvasNodeData>>[]) => {
     if (isReadOnly) return
-    setNodes((prev) => {
-      const canvasNodes = prev.map((node, index) => ({
-        id: String(node.id),
-        position: node.settings?.canvas_position ?? {
-          x: 120 + (index % 4) * 320,
-          y: 80 + Math.floor(index / 4) * 180,
-        },
-        data: {},
-      }))
-
-      const nextCanvasNodes = applyNodeChanges(changes, canvasNodes)
-      const positionsById = new Map(
-        nextCanvasNodes.map((node) => [Number(node.id), node.position] as const),
-      )
-
-      return prev.map((node) => {
-        const nextPosition = positionsById.get(node.id)
-        if (!nextPosition) return node
-
-        return {
-          ...node,
-          settings: {
-            ...(node.settings ?? {}),
-            canvas_position: nextPosition,
-          },
-        }
-      })
-    })
+    setFlowCanvasNodes((current) => applyNodeChanges(changes, current))
   }
 
   const handleCanvasNodeDragStop = (_event: unknown, flowNode: FlowNode<CanvasNodeData>) => {

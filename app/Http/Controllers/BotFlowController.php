@@ -6,12 +6,18 @@ namespace App\Http\Controllers;
 use App\Models\BotFlow;
 use App\Models\BotNode;
 use App\Models\Chat;
+use App\Services\AuditService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 
 class BotFlowController extends Controller
 {
+    public function __construct(private readonly AuditService $auditService)
+    {
+    }
+
     public function index(Request $request)
     {
         $flows = BotFlow::orderBy('id')->get();
@@ -41,8 +47,19 @@ class BotFlowController extends Controller
             }
         }
 
+        $before = $this->flowAuditSnapshot($flow);
+
         $flow->start_node_id = $data['start_node_id'] ?? null;
         $flow->save();
+
+        $this->auditService->recordFlowChange(
+            'start_node_updated',
+            "Actualizo nodo inicial de {$flow->name}",
+            $flow,
+            $before,
+            $this->flowAuditSnapshot($flow->fresh(['startNode'])),
+            $request->user(),
+        );
 
         return response()->json([
             'ok' => true,
@@ -100,6 +117,15 @@ class BotFlowController extends Controller
             'is_active' => true,
         ]);
 
+        $this->auditService->recordFlowChange(
+            'created',
+            "Creo flujo {$flow->name}",
+            $flow,
+            [],
+            $this->flowAuditSnapshot($flow),
+            $request->user(),
+        );
+
         return response()->json($flow, 201);
     }
 
@@ -110,10 +136,21 @@ class BotFlowController extends Controller
             'description' => 'nullable|string',
         ]);
 
+        $before = $this->flowAuditSnapshot($flow);
+
         $flow->update([
             'name' => $data['name'],
             'description' => $data['description'] ?? null,
         ]);
+
+        $this->auditService->recordFlowChange(
+            'updated',
+            "Actualizo flujo {$flow->name}",
+            $flow,
+            $before,
+            $this->flowAuditSnapshot($flow->fresh(['startNode'])),
+            $request->user(),
+        );
 
         return response()->json([
             'ok' => true,
@@ -145,11 +182,28 @@ class BotFlowController extends Controller
             'settings' => $data['settings'] ?? [],
         ]);
 
+        $startNodeBefore = $flow->start_node_id;
+
         // Si el flujo no tiene start_node_id, lo ponemos
         if (!$flow->start_node_id) {
             $flow->start_node_id = $node->id;
             $flow->save();
         }
+
+        $this->auditService->recordNodeChange(
+            'node_created',
+            "Creo nodo en {$flow->name}",
+            $node,
+            [],
+            $this->nodeAuditSnapshot($node->fresh(['flow'])),
+            $request->user(),
+            [
+                'meta' => [
+                    'flow_start_node_before' => $startNodeBefore,
+                    'flow_start_node_after' => $flow->start_node_id,
+                ],
+            ],
+        );
 
         return response()->json($node, 201);
     }
@@ -176,17 +230,30 @@ class BotFlowController extends Controller
             'next_node_id' => 'nullable|integer',
         ])->validate();
 
+        $before = $this->nodeAuditSnapshot($node);
+
         $node->update($data);
+        $after = $this->nodeAuditSnapshot($node->fresh(['flow', 'nextNode']));
+
+        $this->auditService->recordNodeChange(
+            'node_updated',
+            $this->nodeUpdateAuditDescription($before, $after),
+            $node,
+            $before,
+            $after,
+            $request->user(),
+        );
 
         return response()->json($node);
     }
 
-    public function destroyFlow(BotFlow $flow)
+    public function destroyFlow(Request $request, BotFlow $flow)
     {
         $deletedFlowId = $flow->id;
         $wasDefault = (bool) $flow->is_default;
         $replacementDefaultId = null;
         $deletedNodeIds = $flow->nodes()->pluck('id')->all();
+        $before = $this->flowAuditSnapshot($flow);
 
         DB::transaction(function () use ($flow, $deletedFlowId, $deletedNodeIds, $wasDefault, &$replacementDefaultId) {
             $this->clearChatStatesForDeletedNodes($deletedFlowId, $deletedNodeIds);
@@ -219,6 +286,26 @@ class BotFlowController extends Controller
             }
         });
 
+        $this->auditService->recordFlowAction(
+            'deleted',
+            "Elimino flujo {$before['name']}",
+            $flow,
+            $request->user(),
+            [
+                'changed_keys' => ['deleted_nodes_count', 'replacement_default_flow_id'],
+                'before' => $before,
+                'after' => array_merge($before, [
+                    'deleted_at' => optional($flow->deleted_at)->toDateTimeString(),
+                    'deleted_nodes_count' => count($deletedNodeIds),
+                    'replacement_default_flow_id' => $replacementDefaultId,
+                ]),
+                'meta' => [
+                    'deleted_nodes_count' => count($deletedNodeIds),
+                    'replacement_default_flow_id' => $replacementDefaultId,
+                ],
+            ],
+        );
+
         return response()->json([
             'ok' => true,
             'deleted_flow_id' => $deletedFlowId,
@@ -226,9 +313,10 @@ class BotFlowController extends Controller
         ]);
     }
 
-    public function restoreFlow(int $flowId)
+    public function restoreFlow(Request $request, int $flowId)
     {
         $flow = BotFlow::onlyTrashed()->findOrFail($flowId);
+        $before = $this->flowAuditSnapshot($flow);
 
         DB::transaction(function () use ($flow) {
             $flow->restore();
@@ -237,16 +325,26 @@ class BotFlowController extends Controller
                 ->restore();
         });
 
+        $this->auditService->recordFlowChange(
+            'restored',
+            "Restauro flujo {$flow->name}",
+            $flow,
+            $before,
+            $this->flowAuditSnapshot($flow->fresh(['startNode'])),
+            $request->user(),
+        );
+
         return response()->json([
             'ok' => true,
             'flow' => $flow->fresh(),
         ]);
     }
 
-    public function destroyNode(BotNode $node)
+    public function destroyNode(Request $request, BotNode $node)
     {
         $deletedNodeId = $node->id;
         $flow = BotFlow::findOrFail($node->flow_id);
+        $before = $this->nodeAuditSnapshot($node);
         $replacementNodeId = BotNode::where('flow_id', $flow->id)
             ->where('id', '!=', $deletedNodeId)
             ->orderBy('id')
@@ -284,6 +382,24 @@ class BotFlowController extends Controller
             $node->delete();
         });
 
+        $this->auditService->recordNodeAction(
+            'node_deleted',
+            "Elimino nodo {$before['key']}",
+            $node,
+            $request->user(),
+            [
+                'changed_keys' => ['replacement_node_id'],
+                'before' => $before,
+                'after' => array_merge($before, [
+                    'deleted_at' => optional($node->deleted_at)->toDateTimeString(),
+                    'replacement_node_id' => $replacementNodeId,
+                ]),
+                'meta' => [
+                    'replacement_node_id' => $replacementNodeId,
+                ],
+            ],
+        );
+
         return response()->json([
             'ok' => true,
             'deleted_node_id' => $deletedNodeId,
@@ -292,10 +408,11 @@ class BotFlowController extends Controller
         ]);
     }
 
-    public function restoreNode(int $nodeId)
+    public function restoreNode(Request $request, int $nodeId)
     {
         $node = BotNode::onlyTrashed()->findOrFail($nodeId);
         $flow = BotFlow::withTrashed()->findOrFail($node->flow_id);
+        $before = $this->nodeAuditSnapshot($node);
 
         if ($flow->trashed()) {
             return response()->json([
@@ -311,6 +428,20 @@ class BotFlowController extends Controller
             $flow->save();
         }
 
+        $this->auditService->recordNodeChange(
+            'node_restored',
+            "Restauro nodo {$node->key}",
+            $node,
+            $before,
+            $this->nodeAuditSnapshot($node->fresh(['flow'])),
+            $request->user(),
+            [
+                'meta' => [
+                    'flow_start_node_id' => $flow->start_node_id,
+                ],
+            ],
+        );
+
         return response()->json([
             'ok' => true,
             'node' => $node->fresh(),
@@ -318,18 +449,160 @@ class BotFlowController extends Controller
         ]);
     }
 
-    public function makeDefault(BotFlow $flow)
+    public function makeDefault(Request $request, BotFlow $flow)
     {
         if (!$flow->is_active) {
             return response()->json(['error' => 'No podés marcar como default un flow inactivo'], 422);
         }
+
+        $beforeDefault = BotFlow::query()->where('is_default', true)->first();
+        $before = [
+            'default_flow_id' => $beforeDefault?->id,
+            'default_flow_name' => $beforeDefault?->name,
+        ];
 
         DB::transaction(function () use ($flow) {
             BotFlow::where('is_default', true)->update(['is_default' => false]);
             $flow->update(['is_default' => true]);
         });
 
+        $this->auditService->recordFlowChange(
+            'default_updated',
+            "Marco flujo {$flow->name} como default",
+            $flow,
+            $before,
+            [
+                'default_flow_id' => $flow->id,
+                'default_flow_name' => $flow->name,
+            ],
+            $request->user(),
+        );
+
         return response()->json(['ok' => true, 'default_flow_id' => $flow->id]);
+    }
+
+    private function flowAuditSnapshot(BotFlow $flow): array
+    {
+        $flow->loadMissing('startNode');
+
+        return [
+            'id' => $flow->id,
+            'name' => $flow->name,
+            'description' => $flow->description,
+            'is_active' => (bool) $flow->is_active,
+            'is_default' => (bool) $flow->is_default,
+            'start_node_id' => $flow->start_node_id,
+            'start_node_key' => $flow->startNode?->key,
+            'deleted_at' => optional($flow->deleted_at)->toDateTimeString(),
+        ];
+    }
+
+    private function nodeAuditSnapshot(BotNode $node): array
+    {
+        $node->loadMissing(['flow', 'nextNode']);
+
+        return [
+            'id' => $node->id,
+            'flow_id' => $node->flow_id,
+            'flow_name' => $node->flow?->name,
+            'key' => $node->key,
+            'type' => $node->type,
+            'body' => $node->body,
+            'settings' => $node->settings ?? [],
+            'next_node_id' => $node->next_node_id,
+            'next_node_key' => $node->nextNode?->key,
+            'deleted_at' => optional($node->deleted_at)->toDateTimeString(),
+        ];
+    }
+
+    private function nodeUpdateAuditDescription(array $before, array $after): string
+    {
+        $nodeKey = $after['key'] ?? $before['key'] ?? ('#' . ($after['id'] ?? $before['id'] ?? ''));
+        $connectionChanges = $this->nodeConnectionChanges($before, $after);
+
+        if (count($connectionChanges) === 1) {
+            $change = $connectionChanges[0];
+
+            if ($change['after'] === null || $change['after'] === '') {
+                return "Desconecto {$change['label']} de nodo {$nodeKey}";
+            }
+
+            return "Conecto {$change['label']} de nodo {$nodeKey} con " . $this->nodeReferenceLabel($change['after']);
+        }
+
+        if (count($connectionChanges) > 1) {
+            return "Actualizo conexiones de nodo {$nodeKey}";
+        }
+
+        return "Actualizo nodo {$nodeKey}";
+    }
+
+    private function nodeConnectionChanges(array $before, array $after): array
+    {
+        $changes = [];
+        $paths = [
+            ['path' => 'next_node_id', 'label' => 'salida principal'],
+            ['path' => 'settings.not_found_next_node_id', 'label' => 'rama No encontrado'],
+            ['path' => 'settings.error_next_node_id', 'label' => 'rama Error'],
+        ];
+
+        $beforeButtons = Arr::get($before, 'settings.buttons', []);
+        $afterButtons = Arr::get($after, 'settings.buttons', []);
+        $buttonCount = max(is_array($beforeButtons) ? count($beforeButtons) : 0, is_array($afterButtons) ? count($afterButtons) : 0);
+
+        for ($index = 0; $index < $buttonCount; $index++) {
+            $title = Arr::get($after, "settings.buttons.{$index}.title")
+                ?? Arr::get($before, "settings.buttons.{$index}.title")
+                ?? 'Boton ' . ($index + 1);
+            $paths[] = [
+                'path' => "settings.buttons.{$index}.next_node_id",
+                'label' => "boton {$title}",
+            ];
+        }
+
+        $beforeRows = Arr::get($before, 'settings.rows', []);
+        $afterRows = Arr::get($after, 'settings.rows', []);
+        $rowCount = max(is_array($beforeRows) ? count($beforeRows) : 0, is_array($afterRows) ? count($afterRows) : 0);
+
+        for ($index = 0; $index < $rowCount; $index++) {
+            $title = Arr::get($after, "settings.rows.{$index}.title")
+                ?? Arr::get($before, "settings.rows.{$index}.title")
+                ?? 'Opcion ' . ($index + 1);
+            $paths[] = [
+                'path' => "settings.rows.{$index}.next_node_id",
+                'label' => "opcion {$title}",
+            ];
+        }
+
+        foreach ($paths as $path) {
+            $beforeValue = Arr::get($before, $path['path']);
+            $afterValue = Arr::get($after, $path['path']);
+
+            if ($beforeValue !== $afterValue) {
+                $changes[] = [
+                    'label' => $path['label'],
+                    'before' => $beforeValue,
+                    'after' => $afterValue,
+                ];
+            }
+        }
+
+        return $changes;
+    }
+
+    private function nodeReferenceLabel(mixed $nodeId): string
+    {
+        if ($nodeId === null || $nodeId === '') {
+            return 'Finalizar flujo';
+        }
+
+        $node = BotNode::withTrashed()->find((int) $nodeId);
+
+        if ($node) {
+            return $node->key ?: "node_{$node->id}";
+        }
+
+        return "Nodo #{$nodeId}";
     }
 
     private function removeDeletedNodeReferencesFromSettings($settings, int $deletedNodeId): array

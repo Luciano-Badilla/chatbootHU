@@ -110,7 +110,7 @@ export function AppSidebar({ currentPath = "/dashboard" }: { currentPath?: strin
 
       <SidebarContent className="bg-[#013765] text-white">
         <SidebarGroup>
-          <SidebarGroupLabel>{compact ? "Menu" : "Navegacion"}</SidebarGroupLabel>
+          <SidebarGroupLabel>Menu</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {navigationItems.map((item) => {
