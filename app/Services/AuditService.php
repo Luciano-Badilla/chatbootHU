@@ -57,6 +57,7 @@ class AuditService
         'settings.variable' => 'Variable capturada',
         'settings.validation_regex' => 'Regex de validacion',
         'settings.error_message' => 'Mensaje de error',
+        'settings.response_mode' => 'Tipo de respuesta',
         'settings.button_text' => 'Texto del boton de lista',
         'settings.section_title' => 'Titulo de la seccion',
         'settings.dni_variable' => 'Variable con DNI',
@@ -739,6 +740,15 @@ class AuditService
                 'input' => 'Captura de dato',
                 'handoff' => 'Derivar a operador',
                 'person_lookup' => 'Consulta de persona',
+                default => (string) $value,
+            };
+        }
+
+        if ($key === 'settings.response_mode') {
+            return match ((string) $value) {
+                'text' => 'Texto libre',
+                'buttons' => 'Botones',
+                'list' => 'Lista',
                 default => (string) $value,
             };
         }

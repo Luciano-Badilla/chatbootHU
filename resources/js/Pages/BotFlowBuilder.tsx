@@ -682,7 +682,15 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const canSaveNode = useMemo(() => {
     if (!editNode) return false
     if (editNode.type === "input") {
-      return inputVariableValidation.isAvailable
+      const mode = editNode.settings?.response_mode ?? "text"
+      const hasOptions =
+        mode === "buttons"
+          ? Array.isArray(editNode.settings?.buttons) && editNode.settings.buttons.length > 0
+          : mode === "list"
+            ? Array.isArray(editNode.settings?.rows) && editNode.settings.rows.length > 0
+            : true
+
+      return inputVariableValidation.isAvailable && hasOptions
     }
 
     return true
@@ -1131,7 +1139,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const handleSaveNode = async () => {
     if (isReadOnly) return false
     if (!editNode) return
-    if (editNode.type === "input" && !inputVariableValidation.isAvailable) return false
+    if (editNode.type === "input" && !canSaveNode) return false
 
     const snapshot = {
       ...editNode,
@@ -1262,7 +1270,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       tone?: BranchTone
     }> = []
 
-    if (node.type === "buttons" && Array.isArray(settings.buttons)) {
+    if (
+      (node.type === "buttons" || (node.type === "input" && settings.response_mode === "buttons")) &&
+      Array.isArray(settings.buttons)
+    ) {
       settings.buttons.forEach((button: any, index: number) => {
         const targetId = button?.next_node_id ? Number(button.next_node_id) : null
         branches.push({
@@ -1273,7 +1284,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           tone: getIndexedBranchTone(index),
         })
       })
-    } else if (node.type === "list" && Array.isArray(settings.rows)) {
+    } else if (
+      (node.type === "list" || (node.type === "input" && settings.response_mode === "list")) &&
+      Array.isArray(settings.rows)
+    ) {
       settings.rows.forEach((row: any, index: number) => {
         const targetId = row?.next_node_id ? Number(row.next_node_id) : null
         branches.push({
@@ -1311,7 +1325,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         targetLabel: getNodeLabel(errorTargetId),
         tone: "danger",
       })
-    } else if (node.type === "text" || node.type === "input") {
+    } else if (node.type === "text" || (node.type === "input" && settings.response_mode !== "buttons" && settings.response_mode !== "list")) {
       const targetId = node.next_node_id ? Number(node.next_node_id) : null
       branches.push({
         id: `next-${node.id}`,
@@ -1479,21 +1493,21 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                   hasConnection: Boolean(node.settings?.error_next_node_id),
                 },
               ]
-              : node.type === "buttons"
+              : node.type === "buttons" || (node.type === "input" && node.settings?.response_mode === "buttons")
                 ? getNodeBranches(node).map((branch) => ({
                   id: branch.id,
                   label: branch.label,
                   tone: branch.tone ?? "default",
                   hasConnection: Boolean(branch.targetId),
                 }))
-                : node.type === "list"
+                : node.type === "list" || (node.type === "input" && node.settings?.response_mode === "list")
                   ? getNodeBranches(node).map((branch) => ({
                     id: branch.id,
                     label: branch.label,
                     tone: branch.tone ?? "default",
                     hasConnection: Boolean(branch.targetId),
                   }))
-                  : node.type === "text" || node.type === "input"
+                  : node.type === "text" || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
                     ? [{ id: "next", label: "Siguiente", tone: "default" as const, hasConnection: Boolean(node.next_node_id) }]
                     : [],
           deleting: deletingNodeId === node.id,
@@ -1531,7 +1545,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           target: String(branch.targetId),
           interactionWidth: 28,
           sourceHandle:
-            node.type === "buttons" || node.type === "list"
+            node.type === "buttons" ||
+            node.type === "list" ||
+            (node.type === "input" && (node.settings?.response_mode === "buttons" || node.settings?.response_mode === "list"))
               ? branch.id
               : node.type === "person_lookup"
                 ? branch.tone === "success"
@@ -1541,7 +1557,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     : branch.tone === "danger"
                       ? "error"
                       : undefined
-                : node.type === "text" || node.type === "input"
+                : node.type === "text" || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
                   ? "next"
                   : undefined,
           label: branch.label === "Siguiente" ? undefined : branch.label,
@@ -1652,7 +1668,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               } as any,
             }
             : { next_node_id: targetId }
-        : sourceNode.type === "buttons" && Array.isArray(settings.buttons)
+        : (sourceNode.type === "buttons" || (sourceNode.type === "input" && settings.response_mode === "buttons")) && Array.isArray(settings.buttons)
           ? {
             settings: {
               ...settings,
@@ -1663,7 +1679,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               ),
             } as any,
           }
-          : sourceNode.type === "list" && Array.isArray(settings.rows)
+          : (sourceNode.type === "list" || (sourceNode.type === "input" && settings.response_mode === "list")) && Array.isArray(settings.rows)
             ? {
               settings: {
                 ...settings,
@@ -1697,7 +1713,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     },
                   }
                   : { next_node_id: targetId }
-              : sourceNode.type === "buttons" && Array.isArray(node.settings?.buttons)
+              : (sourceNode.type === "buttons" || (sourceNode.type === "input" && node.settings?.response_mode === "buttons")) && Array.isArray(node.settings?.buttons)
                 ? {
                   settings: {
                     ...(node.settings ?? {}),
@@ -1708,7 +1724,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     ),
                   },
                 }
-                : sourceNode.type === "list" && Array.isArray(node.settings?.rows)
+                : (sourceNode.type === "list" || (sourceNode.type === "input" && node.settings?.response_mode === "list")) && Array.isArray(node.settings?.rows)
                   ? {
                     settings: {
                       ...(node.settings ?? {}),
@@ -1752,7 +1768,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               } as any,
             }
             : { next_node_id: null }
-        : sourceNode.type === "buttons" && Array.isArray(settings.buttons)
+        : (sourceNode.type === "buttons" || (sourceNode.type === "input" && settings.response_mode === "buttons")) && Array.isArray(settings.buttons)
           ? {
             settings: {
               ...settings,
@@ -1763,7 +1779,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               ),
             } as any,
           }
-          : sourceNode.type === "list" && Array.isArray(settings.rows)
+          : (sourceNode.type === "list" || (sourceNode.type === "input" && settings.response_mode === "list")) && Array.isArray(settings.rows)
             ? {
               settings: {
                 ...settings,
@@ -1797,7 +1813,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     },
                   }
                   : { next_node_id: null }
-              : sourceNode.type === "buttons" && Array.isArray(node.settings?.buttons)
+              : (sourceNode.type === "buttons" || (sourceNode.type === "input" && node.settings?.response_mode === "buttons")) && Array.isArray(node.settings?.buttons)
                 ? {
                   settings: {
                     ...(node.settings ?? {}),
@@ -1808,7 +1824,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     ),
                   },
                 }
-                : sourceNode.type === "list" && Array.isArray(node.settings?.rows)
+                : (sourceNode.type === "list" || (sourceNode.type === "input" && node.settings?.response_mode === "list")) && Array.isArray(node.settings?.rows)
                   ? {
                     settings: {
                       ...(node.settings ?? {}),
@@ -2423,14 +2439,24 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       const settings = ensureSettings<{
         variable: string
         validation_regex: string
+        response_mode: "text" | "buttons" | "list"
+        buttons: any[]
+        button_text: string
+        section_title: string
+        rows: any[]
         error_message: string
       }>({
         variable: "",
         validation_regex: "",
+        response_mode: "text",
+        buttons: [],
+        button_text: "Ver opciones",
+        section_title: "Opciones",
+        rows: [],
         error_message: "Valor inválido, por favor revisá el formato e intentá de nuevo.",
       })
 
-      const update = (field: keyof typeof settings, value: string) => {
+      const update = (field: keyof typeof settings, value: string | any[]) => {
         setEditNode((prev) =>
           prev
             ? {
@@ -2442,6 +2468,57 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             }
             : prev,
         )
+      }
+
+      const updateInputButton = (index: number, field: string, value: any) => {
+        update(
+          "buttons",
+          (settings.buttons ?? []).map((button: any, i: number) =>
+            i === index ? { ...button, [field]: value } : button,
+          ),
+        )
+      }
+
+      const addInputButton = () => {
+        const buttons = settings.buttons ?? []
+        if (buttons.length >= MAX_BUTTONS) return
+
+        update("buttons", [
+          ...buttons,
+          { id: `opcion_${buttons.length + 1}`, title: "Opcion", next_node_id: null },
+        ])
+      }
+
+      const removeInputButton = (index: number) => {
+        update("buttons", (settings.buttons ?? []).filter((_: any, i: number) => i !== index))
+      }
+
+      const updateInputRow = (index: number, field: string, value: any) => {
+        update(
+          "rows",
+          (settings.rows ?? []).map((row: any, i: number) =>
+            i === index ? { ...row, [field]: value } : row,
+          ),
+        )
+      }
+
+      const addInputRow = () => {
+        const rows = settings.rows ?? []
+        if (rows.length >= MAX_LIST_ROWS) return
+
+        update("rows", [
+          ...rows,
+          {
+            id: `row_${rows.length + 1}`,
+            title: "Opcion lista",
+            description: "",
+            next_node_id: null,
+          },
+        ])
+      }
+
+      const removeInputRow = (index: number) => {
+        update("rows", (settings.rows ?? []).filter((_: any, i: number) => i !== index))
       }
 
       return (
@@ -2482,6 +2559,179 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               </div>
             </div>
           </div>
+
+          <div>
+            <label className="text-xs mb-1 block text-muted-foreground">
+              Tipo de respuesta
+            </label>
+            <Select
+              value={settings.response_mode ?? "text"}
+              onValueChange={(value) => update("response_mode", value)}
+            >
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue placeholder="Tipo de respuesta" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="text">Texto libre</SelectItem>
+                <SelectItem value="buttons">Botones</SelectItem>
+                <SelectItem value="list">Lista</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {settings.response_mode === "buttons" ? (
+            <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <h4 className="text-sm font-medium">Opciones como botones</h4>
+                <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                  {(settings.buttons ?? []).length}/{MAX_BUTTONS}
+                </span>
+              </div>
+              <Button
+                variant="outline"
+                className="h-9 w-full justify-center border-dashed border-[#013765]/40 bg-white text-[#013765] hover:bg-[#013765] hover:text-white"
+                onClick={addInputButton}
+                disabled={(settings.buttons ?? []).length >= MAX_BUTTONS}
+              >
+                <Plus className="mr-2 h-3.5 w-3.5" />
+                Agregar boton
+              </Button>
+
+              {(settings.buttons ?? []).map((button: any, index: number) => (
+                <div key={index} className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input value={button.id ?? ""} readOnly className="h-8 bg-slate-100 text-xs text-slate-500" />
+                    <Input
+                      value={button.title ?? ""}
+                      onChange={(e) => updateInputButton(index, "title", e.target.value.slice(0, BUTTON_TITLE_MAX))}
+                      maxLength={BUTTON_TITLE_MAX}
+                      placeholder="Texto del boton"
+                      className="h-8 text-xs"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Select
+                      value={button.next_node_id ? String(button.next_node_id) : "none"}
+                      onValueChange={(val) =>
+                        updateInputButton(index, "next_node_id", val === "none" ? null : Number(val))
+                      }
+                    >
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Siguiente nodo" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Finalizar flujo</SelectItem>
+                        {nextNodeOptions.map((opt) => (
+                          <SelectItem key={opt.id} value={String(opt.id)}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <button
+                      type="button"
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 bg-red-50 text-red-600 transition-colors hover:bg-red-100 hover:text-red-700"
+                      onClick={() => removeInputButton(index)}
+                      title="Eliminar boton"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {settings.response_mode === "list" ? (
+            <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs mb-1 block text-muted-foreground">Texto del boton</label>
+                  <Input
+                    value={settings.button_text ?? ""}
+                    onChange={(e) => update("button_text", e.target.value.slice(0, LIST_BUTTON_TEXT_MAX))}
+                    maxLength={LIST_BUTTON_TEXT_MAX}
+                    className="h-8 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs mb-1 block text-muted-foreground">Titulo de seccion</label>
+                  <Input
+                    value={settings.section_title ?? ""}
+                    onChange={(e) => update("section_title", e.target.value.slice(0, LIST_SECTION_TITLE_MAX))}
+                    maxLength={LIST_SECTION_TITLE_MAX}
+                    className="h-8 text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-2">
+                <h4 className="text-sm font-medium">Opciones de lista</h4>
+                <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                  {(settings.rows ?? []).length}/{MAX_LIST_ROWS}
+                </span>
+              </div>
+              <Button
+                variant="outline"
+                className="h-9 w-full justify-center border-dashed border-[#013765]/40 bg-white text-[#013765] hover:bg-[#013765] hover:text-white"
+                onClick={addInputRow}
+                disabled={(settings.rows ?? []).length >= MAX_LIST_ROWS}
+              >
+                <Plus className="mr-2 h-3.5 w-3.5" />
+                Agregar opcion
+              </Button>
+
+              {(settings.rows ?? []).map((row: any, index: number) => (
+                <div key={index} className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input value={row.id ?? ""} readOnly className="h-8 bg-slate-100 text-xs text-slate-500" />
+                    <Input
+                      value={row.title ?? ""}
+                      onChange={(e) => updateInputRow(index, "title", e.target.value.slice(0, LIST_ROW_TITLE_MAX))}
+                      maxLength={LIST_ROW_TITLE_MAX}
+                      placeholder="Texto de la opcion"
+                      className="h-8 text-xs"
+                    />
+                  </div>
+                  <Input
+                    value={row.description ?? ""}
+                    onChange={(e) => updateInputRow(index, "description", e.target.value.slice(0, LIST_ROW_DESCRIPTION_MAX))}
+                    maxLength={LIST_ROW_DESCRIPTION_MAX}
+                    placeholder="Descripcion opcional"
+                    className="h-8 text-xs"
+                  />
+                  <div className="flex items-center gap-2">
+                    <Select
+                      value={row.next_node_id ? String(row.next_node_id) : "none"}
+                      onValueChange={(val) =>
+                        updateInputRow(index, "next_node_id", val === "none" ? null : Number(val))
+                      }
+                    >
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Siguiente nodo" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Finalizar flujo</SelectItem>
+                        {nextNodeOptions.map((opt) => (
+                          <SelectItem key={opt.id} value={String(opt.id)}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <button
+                      type="button"
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 bg-red-50 text-red-600 transition-colors hover:bg-red-100 hover:text-red-700"
+                      onClick={() => removeInputRow(index)}
+                      title="Eliminar opcion"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
 
           <div>
             <div className="mb-1 flex items-center gap-2"><label className="text-xs block text-muted-foreground">
@@ -3563,7 +3813,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                             {renderSettingsFields()}
 
                             {/* Siguiente nodo lineal (solo para text + input) */}
-                            {isLinearType(editNode.type) && (
+                            {isLinearType(editNode.type) &&
+                              !(editNode.type === "input" && ["buttons", "list"].includes(editNode.settings?.response_mode ?? "text")) && (
                               <div>
                                 <label className="text-xs mb-1 block text-muted-foreground">
                                   Siguiente nodo

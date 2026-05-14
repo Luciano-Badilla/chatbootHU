@@ -1023,6 +1023,22 @@ class WhatsAppController extends Controller
 
         if ($pending) {
             $value = trim((string) ($incoming->body ?? ''));
+            $responseMode = (string) ($pending['response_mode'] ?? 'text');
+
+            if (in_array($responseMode, ['buttons', 'list'], true)) {
+                $option = $this->resolvePendingInputOption($pending, $interactiveReplyId, $value);
+
+                if (!$option) {
+                    $state = $this->getState($chat);
+                    $state['pending_input']['last_error'] = $pending['error_message'] ?? 'Elegí una opción válida.';
+                    $this->setState($chat, $state);
+
+                    return BotNode::find($pending['node_id']);
+                }
+
+                $value = $option['label'];
+                $pending['selected_next_node_id'] = $option['next_node_id'] ?? null;
+            }
 
             if ($value === '') {
                 $state = $this->getState($chat);
@@ -1058,7 +1074,7 @@ class WhatsAppController extends Controller
                 $this->setVar($chat, $varName, $value); // este ya guarda en DB
             }
 
-            $nextId = $pending['next_node_id'] ?? null;
+            $nextId = $pending['selected_next_node_id'] ?? ($pending['next_node_id'] ?? null);
 
             // ✅ SIEMPRE limpiamos pending_input
             $this->clearPendingInput($chat);
@@ -1229,6 +1245,7 @@ class WhatsAppController extends Controller
             // 1) Si ya había pending_input, lo leemos para ver si hay error
             $pending = $this->getPendingInput($chat);
             $errorToSend = is_array($pending) ? ($pending['last_error'] ?? null) : null;
+            $responseMode = (string) (($node->settings ?? [])['response_mode'] ?? 'text');
 
             // 2) Mandamos primero el error si existe, sino el body normal (renderizado)
             if ($errorToSend) {
@@ -1241,10 +1258,22 @@ class WhatsAppController extends Controller
                     unset($state['pending_input']['last_error']);
                     $this->setState($chat, $state);
                 }
-            } else {
-                if ($node->body) {
+            } elseif ($node->body) {
+                if ($responseMode === 'buttons') {
+                    $this->sendWhatsAppButtons($chat, $node, 'input');
+                } elseif ($responseMode === 'list') {
+                    $this->sendWhatsAppList($chat, $node, 'input');
+                } else {
                     $body = $this->renderTemplate($node->body, $chat, $node);
                     $this->sendWhatsAppText($chat, $body, 'user', 'bot', 'input');
+                }
+            }
+
+            if ($errorToSend && in_array($responseMode, ['buttons', 'list'], true) && $node->body) {
+                if ($responseMode === 'buttons') {
+                    $this->sendWhatsAppButtons($chat, $node, 'input');
+                } else {
+                    $this->sendWhatsAppList($chat, $node, 'input');
                 }
             }
 
@@ -1425,7 +1454,7 @@ class WhatsAppController extends Controller
 
 
 
-    private function sendWhatsAppButtons(Chat $chat, BotNode $node): void
+    private function sendWhatsAppButtons(Chat $chat, BotNode $node, string $botNodeType = 'buttons'): void
     {
         $contact = $chat->contact;
         if (!$contact || !$contact->whatsapp_id) {
@@ -1437,7 +1466,7 @@ class WhatsAppController extends Controller
         $bodyText = $this->renderTemplate($node->body ?? '', $chat, $node);
 
         if (empty($buttons)) {
-            $this->sendWhatsAppText($chat, $bodyText, 'user', 'bot', 'buttons', []);
+            $this->sendWhatsAppText($chat, $bodyText, 'user', 'bot', $botNodeType, []);
             return;
         }
 
@@ -1454,7 +1483,7 @@ class WhatsAppController extends Controller
                 'raw_buttons' => $buttons,
             ]);
 
-            $this->sendWhatsAppText($chat, $bodyText, 'user', 'bot', 'buttons', []);
+            $this->sendWhatsAppText($chat, $bodyText, 'user', 'bot', $botNodeType, []);
             return;
         }
 
@@ -1500,7 +1529,7 @@ class WhatsAppController extends Controller
         }
 
         $waMessageId = $response->json()['messages'][0]['id'] ?? null;
-        $this->persistAndPublishOutgoing($chat, $bodyText, $waMessageId, 'buttons', $interactiveOptions);
+        $this->persistAndPublishOutgoing($chat, $bodyText, $waMessageId, $botNodeType, $interactiveOptions);
     }
 
     private function normalizeWhatsAppReplyButtons(array $buttons, Chat $chat, BotNode $node): array
@@ -1561,7 +1590,7 @@ class WhatsAppController extends Controller
         return $normalized;
     }
 
-    private function sendWhatsAppList(Chat $chat, BotNode $node): void
+    private function sendWhatsAppList(Chat $chat, BotNode $node, string $botNodeType = 'list'): void
     {
         $contact = $chat->contact;
         if (!$contact || !$contact->whatsapp_id) {
@@ -1580,7 +1609,7 @@ class WhatsAppController extends Controller
         $sectionTitle = $this->renderTemplate((string) $sectionTitle, $chat, $node);
 
         if (empty($rows)) {
-            $this->sendWhatsAppText($chat, $bodyText, 'user', 'bot', 'list', []);
+            $this->sendWhatsAppText($chat, $bodyText, 'user', 'bot', $botNodeType, []);
             return;
         }
 
@@ -1640,7 +1669,7 @@ class WhatsAppController extends Controller
         $waMessageId = $response->json()['messages'][0]['id'] ?? null;
 
         // ✅ persistimos el texto renderizado
-        $this->persistAndPublishOutgoing($chat, $bodyText, $waMessageId, 'list', $interactiveOptions);
+        $this->persistAndPublishOutgoing($chat, $bodyText, $waMessageId, $botNodeType, $interactiveOptions);
     }
 
 
@@ -1926,6 +1955,9 @@ class WhatsAppController extends Controller
     private function setPendingInput(Chat $chat, BotNode $node): void
     {
         $settings = is_array($node->settings) ? $node->settings : [];
+        $responseMode = in_array(($settings['response_mode'] ?? 'text'), ['buttons', 'list'], true)
+            ? (string) $settings['response_mode']
+            : 'text';
 
         $state = $this->getState($chat);
         $state['pending_input'] = [
@@ -1934,8 +1966,69 @@ class WhatsAppController extends Controller
             'validation_regex' => (string) ($settings['validation_regex'] ?? ''),
             'error_message' => (string) ($settings['error_message'] ?? 'Valor inválido, intentá de nuevo.'),
             'next_node_id' => $node->next_node_id, // clave: a dónde avanzar cuando capture OK
+            'response_mode' => $responseMode,
+            'options' => $this->pendingInputOptions($settings, $responseMode, $chat, $node),
         ];
         $this->setState($chat, $state);
+    }
+
+    private function pendingInputOptions(array $settings, string $responseMode, Chat $chat, BotNode $node): array
+    {
+        $items = $responseMode === 'buttons'
+            ? ($settings['buttons'] ?? [])
+            : ($responseMode === 'list' ? ($settings['rows'] ?? []) : []);
+
+        if (!is_array($items)) {
+            return [];
+        }
+
+        return array_values(array_filter(array_map(function ($item) use ($chat, $node) {
+            if (!is_array($item)) {
+                return null;
+            }
+
+            $id = trim((string) ($item['id'] ?? ''));
+            $label = trim((string) $this->renderTemplate((string) ($item['title'] ?? ''), $chat, $node));
+
+            if ($id === '' || $label === '') {
+                return null;
+            }
+
+            return [
+                'id' => $id,
+                'label' => $label,
+                'next_node_id' => $item['next_node_id'] ?? null,
+            ];
+        }, $items)));
+    }
+
+    private function resolvePendingInputOption(array $pending, ?string $interactiveReplyId, string $body): ?array
+    {
+        $options = is_array($pending['options'] ?? null) ? $pending['options'] : [];
+
+        foreach ($options as $option) {
+            if (is_array($option) && $interactiveReplyId !== null && (string) ($option['id'] ?? '') === $interactiveReplyId) {
+                return [
+                    'id' => (string) ($option['id'] ?? ''),
+                    'label' => (string) ($option['label'] ?? ''),
+                    'next_node_id' => $option['next_node_id'] ?? null,
+                ];
+            }
+        }
+
+        $normalizedBody = mb_strtolower(trim($body));
+
+        foreach ($options as $option) {
+            if (is_array($option) && mb_strtolower(trim((string) ($option['label'] ?? ''))) === $normalizedBody) {
+                return [
+                    'id' => (string) ($option['id'] ?? ''),
+                    'label' => (string) ($option['label'] ?? ''),
+                    'next_node_id' => $option['next_node_id'] ?? null,
+                ];
+            }
+        }
+
+        return null;
     }
 
     private function clearPendingInput(Chat $chat): void

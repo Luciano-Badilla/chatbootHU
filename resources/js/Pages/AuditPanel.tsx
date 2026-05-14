@@ -113,6 +113,7 @@ const AUDIT_FIELD_LABELS: Record<string, string> = {
   "settings.variable": "Variable capturada",
   "settings.validation_regex": "Regex de validacion",
   "settings.error_message": "Mensaje de error",
+  "settings.response_mode": "Tipo de respuesta",
   "settings.button_text": "Texto del boton de lista",
   "settings.section_title": "Titulo de la seccion",
   "settings.dni_variable": "Variable con DNI",
