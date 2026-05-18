@@ -1309,7 +1309,10 @@ class WhatsAppController extends Controller
 
         // person lookup
         if ($node->type === 'person_lookup') {
-            $this->sendPersonLookupNode($chat, $node);
+            if ($node->body) {
+                $body = $this->renderTemplate($node->body, $chat, $node);
+                $this->sendWhatsAppText($chat, $body, 'user', 'bot', 'text');
+            }
             return;
         }
     }
@@ -1350,27 +1353,27 @@ class WhatsAppController extends Controller
             $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos porque falta el DNI.');
             $targetNextNodeId = $settings['error_next_node_id'] ?? null;
         } else {
-            $lookupUrl = $this->alephooPersonLookupUrl($dni);
-            $apiKey = $this->alephooApiKey();
+            $lookupUrl = $this->personLookupUrl($dni);
+            $apiKey = $this->personLookupApiKey();
 
-            if (!$this->isAlephooEndpointEnabled('/personas/{dni}')) {
+            if (!$this->isPersonLookupEndpointEnabled('/personas/{dni}')) {
                 $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'endpoint_disabled']));
                 $messageToSend = (string) ($settings['error_message'] ?? 'La consulta de datos personales no esta habilitada en este momento.');
                 $targetNextNodeId = $settings['error_next_node_id'] ?? null;
             } elseif ($lookupUrl === '' || $apiKey === '') {
                 $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'misconfigured']));
-                $messageToSend = (string) ($settings['error_message'] ?? 'La integracion con Alephoo no esta configurada correctamente.');
+                $messageToSend = (string) ($settings['error_message'] ?? 'La integracion con consulta de personas no esta configurada correctamente.');
                 $targetNextNodeId = $settings['error_next_node_id'] ?? null;
             } else {
                 try {
-                    $response = Http::timeout($this->alephooTimeout())
+                    $response = Http::timeout($this->personLookupTimeout())
                         ->acceptJson()
                         ->withHeaders([
                             'X-API-KEY' => $apiKey,
                         ])
                         ->get($lookupUrl);
 
-                    Log::info('Hospital API person lookup response', [
+                    Log::info('External API person lookup response', [
                         'chat_id' => $chat->id,
                         'node_id' => $node->id,
                         'dni' => $dni,
@@ -1420,7 +1423,7 @@ class WhatsAppController extends Controller
                         $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos en este momento.');
                         $targetNextNodeId = $settings['error_next_node_id'] ?? null;
 
-                        Log::warning('Hospital API person lookup error response', [
+                        Log::warning('External API person lookup error response', [
                             'chat_id' => $chat->id,
                             'node_id' => $node->id,
                             'dni' => $dni,
@@ -1433,7 +1436,7 @@ class WhatsAppController extends Controller
                     $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos en este momento.');
                     $targetNextNodeId = $settings['error_next_node_id'] ?? null;
 
-                    Log::error('Hospital API person lookup failed: ' . $e->getMessage(), [
+                    Log::error('External API person lookup failed: ' . $e->getMessage(), [
                         'chat_id' => $chat->id,
                         'node_id' => $node->id,
                         'dni' => $dni,
@@ -1777,7 +1780,7 @@ class WhatsAppController extends Controller
             return false;
 
         // ✅ text y person_lookup pueden ser terminales automáticos
-        if (in_array($sentNode->type, ['text', 'person_lookup'], true) && empty($sentNode->next_node_id)) {
+        if ($sentNode->type === 'text' && empty($sentNode->next_node_id)) {
             $this->resetChatToStartFromFlow($chat, $flow, 'terminal_text');
             return true;
         }
@@ -1794,10 +1797,6 @@ class WhatsAppController extends Controller
 
     private function shouldAutoAdvance(BotNode $node): bool
     {
-        if ($node->type === 'person_lookup') {
-            return true;
-        }
-
         $s = $this->nodeSettings($node);
         return !empty($s['auto_advance']);
     }
@@ -2151,10 +2150,10 @@ class WhatsAppController extends Controller
                             'integrations.whatsapp.token',
                             'integrations.whatsapp.phone_number_id',
                             'integrations.whatsapp.webhook_verify_token',
-                            'integrations.alephoo.base_url',
-                            'integrations.alephoo.api_key',
-                            'integrations.alephoo.timeout',
-                            'integrations.alephoo.enabled_endpoints',
+                            'integrations.person_lookup.base_url',
+                            'integrations.person_lookup.api_key',
+                            'integrations.person_lookup.timeout',
+                            'integrations.person_lookup.enabled_endpoints',
                             'bot.inactivity_timeout_minutes',
                             'bot.inactivity_timeout_message',
                         ])
@@ -2212,29 +2211,29 @@ class WhatsAppController extends Controller
         return null;
     }
 
-    private function alephooBaseUrl(): string
+    private function personLookupBaseUrl(): string
     {
         return rtrim((string) $this->runtimeSetting(
-            'integrations.alephoo.base_url',
-            env('HOSPITAL_PERSON_API_BASE', 'http://172.22.118.103/apiturnos/public/api/v1/personas')
+            'integrations.person_lookup.base_url',
+            env('PERSON_LOOKUP_API_BASE', 'http://172.22.118.103/apiturnos/public/api/v1/personas')
         ), '/');
     }
 
-    private function alephooApiKey(): string
+    private function personLookupApiKey(): string
     {
-        return (string) $this->runtimeSetting('integrations.alephoo.api_key', env('HOSPITAL_PERSON_API_KEY', 'Turnos2025'));
+        return (string) $this->runtimeSetting('integrations.person_lookup.api_key', env('PERSON_LOOKUP_API_KEY', 'Turnos2025'));
     }
 
-    private function alephooTimeout(): int
+    private function personLookupTimeout(): int
     {
-        $timeout = (int) $this->runtimeSetting('integrations.alephoo.timeout', '30');
+        $timeout = (int) $this->runtimeSetting('integrations.person_lookup.timeout', '30');
 
         return max(1, min(300, $timeout));
     }
 
-    private function alephooPersonLookupUrl(string $dni): string
+    private function personLookupUrl(string $dni): string
     {
-        $baseUrl = $this->alephooBaseUrl();
+        $baseUrl = $this->personLookupBaseUrl();
         if ($baseUrl === '') {
             return '';
         }
@@ -2246,9 +2245,9 @@ class WhatsAppController extends Controller
         return $baseUrl . '/personas/' . urlencode($dni);
     }
 
-    private function isAlephooEndpointEnabled(string $endpoint): bool
+    private function isPersonLookupEndpointEnabled(string $endpoint): bool
     {
-        $raw = (string) $this->runtimeSetting('integrations.alephoo.enabled_endpoints', '');
+        $raw = (string) $this->runtimeSetting('integrations.person_lookup.enabled_endpoints', '');
         $lines = array_values(array_filter(array_map(
             fn($line) => trim(str_replace('\\', '/', (string) $line)),
             preg_split('/\r\n|\r|\n/', $raw) ?: []
@@ -2278,3 +2277,11 @@ class WhatsAppController extends Controller
         return false;
     }
 }
+
+
+
+
+
+
+
+

@@ -29,10 +29,10 @@ class SettingsController extends Controller
                 'integrations.whatsapp.token',
                 'integrations.whatsapp.phone_number_id',
                 'integrations.whatsapp.webhook_verify_token',
-                'integrations.alephoo.base_url',
-                'integrations.alephoo.api_key',
-                'integrations.alephoo.timeout',
-                'integrations.alephoo.enabled_endpoints',
+                'integrations.person_lookup.base_url',
+                'integrations.person_lookup.api_key',
+                'integrations.person_lookup.timeout',
+                'integrations.person_lookup.enabled_endpoints',
                 'bot.inactivity_timeout_minutes',
                 'bot.inactivity_timeout_message',
             ])
@@ -57,11 +57,11 @@ class SettingsController extends Controller
                         'phone_number_id' => $settings['integrations.whatsapp.phone_number_id'] ?? '',
                         'webhook_verify_token' => $settings['integrations.whatsapp.webhook_verify_token'] ?? '',
                     ],
-                    'alephoo' => [
-                        'base_url' => $settings['integrations.alephoo.base_url'] ?? '',
-                        'api_key' => $settings['integrations.alephoo.api_key'] ?? '',
-                        'timeout' => $settings['integrations.alephoo.timeout'] ?? '30',
-                        'enabled_endpoints' => $settings['integrations.alephoo.enabled_endpoints'] ?? '',
+                    'person_lookup' => [
+                        'base_url' => $settings['integrations.person_lookup.base_url'] ?? '',
+                        'api_key' => $settings['integrations.person_lookup.api_key'] ?? '',
+                        'timeout' => $settings['integrations.person_lookup.timeout'] ?? '30',
+                        'enabled_endpoints' => $settings['integrations.person_lookup.enabled_endpoints'] ?? '',
                     ],
                 ],
                 'bot' => [
@@ -155,10 +155,10 @@ class SettingsController extends Controller
             'whatsapp.token' => ['nullable', 'string'],
             'whatsapp.phone_number_id' => ['nullable', 'string'],
             'whatsapp.webhook_verify_token' => ['nullable', 'string'],
-            'alephoo.base_url' => ['nullable', 'url'],
-            'alephoo.api_key' => ['nullable', 'string'],
-            'alephoo.timeout' => ['required', 'integer', 'min:1', 'max:300'],
-            'alephoo.enabled_endpoints' => ['nullable', 'string'],
+            'person_lookup.base_url' => ['nullable', 'url'],
+            'person_lookup.api_key' => ['nullable', 'string'],
+            'person_lookup.timeout' => ['nullable', 'integer', 'min:1', 'max:300'],
+            'person_lookup.enabled_endpoints' => ['nullable', 'string'],
         ]);
 
         $before = [
@@ -167,11 +167,11 @@ class SettingsController extends Controller
                 'phone_number_id' => $this->settingValue('integrations.whatsapp.phone_number_id', ''),
                 'webhook_verify_token' => $this->settingValue('integrations.whatsapp.webhook_verify_token', ''),
             ],
-            'alephoo' => [
-                'base_url' => $this->settingValue('integrations.alephoo.base_url', ''),
-                'api_key' => $this->settingValue('integrations.alephoo.api_key', ''),
-                'timeout' => $this->settingValue('integrations.alephoo.timeout', '30'),
-                'enabled_endpoints' => $this->settingValue('integrations.alephoo.enabled_endpoints', ''),
+            'person_lookup' => [
+                'base_url' => $this->settingValue('integrations.person_lookup.base_url', ''),
+                'api_key' => $this->settingValue('integrations.person_lookup.api_key', ''),
+                'timeout' => $this->settingValue('integrations.person_lookup.timeout', '30'),
+                'enabled_endpoints' => $this->settingValue('integrations.person_lookup.enabled_endpoints', ''),
             ],
         ];
 
@@ -188,20 +188,20 @@ class SettingsController extends Controller
             ['value' => $data['whatsapp']['webhook_verify_token'] ?? ''],
         );
         SystemSetting::updateOrCreate(
-            ['key' => 'integrations.alephoo.base_url'],
-            ['value' => $data['alephoo']['base_url'] ?? ''],
+            ['key' => 'integrations.person_lookup.base_url'],
+            ['value' => $data['person_lookup']['base_url'] ?? ''],
         );
         SystemSetting::updateOrCreate(
-            ['key' => 'integrations.alephoo.api_key'],
-            ['value' => $data['alephoo']['api_key'] ?? ''],
+            ['key' => 'integrations.person_lookup.api_key'],
+            ['value' => $data['person_lookup']['api_key'] ?? ''],
         );
         SystemSetting::updateOrCreate(
-            ['key' => 'integrations.alephoo.timeout'],
-            ['value' => (string) ($data['alephoo']['timeout'] ?? 30)],
+            ['key' => 'integrations.person_lookup.timeout'],
+            ['value' => (string) ($data['person_lookup']['timeout'] ?? 30)],
         );
         SystemSetting::updateOrCreate(
-            ['key' => 'integrations.alephoo.enabled_endpoints'],
-            ['value' => $data['alephoo']['enabled_endpoints'] ?? ''],
+            ['key' => 'integrations.person_lookup.enabled_endpoints'],
+            ['value' => $data['person_lookup']['enabled_endpoints'] ?? ''],
         );
 
         $after = [
@@ -210,11 +210,11 @@ class SettingsController extends Controller
                 'phone_number_id' => $data['whatsapp']['phone_number_id'] ?? '',
                 'webhook_verify_token' => $data['whatsapp']['webhook_verify_token'] ?? '',
             ],
-            'alephoo' => [
-                'base_url' => $data['alephoo']['base_url'] ?? '',
-                'api_key' => $data['alephoo']['api_key'] ?? '',
-                'timeout' => (string) ($data['alephoo']['timeout'] ?? 30),
-                'enabled_endpoints' => $data['alephoo']['enabled_endpoints'] ?? '',
+            'person_lookup' => [
+                'base_url' => $data['person_lookup']['base_url'] ?? '',
+                'api_key' => $data['person_lookup']['api_key'] ?? '',
+                'timeout' => (string) ($data['person_lookup']['timeout'] ?? 30),
+                'enabled_endpoints' => $data['person_lookup']['enabled_endpoints'] ?? '',
             ],
         ];
 
@@ -229,11 +229,11 @@ class SettingsController extends Controller
                         'phone_number_id' => $data['whatsapp']['phone_number_id'] ?? '',
                         'webhook_verify_token' => $data['whatsapp']['webhook_verify_token'] ?? '',
                     ],
-                    'alephoo' => [
-                        'base_url' => $data['alephoo']['base_url'] ?? '',
-                        'api_key' => $data['alephoo']['api_key'] ?? '',
-                        'timeout' => (string) ($data['alephoo']['timeout'] ?? 30),
-                        'enabled_endpoints' => $data['alephoo']['enabled_endpoints'] ?? '',
+                    'person_lookup' => [
+                        'base_url' => $data['person_lookup']['base_url'] ?? '',
+                        'api_key' => $data['person_lookup']['api_key'] ?? '',
+                        'timeout' => (string) ($data['person_lookup']['timeout'] ?? 30),
+                        'enabled_endpoints' => $data['person_lookup']['enabled_endpoints'] ?? '',
                     ],
                 ],
             ],

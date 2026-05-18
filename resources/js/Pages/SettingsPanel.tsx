@@ -40,12 +40,6 @@ interface SettingsPanelProps {
         phone_number_id?: string
         webhook_verify_token?: string
       }
-      alephoo?: {
-        base_url?: string
-        api_key?: string
-        timeout?: string
-        enabled_endpoints?: string
-      }
     }
     bot?: {
       default_flow_id?: number | null
@@ -99,10 +93,6 @@ export default function SettingsPanel({
   const initialWhatsappToken = settings?.integrations?.whatsapp?.token ?? ""
   const initialWhatsappPhoneNumberId = settings?.integrations?.whatsapp?.phone_number_id ?? ""
   const initialWhatsappVerifyToken = settings?.integrations?.whatsapp?.webhook_verify_token ?? ""
-  const initialAlephooBaseUrl = settings?.integrations?.alephoo?.base_url ?? ""
-  const initialAlephooApiKey = settings?.integrations?.alephoo?.api_key ?? ""
-  const initialAlephooTimeout = settings?.integrations?.alephoo?.timeout ?? "30"
-  const initialAlephooEndpoints = settings?.integrations?.alephoo?.enabled_endpoints ?? ""
   const initialDefaultFlowId =
     settings?.bot?.default_flow_id ?? botFlows.find((flow) => flow.is_default)?.id ?? botFlows[0]?.id ?? null
   const initialInactivityTimeoutMinutes = settings?.bot?.inactivity_timeout_minutes ?? "1440"
@@ -117,17 +107,9 @@ export default function SettingsPanel({
   const [whatsappToken, setWhatsappToken] = useState(initialWhatsappToken)
   const [whatsappPhoneNumberId, setWhatsappPhoneNumberId] = useState(initialWhatsappPhoneNumberId)
   const [whatsappVerifyToken, setWhatsappVerifyToken] = useState(initialWhatsappVerifyToken)
-  const [alephooBaseUrl, setAlephooBaseUrl] = useState(initialAlephooBaseUrl)
-  const [alephooApiKey, setAlephooApiKey] = useState(initialAlephooApiKey)
-  const [alephooTimeout, setAlephooTimeout] = useState(initialAlephooTimeout)
-  const [alephooEndpoints, setAlephooEndpoints] = useState(initialAlephooEndpoints)
   const [savedWhatsappToken, setSavedWhatsappToken] = useState(initialWhatsappToken)
   const [savedWhatsappPhoneNumberId, setSavedWhatsappPhoneNumberId] = useState(initialWhatsappPhoneNumberId)
   const [savedWhatsappVerifyToken, setSavedWhatsappVerifyToken] = useState(initialWhatsappVerifyToken)
-  const [savedAlephooBaseUrl, setSavedAlephooBaseUrl] = useState(initialAlephooBaseUrl)
-  const [savedAlephooApiKey, setSavedAlephooApiKey] = useState(initialAlephooApiKey)
-  const [savedAlephooTimeout, setSavedAlephooTimeout] = useState(initialAlephooTimeout)
-  const [savedAlephooEndpoints, setSavedAlephooEndpoints] = useState(initialAlephooEndpoints)
   const [defaultFlowId, setDefaultFlowId] = useState<number | null>(initialDefaultFlowId)
   const [inactivityTimeoutMinutes, setInactivityTimeoutMinutes] = useState(initialInactivityTimeoutMinutes)
   const [inactivityTimeoutMessage, setInactivityTimeoutMessage] = useState(initialInactivityTimeoutMessage)
@@ -160,17 +142,9 @@ export default function SettingsPanel({
     setWhatsappToken(initialWhatsappToken)
     setWhatsappPhoneNumberId(initialWhatsappPhoneNumberId)
     setWhatsappVerifyToken(initialWhatsappVerifyToken)
-    setAlephooBaseUrl(initialAlephooBaseUrl)
-    setAlephooApiKey(initialAlephooApiKey)
-    setAlephooTimeout(initialAlephooTimeout)
-    setAlephooEndpoints(initialAlephooEndpoints)
     setSavedWhatsappToken(initialWhatsappToken)
     setSavedWhatsappPhoneNumberId(initialWhatsappPhoneNumberId)
     setSavedWhatsappVerifyToken(initialWhatsappVerifyToken)
-    setSavedAlephooBaseUrl(initialAlephooBaseUrl)
-    setSavedAlephooApiKey(initialAlephooApiKey)
-    setSavedAlephooTimeout(initialAlephooTimeout)
-    setSavedAlephooEndpoints(initialAlephooEndpoints)
     setDefaultFlowId(initialDefaultFlowId)
     setInactivityTimeoutMinutes(initialInactivityTimeoutMinutes)
     setInactivityTimeoutMessage(initialInactivityTimeoutMessage)
@@ -185,10 +159,6 @@ export default function SettingsPanel({
     initialWhatsappToken,
     initialWhatsappPhoneNumberId,
     initialWhatsappVerifyToken,
-    initialAlephooBaseUrl,
-    initialAlephooApiKey,
-    initialAlephooTimeout,
-    initialAlephooEndpoints,
     initialDefaultFlowId,
     initialInactivityTimeoutMinutes,
     initialInactivityTimeoutMessage,
@@ -203,27 +173,15 @@ export default function SettingsPanel({
     return (
       whatsappToken !== savedWhatsappToken ||
       whatsappPhoneNumberId !== savedWhatsappPhoneNumberId ||
-      whatsappVerifyToken !== savedWhatsappVerifyToken ||
-      alephooBaseUrl !== savedAlephooBaseUrl ||
-      alephooApiKey !== savedAlephooApiKey ||
-      alephooTimeout !== savedAlephooTimeout ||
-      alephooEndpoints !== savedAlephooEndpoints
+      whatsappVerifyToken !== savedWhatsappVerifyToken
     )
   }, [
     whatsappToken,
     whatsappPhoneNumberId,
     whatsappVerifyToken,
-    alephooBaseUrl,
-    alephooApiKey,
-    alephooTimeout,
-    alephooEndpoints,
     savedWhatsappToken,
     savedWhatsappPhoneNumberId,
     savedWhatsappVerifyToken,
-    savedAlephooBaseUrl,
-    savedAlephooApiKey,
-    savedAlephooTimeout,
-    savedAlephooEndpoints,
   ])
 
   const hasUnsavedBotChanges = useMemo(() => {
@@ -363,12 +321,6 @@ export default function SettingsPanel({
             phone_number_id: whatsappPhoneNumberId,
             webhook_verify_token: whatsappVerifyToken,
           },
-          alephoo: {
-            base_url: alephooBaseUrl,
-            api_key: alephooApiKey,
-            timeout: Number(alephooTimeout || 30),
-            enabled_endpoints: alephooEndpoints,
-          },
         }),
       })
 
@@ -384,13 +336,9 @@ export default function SettingsPanel({
       setSavedWhatsappToken(whatsappToken)
       setSavedWhatsappPhoneNumberId(whatsappPhoneNumberId)
       setSavedWhatsappVerifyToken(whatsappVerifyToken)
-      setSavedAlephooBaseUrl(alephooBaseUrl)
-      setSavedAlephooApiKey(alephooApiKey)
-      setSavedAlephooTimeout(alephooTimeout)
-      setSavedAlephooEndpoints(alephooEndpoints)
       setIntegrationsSaved(true)
       toast.success("Integraciones guardadas", {
-        description: "La configuracion de WhatsApp y Alephoo se guardo correctamente.",
+        description: "La configuracion de WhatsApp se guardo correctamente.",
       })
     } catch (err) {
       console.error("Error de red guardando integraciones:", err)
@@ -933,58 +881,6 @@ export default function SettingsPanel({
                     onChange={(e) => setWhatsappVerifyToken(e.target.value)}
                     placeholder="Token de verificacion del webhook"
                   />
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-[#dbe5ef] p-4">
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-semibold text-[#013765]">Alephoo</h3>
-                  <p className="text-xs text-[#013765]/65">
-                    Configuracion del sistema central y endpoints permitidos para el bot.
-                  </p>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div className="space-y-1.5 md:col-span-2">
-                  <label className="text-sm font-medium text-[#013765]">Base URL</label>
-                  <Input
-                    value={alephooBaseUrl}
-                    onChange={(e) => setAlephooBaseUrl(e.target.value)}
-                    placeholder="Ej: http://172.22.118.103/apiturnos/public/api/v1"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium text-[#013765]">API key</label>
-                  <Input
-                    value={alephooApiKey}
-                    onChange={(e) => setAlephooApiKey(e.target.value)}
-                    placeholder="Clave de acceso a Alephoo"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium text-[#013765]">Timeout (segundos)</label>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={300}
-                    value={alephooTimeout}
-                    onChange={(e) => setAlephooTimeout(e.target.value)}
-                    placeholder="30"
-                  />
-                </div>
-                <div className="space-y-1.5 md:col-span-2">
-                  <label className="text-sm font-medium text-[#013765]">Endpoints habilitados</label>
-                  <Textarea
-                    rows={5}
-                    value={alephooEndpoints}
-                    onChange={(e) => setAlephooEndpoints(e.target.value)}
-                    placeholder={"/personas/{dni}\n/obrasocial\n/planes/{id}"}
-                  />
-                  <p className="text-xs text-[#013765]/60">
-                    Ingresa un endpoint por linea para dejar documentado y controlado lo que puede usar el sistema.
-                  </p>
                 </div>
               </div>
             </div>

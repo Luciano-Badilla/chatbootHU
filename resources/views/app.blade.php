@@ -4,9 +4,8 @@
 <head>
     <meta charset="UTF-8" />
     <title>{{ env('APP_NAME') }}</title>
-    <link rel="icon" type="image/x-icon" href="{{ asset('favicon.ico') }}">
-    <link rel="icon" type="image/png" sizes="32x32" href="{{ asset('favicon-32x32.png') }}">
-    <link rel="icon" type="image/png" sizes="48x48" href="{{ asset('favicon-48x48.png') }}">
+    <link rel="icon" type="image/svg+xml" href="{{ asset('brand-icon.svg') }}?v=2">
+    <link rel="shortcut icon" href="{{ asset('brand-icon.svg') }}?v=2">
 
     <script src="https://cdn.tailwindcss.com"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">

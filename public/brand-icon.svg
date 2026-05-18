@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Chatbot icon">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f5b9f"/>
+      <stop offset="100%" stop-color="#013765"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+  <path d="M15 23c0-4.4 3.6-8 8-8h18c4.4 0 8 3.6 8 8v10c0 4.4-3.6 8-8 8H30l-9 8v-8h2c-4.4 0-8-3.6-8-8V23z" fill="#fff"/>
+  <circle cx="27" cy="28" r="2.5" fill="#013765"/>
+  <circle cx="33" cy="28" r="2.5" fill="#013765"/>
+  <circle cx="39" cy="28" r="2.5" fill="#013765"/>
+</svg>
