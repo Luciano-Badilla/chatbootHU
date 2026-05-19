@@ -2806,12 +2806,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     return null
   }
 
-  const isLinearType = (t: NodeType) => t === "text" || t === "input" || t === "person_lookup" || isMediaNodeType(t)
-    }    // handoff no tiene settings extra
-    return null
-  }
-
-  const isLinearType = (t: NodeType) => t === "text" || t === "input"
+  const isLinearType = (t: NodeType) => t === "text" || t === "input" || isMediaNodeType(t)
 
   const getBranchToneClass = (tone?: BranchTone) => {
     switch (tone) {
