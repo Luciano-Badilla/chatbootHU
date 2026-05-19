@@ -528,6 +528,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const [loadingFlows, setLoadingFlows] = useState(false)
   const [loadingNodes, setLoadingNodes] = useState(false)
   const [savingNode, setSavingNode] = useState(false)
+  const [uploadingMedia, setUploadingMedia] = useState(false)
   const [creatingFlow, setCreatingFlow] = useState(false)
   const [creatingNode, setCreatingNode] = useState(false)
   const [savingFlow, setSavingFlow] = useState(false)
@@ -2974,70 +2975,117 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         filename: "",
       })
 
-      const update = (field: keyof typeof settings, value: string) => {
-        setEditNode((prev) =>
-          prev
-            ? {
-              ...prev,
-              settings: {
-                ...settings,
-                [field]: value,
-              },
-            }
-            : prev,
-        )
+      const mediaAccept =
+        t === "image"
+          ? "image/*"
+          : t === "video"
+            ? "video/*"
+            : t === "audio"
+              ? "audio/*"
+              : ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+      const uploadLocalMedia = async (file: File | null) => {
+        if (!file) return
+        setUploadingMedia(true)
+
+        try {
+          const formData = new FormData()
+          formData.append("file", file)
+          formData.append("media_kind", t)
+
+          const res = await fetch(`${API_BASE}/api/bot/media`, {
+            method: "POST",
+            body: formData,
+          })
+
+          if (!res.ok) {
+            console.error("Error al subir media del bot", await res.text())
+            return
+          }
+
+          const data = await res.json()
+          setEditNode((prev) =>
+            prev
+              ? {
+                ...prev,
+                settings: {
+                  ...(prev.settings ?? {}),
+                  source_kind: "url",
+                  source: String(data.url ?? ""),
+                  filename: t === "document" ? String(data.name ?? file.name) : (prev.settings?.filename ?? ""),
+                },
+              }
+              : prev,
+          )
+        } catch (err) {
+          console.error("Error de red subiendo media del bot:", err)
+        } finally {
+          setUploadingMedia(false)
+        }
       }
+
+      const mediaSource = String(settings.source ?? "").trim()
+      const mediaName = String(settings.filename ?? "").trim()
+      const displayName = mediaName || mediaSource.split("/").filter(Boolean).pop() || "Archivo cargado"
+      const previewUrl = mediaSource.startsWith("http://") || mediaSource.startsWith("https://")
+        ? mediaSource
+        : mediaSource
+          ? `${API_BASE}${mediaSource.startsWith("/") ? "" : "/"}${mediaSource}`
+          : ""
 
       return (
         <div className="space-y-3">
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-            El bot enviara este archivo por WhatsApp. Usa una URL publica accesible por Meta o un media ID ya cargado en WhatsApp.
+            El bot enviara el archivo cargado por WhatsApp.
           </div>
 
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">Origen del archivo</label>
-            <Select
-              value={settings.source_kind ?? "url"}
-              onValueChange={(value) => update("source_kind", value)}
-            >
-              <SelectTrigger className="h-8 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="url">URL publica</SelectItem>
-                <SelectItem value="id">Media ID de WhatsApp</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">
-              {settings.source_kind === "id" ? "Media ID" : "URL del archivo"}
+          <div className="rounded-lg border border-dashed border-[#013765]/30 bg-white p-3">
+            <label className="mb-2 block text-xs font-medium text-[#013765]">
+              Cargar archivo local
             </label>
             <Input
-              value={settings.source ?? ""}
-              onChange={(e) => update("source", e.target.value.slice(0, MEDIA_SOURCE_MAX))}
-              placeholder={settings.source_kind === "id" ? "Ej: 123456789..." : "https://..."}
-              maxLength={MEDIA_SOURCE_MAX}
-              className="h-8 text-xs"
+              type="file"
+              accept={mediaAccept}
+              disabled={uploadingMedia}
+              onChange={(e) => {
+                const file = e.currentTarget.files?.[0] ?? null
+                void uploadLocalMedia(file)
+                e.currentTarget.value = ""
+              }}
+              className="h-9 text-xs"
             />
-            <p className="mt-1 text-[10px] text-muted-foreground">
-              {(settings.source ?? "").length}/{MEDIA_SOURCE_MAX}
+            <p className="mt-2 text-[10px] text-muted-foreground">
+              {uploadingMedia
+                ? "Subiendo archivo..."
+                : "Selecciona el archivo que enviara este nodo."}
             </p>
           </div>
 
-          {t === "document" ? (
-            <div>
-              <label className="mb-1 block text-xs text-muted-foreground">Nombre del archivo</label>
-              <Input
-                value={settings.filename ?? ""}
-                onChange={(e) => update("filename", e.target.value.slice(0, MEDIA_FILENAME_MAX))}
-                placeholder="Ej: indicaciones.pdf"
-                maxLength={MEDIA_FILENAME_MAX}
-                className="h-8 text-xs"
-              />
+          {mediaSource ? (
+            <div className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+              <div className="border-b border-slate-200 bg-white px-3 py-2">
+                <p className="truncate text-xs font-medium text-slate-800">{displayName}</p>
+                <p className="text-[10px] text-slate-500">{getNodeTypeLabel(t)} cargado</p>
+              </div>
+              {t === "image" && previewUrl ? (
+                <img src={previewUrl} alt={displayName} className="max-h-44 w-full object-contain bg-white" />
+              ) : t === "video" && previewUrl ? (
+                <video src={previewUrl} controls preload="metadata" className="max-h-44 w-full bg-black" />
+              ) : t === "audio" && previewUrl ? (
+                <div className="bg-white p-3">
+                  <audio src={previewUrl} controls className="w-full" />
+                </div>
+              ) : (
+                <div className="px-3 py-4 text-xs text-slate-600">
+                  El documento quedo listo para enviarse.
+                </div>
+              )}
             </div>
-          ) : null}
+          ) : (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+              Todavia no hay ningun archivo cargado para este nodo.
+            </div>
+          )}
 
           {t === "audio" ? (
             <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
@@ -3744,6 +3792,25 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                         }
 
                                         // opcional: si querés, al pasar a buttons/list/handoff también podés limpiar otras cosas
+                                        if (isMediaNodeType(val)) {
+                                          const keepExistingMedia = prev.type === val
+                                          return {
+                                            ...(s.canvas_position ? { canvas_position: s.canvas_position } : {}),
+                                            ...(s.auto_advance ? { auto_advance: s.auto_advance } : {}),
+                                            ...(s.auto_advance_delay_ms ? { auto_advance_delay_ms: s.auto_advance_delay_ms } : {}),
+                                            ...(s.auto_advance_max_hops ? { auto_advance_max_hops: s.auto_advance_max_hops } : {}),
+                                            source_kind: keepExistingMedia ? (s.source_kind ?? "url") : "url",
+                                            source: keepExistingMedia ? (s.source ?? "") : "",
+                                            filename: keepExistingMedia ? (s.filename ?? "") : "",
+                                          }
+                                        }
+
+                                        if (isMediaNodeType(prev.type)) {
+                                          delete s.source_kind
+                                          delete s.source
+                                          delete s.filename
+                                        }
+
                                         return s
                                       })()
 
@@ -3764,13 +3831,13 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                   </SelectTrigger>
                                   <SelectContent>
                                     <SelectItem value="text">Texto</SelectItem>
-                                    <SelectItem value="buttons">Botones</SelectItem>
-                                    <SelectItem value="list">Lista</SelectItem>
-                                    <SelectItem value="input">Capturar dato</SelectItem>
                                     <SelectItem value="image">Imagen</SelectItem>
                                     <SelectItem value="document">Documento</SelectItem>
                                     <SelectItem value="video">Video</SelectItem>
                                     <SelectItem value="audio">Audio</SelectItem>
+                                    <SelectItem value="buttons">Botones</SelectItem>
+                                    <SelectItem value="list">Lista</SelectItem>
+                                    <SelectItem value="input">Capturar dato</SelectItem>
                                     <SelectItem value="person_lookup">
                                       <div className="flex w-full items-center justify-between gap-2">
                                         <span>Buscar datos personales por DNI</span>

@@ -1418,7 +1418,7 @@ class WhatsAppController extends Controller
             'to' => $phoneNumber,
             'type' => $mediaType,
             $mediaType => [
-                $sourceKind === 'id' ? 'id' : 'link' => $source,
+                $sourceKind === 'id' ? 'id' : 'link' => $sourceKind === 'id' ? $source : $this->absoluteMediaLink($source),
             ],
         ];
 
@@ -1463,6 +1463,15 @@ class WhatsAppController extends Controller
             $waMessageId,
             $mediaType,
         );
+    }
+
+    private function absoluteMediaLink(string $source): string
+    {
+        if (str_starts_with($source, 'http://') || str_starts_with($source, 'https://')) {
+            return $source;
+        }
+
+        return url('/' . ltrim($source, '/'));
     }
 
     private function sendPersonLookupNode(Chat $chat, BotNode $node): void

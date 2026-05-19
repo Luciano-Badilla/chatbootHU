@@ -71,6 +71,7 @@ Route::middleware($sessionAuthenticated)->group(function () {
         Route::post('/bot/flows/{flowId}/restore', [BotFlowController::class, 'restoreFlow']);
         Route::post('/bot/flows/{flow}/make-default', [BotFlowController::class, 'makeDefault']);
         Route::put('/bot/flows/{flow}/start-node', [BotFlowController::class, 'setStartNode']);
+        Route::post('/bot/media', [BotFlowController::class, 'uploadMedia']);
         Route::post('/bot/flows/{flow}/nodes', [BotFlowController::class, 'storeNode']);
         Route::put('/bot/nodes/{node}', [BotFlowController::class, 'updateNode']);
         Route::delete('/bot/nodes/{node}', [BotFlowController::class, 'destroyNode']);
