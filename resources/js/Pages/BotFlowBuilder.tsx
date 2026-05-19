@@ -41,7 +41,7 @@ import {
 import { cn } from "shadcn/lib/utils"
 import { Badge } from "shadcn/components/ui/badge"
 
-type NodeType = "text" | "buttons" | "list" | "input" | "handoff" | "person_lookup"
+type NodeType = "text" | "buttons" | "list" | "input" | "handoff" | "person_lookup" | "image" | "document" | "video" | "audio"
 
 interface BotFlow {
   id: number
@@ -457,6 +457,8 @@ const INTERACTIVE_MESSAGE_MAX = 1024
 const INPUT_VARIABLE_MAX = 80
 const REGEX_MAX = 255
 const ERROR_MESSAGE_MAX = 4096
+const MEDIA_SOURCE_MAX = 2048
+const MEDIA_FILENAME_MAX = 240
 const BUTTON_ID_MAX = 256
 const BUTTON_TITLE_MAX = 20
 const LIST_BUTTON_TEXT_MAX = 20
@@ -466,7 +468,9 @@ const LIST_ROW_TITLE_MAX = 24
 const LIST_ROW_DESCRIPTION_MAX = 72
 
 const getNodeBodyMaxLength = (type: NodeType) =>
-  type === "buttons" || type === "list" ? INTERACTIVE_MESSAGE_MAX : TEXT_MESSAGE_MAX
+  type === "buttons" || type === "list" || type === "image" || type === "video" || type === "document"
+    ? INTERACTIVE_MESSAGE_MAX
+    : TEXT_MESSAGE_MAX
 
 const getNodeTypeLabel = (type: NodeType) => {
   switch (type) {
@@ -480,6 +484,14 @@ const getNodeTypeLabel = (type: NodeType) => {
       return "Capturar dato"
     case "person_lookup":
       return "Buscar datos personales"
+    case "image":
+      return "Imagen"
+    case "document":
+      return "Documento"
+    case "video":
+      return "Video"
+    case "audio":
+      return "Audio"
     case "handoff":
       return "Desactivar bot y pasar a operador"
     default:
@@ -489,6 +501,10 @@ const getNodeTypeLabel = (type: NodeType) => {
 
 const isAlephooNodeType = (type: NodeType) => {
   return type === "person_lookup"
+}
+
+const isMediaNodeType = (type: NodeType) => {
+  return type === "image" || type === "document" || type === "video" || type === "audio"
 }
 
 const serializeNodeSnapshot = (node: BotNode | null) => {
@@ -512,6 +528,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const [loadingFlows, setLoadingFlows] = useState(false)
   const [loadingNodes, setLoadingNodes] = useState(false)
   const [savingNode, setSavingNode] = useState(false)
+  const [uploadingMedia, setUploadingMedia] = useState(false)
   const [creatingFlow, setCreatingFlow] = useState(false)
   const [creatingNode, setCreatingNode] = useState(false)
   const [savingFlow, setSavingFlow] = useState(false)
@@ -691,6 +708,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             : true
 
       return inputVariableValidation.isAvailable && hasOptions
+    }
+    if (isMediaNodeType(editNode.type)) {
+      const source = String(editNode.settings?.source ?? "").trim()
+      return source.length > 0
     }
 
     return true
@@ -1139,7 +1160,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const handleSaveNode = async () => {
     if (isReadOnly) return false
     if (!editNode) return
-    if (editNode.type === "input" && !canSaveNode) return false
+    if (!canSaveNode) return false
 
     const snapshot = {
       ...editNode,
@@ -1254,6 +1275,13 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   }
 
   const getNodePreview = (node: BotNode) => {
+    if (isMediaNodeType(node.type)) {
+      const source = String(node.settings?.source ?? "").trim()
+      const filename = String(node.settings?.filename ?? "").trim()
+      const caption = String(node.body ?? "").replace(/\s+/g, " ").trim()
+      return [filename || source || "Media sin configurar", caption].filter(Boolean).join(" · ").slice(0, 90)
+    }
+
     return (node.body ?? "")
       .replace(/\s+/g, " ")
       .trim()
@@ -1325,7 +1353,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         targetLabel: getNodeLabel(errorTargetId),
         tone: "danger",
       })
-    } else if (node.type === "text" || (node.type === "input" && settings.response_mode !== "buttons" && settings.response_mode !== "list")) {
+    } else if (node.type === "text" || isMediaNodeType(node.type) || (node.type === "input" && settings.response_mode !== "buttons" && settings.response_mode !== "list")) {
       const targetId = node.next_node_id ? Number(node.next_node_id) : null
       branches.push({
         id: `next-${node.id}`,
@@ -1465,11 +1493,12 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           canDelete: !isReadOnly,
           canSource:
             node.type === "text" ||
+            isMediaNodeType(node.type) ||
             node.type === "input" ||
             node.type === "person_lookup" ||
             node.type === "buttons" ||
             node.type === "list",
-          canToggleAutoAdvance: !isReadOnly && node.type === "text",
+          canToggleAutoAdvance: !isReadOnly && (node.type === "text" || isMediaNodeType(node.type)),
           autoAdvanceEnabled: Boolean(node.settings?.auto_advance),
           sourceHandles:
             node.type === "person_lookup"
@@ -1507,7 +1536,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     tone: branch.tone ?? "default",
                     hasConnection: Boolean(branch.targetId),
                   }))
-                  : node.type === "text" || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
+                  : node.type === "text" || isMediaNodeType(node.type) || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
                     ? [{ id: "next", label: "Siguiente", tone: "default" as const, hasConnection: Boolean(node.next_node_id) }]
                     : [],
           deleting: deletingNodeId === node.id,
@@ -1557,7 +1586,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     : branch.tone === "danger"
                       ? "error"
                       : undefined
-                : node.type === "text" || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
+                : node.type === "text" || isMediaNodeType(node.type) || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
                   ? "next"
                   : undefined,
           label: branch.label === "Siguiente" ? undefined : branch.label,
@@ -1640,6 +1669,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     if (!sourceNode) return
     if (!(
       sourceNode.type === "text" ||
+      isMediaNodeType(sourceNode.type) ||
       sourceNode.type === "input" ||
       sourceNode.type === "person_lookup" ||
       sourceNode.type === "buttons" ||
@@ -2934,11 +2964,143 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       )
     }
 
+    if (isMediaNodeType(t)) {
+      const settings = ensureSettings<{
+        source_kind: "url" | "id"
+        source: string
+        filename: string
+      }>({
+        source_kind: "url",
+        source: "",
+        filename: "",
+      })
+
+      const mediaAccept =
+        t === "image"
+          ? "image/*"
+          : t === "video"
+            ? "video/*"
+            : t === "audio"
+              ? "audio/*"
+              : ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+      const uploadLocalMedia = async (file: File | null) => {
+        if (!file) return
+        setUploadingMedia(true)
+
+        try {
+          const formData = new FormData()
+          formData.append("file", file)
+          formData.append("media_kind", t)
+
+          const res = await fetch(`${API_BASE}/api/bot/media`, {
+            method: "POST",
+            body: formData,
+          })
+
+          if (!res.ok) {
+            console.error("Error al subir media del bot", await res.text())
+            return
+          }
+
+          const data = await res.json()
+          setEditNode((prev) =>
+            prev
+              ? {
+                ...prev,
+                settings: {
+                  ...(prev.settings ?? {}),
+                  source_kind: "url",
+                  source: String(data.url ?? ""),
+                  filename: t === "document" ? String(data.name ?? file.name) : (prev.settings?.filename ?? ""),
+                },
+              }
+              : prev,
+          )
+        } catch (err) {
+          console.error("Error de red subiendo media del bot:", err)
+        } finally {
+          setUploadingMedia(false)
+        }
+      }
+
+      const mediaSource = String(settings.source ?? "").trim()
+      const mediaName = String(settings.filename ?? "").trim()
+      const displayName = mediaName || mediaSource.split("/").filter(Boolean).pop() || "Archivo cargado"
+      const previewUrl = mediaSource.startsWith("http://") || mediaSource.startsWith("https://")
+        ? mediaSource
+        : mediaSource
+          ? `${API_BASE}${mediaSource.startsWith("/") ? "" : "/"}${mediaSource}`
+          : ""
+
+      return (
+        <div className="space-y-3">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+            El bot enviara el archivo cargado por WhatsApp.
+          </div>
+
+          <div className="rounded-lg border border-dashed border-[#013765]/30 bg-white p-3">
+            <label className="mb-2 block text-xs font-medium text-[#013765]">
+              Cargar archivo local
+            </label>
+            <Input
+              type="file"
+              accept={mediaAccept}
+              disabled={uploadingMedia}
+              onChange={(e) => {
+                const file = e.currentTarget.files?.[0] ?? null
+                void uploadLocalMedia(file)
+                e.currentTarget.value = ""
+              }}
+              className="h-9 text-xs"
+            />
+            <p className="mt-2 text-[10px] text-muted-foreground">
+              {uploadingMedia
+                ? "Subiendo archivo..."
+                : "Selecciona el archivo que enviara este nodo."}
+            </p>
+          </div>
+
+          {mediaSource ? (
+            <div className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+              <div className="border-b border-slate-200 bg-white px-3 py-2">
+                <p className="truncate text-xs font-medium text-slate-800">{displayName}</p>
+                <p className="text-[10px] text-slate-500">{getNodeTypeLabel(t)} cargado</p>
+              </div>
+              {t === "image" && previewUrl ? (
+                <img src={previewUrl} alt={displayName} className="max-h-44 w-full object-contain bg-white" />
+              ) : t === "video" && previewUrl ? (
+                <video src={previewUrl} controls preload="metadata" className="max-h-44 w-full bg-black" />
+              ) : t === "audio" && previewUrl ? (
+                <div className="bg-white p-3">
+                  <audio src={previewUrl} controls className="w-full" />
+                </div>
+              ) : (
+                <div className="px-3 py-4 text-xs text-slate-600">
+                  El documento quedo listo para enviarse.
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+              Todavia no hay ningun archivo cargado para este nodo.
+            </div>
+          )}
+
+          {t === "audio" ? (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+              WhatsApp no muestra caption en mensajes de audio. El campo Mensaje queda ignorado para este tipo.
+            </p>
+          ) : null}
+        </div>
+      )
+    }
+
     // handoff no tiene settings extra
     return null
   }
 
-  const isLinearType = (t: NodeType) => t === "text" || t === "input" || t === "person_lookup"
+  const isLinearType = (t: NodeType) => t === "text" || t === "input" || t === "person_lookup" || isMediaNodeType(t)
 
   const getBranchToneClass = (tone?: BranchTone) => {
     switch (tone) {
@@ -3616,8 +3778,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                     setEditNode((prev) => {
                                       if (!prev) return prev
 
-                                      const linear = val === "text" || val === "input" || val === "person_lookup"
-                                      const supportsAutoAdvance = val === "text"
+                                      const linear = val === "text" || val === "input" || val === "person_lookup" || isMediaNodeType(val)
+                                      const supportsAutoAdvance = val === "text" || isMediaNodeType(val)
 
                                       const cleanedSettings = (() => {
                                         const s = { ...(prev.settings ?? {}) }
@@ -3630,6 +3792,25 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                         }
 
                                         // opcional: si querés, al pasar a buttons/list/handoff también podés limpiar otras cosas
+                                        if (isMediaNodeType(val)) {
+                                          const keepExistingMedia = prev.type === val
+                                          return {
+                                            ...(s.canvas_position ? { canvas_position: s.canvas_position } : {}),
+                                            ...(s.auto_advance ? { auto_advance: s.auto_advance } : {}),
+                                            ...(s.auto_advance_delay_ms ? { auto_advance_delay_ms: s.auto_advance_delay_ms } : {}),
+                                            ...(s.auto_advance_max_hops ? { auto_advance_max_hops: s.auto_advance_max_hops } : {}),
+                                            source_kind: keepExistingMedia ? (s.source_kind ?? "url") : "url",
+                                            source: keepExistingMedia ? (s.source ?? "") : "",
+                                            filename: keepExistingMedia ? (s.filename ?? "") : "",
+                                          }
+                                        }
+
+                                        if (isMediaNodeType(prev.type)) {
+                                          delete s.source_kind
+                                          delete s.source
+                                          delete s.filename
+                                        }
+
                                         return s
                                       })()
 
@@ -3650,6 +3831,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                   </SelectTrigger>
                                   <SelectContent>
                                     <SelectItem value="text">Texto</SelectItem>
+                                    <SelectItem value="image">Imagen</SelectItem>
+                                    <SelectItem value="document">Documento</SelectItem>
+                                    <SelectItem value="video">Video</SelectItem>
+                                    <SelectItem value="audio">Audio</SelectItem>
                                     <SelectItem value="buttons">Botones</SelectItem>
                                     <SelectItem value="list">Lista</SelectItem>
                                     <SelectItem value="input">Capturar dato</SelectItem>
@@ -3803,7 +3988,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                               )}
                               <p className="mt-1 text-[10px] text-muted-foreground">
                                 {(editNode.body ?? "").length}/{getNodeBodyMaxLength(editNode.type)}
-                                {editNode.type === "buttons" || editNode.type === "list"
+                                {editNode.type === "buttons" || editNode.type === "list" || editNode.type === "image" || editNode.type === "video" || editNode.type === "document"
                                   ? " (mensaje interactivo)"
                                   : ""}
                               </p>
@@ -3853,8 +4038,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                               </div>
                             )}
 
-                            {/* Auto-disparo (solo para text) */}
-                            {editNode.type === "text" && (
+                            {/* Auto-disparo */}
+                            {(editNode.type === "text" || isMediaNodeType(editNode.type)) && (
                               <div className="border rounded-lg p-3 bg-muted/20 space-y-2">
                                 <div className="flex items-center gap-2">
                                   <Checkbox
