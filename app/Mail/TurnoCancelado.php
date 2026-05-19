@@ -17,7 +17,8 @@ class TurnoCancelado extends Mailable
 
     public function build()
     {
-        return $this->subject('Hospital Universitario - Turno Cancelado')
+        return $this->subject('Turno cancelado')
             ->html($this->html);
     }
 }
+

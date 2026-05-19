@@ -28,8 +28,6 @@ import {
 import { cn } from "shadcn/lib/utils"
 
 const APP_URL = import.meta.env.VITE_APP_URL || ""
-const HOSPITAL_LOGO_URL = `${APP_URL}/storage/images/hu_icon_new.png`
-const HOSPITAL_FAVICON_URL = `${APP_URL}/favicon-48x48.png`
 
 const navigationItems = [
   { label: "Dashboard", href: `${APP_URL}/dashboard`, icon: LayoutDashboard },
@@ -91,7 +89,7 @@ export function AppSidebar({ currentPath = "/dashboard" }: { currentPath?: strin
                 setOpenMobile(false)
               }}
             >
-              <img src={HOSPITAL_FAVICON_URL} alt="Hospital favicon" className="h-full w-full object-contain" />
+              <span className="text-base font-bold tracking-wide text-[#013765]"></span>
             </button>
           ) : (
             <button
@@ -102,7 +100,7 @@ export function AppSidebar({ currentPath = "/dashboard" }: { currentPath?: strin
                 setOpenMobile(false)
               }}
             >
-              <img src={HOSPITAL_LOGO_URL} alt="Hospital logo" className="h-full w-full object-contain" />
+              <span className="text-sm font-semibold uppercase tracking-[0.2em] text-[#013765]"></span>
             </button>
           )}
         </div>

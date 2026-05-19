@@ -17,7 +17,7 @@ class TurnoConfirmado extends Mailable
 
     public function build()
     {
-        return $this->subject('Hospital Universitario - Confirmación de turno')
+        return $this->subject('Confirmacion de turno')
             ->html($this->html);
     }
 }

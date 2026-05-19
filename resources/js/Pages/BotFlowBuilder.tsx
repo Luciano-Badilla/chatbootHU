@@ -41,7 +41,7 @@ import {
 import { cn } from "shadcn/lib/utils"
 import { Badge } from "shadcn/components/ui/badge"
 
-type NodeType = "text" | "buttons" | "list" | "input" | "handoff" | "person_lookup" | "image" | "document" | "video" | "audio"
+type NodeType = "text" | "buttons" | "list" | "input" | "handoff" | "image" | "document" | "video" | "audio"
 
 interface BotFlow {
   id: number
@@ -482,8 +482,6 @@ const getNodeTypeLabel = (type: NodeType) => {
       return "Lista"
     case "input":
       return "Capturar dato"
-    case "person_lookup":
-      return "Buscar datos personales"
     case "image":
       return "Imagen"
     case "document":
@@ -499,9 +497,7 @@ const getNodeTypeLabel = (type: NodeType) => {
   }
 }
 
-const isAlephooNodeType = (type: NodeType) => {
-  return type === "person_lookup"
-}
+const isAlephooNodeType = (_type: NodeType) => false
 
 const isMediaNodeType = (type: NodeType) => {
   return type === "image" || type === "document" || type === "video" || type === "audio"
@@ -570,6 +566,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
   // Estado local editable del nodo
   const [editNode, setEditNode] = useState<BotNode | null>(null)
+  const [reactFlowInstance, setReactFlowInstance] = useState<any>(null)
   const lastSavedNodeSnapshotRef = useRef("")
   const messageTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const templateVariableOptionRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -609,24 +606,6 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       { key: "node.key", label: "node.key", kind: "builtin" },
     ]
 
-    const personLookupVars: TemplateVariableOption[] = [
-      { key: "persona_encontrada", label: "persona_encontrada", kind: "flow" },
-      { key: "persona_lookup_status", label: "persona_lookup_status", kind: "flow" },
-      { key: "persona_id", label: "persona_id", kind: "flow" },
-      { key: "persona_nombres", label: "persona_nombres", kind: "flow" },
-      { key: "persona_apellidos", label: "persona_apellidos", kind: "flow" },
-      { key: "persona_documento", label: "persona_documento", kind: "flow" },
-      { key: "persona_fecha_nacimiento", label: "persona_fecha_nacimiento", kind: "flow" },
-      { key: "persona_genero", label: "persona_genero", kind: "flow" },
-      { key: "persona_obra_social", label: "persona_obra_social", kind: "flow" },
-      { key: "persona_obra_social_id", label: "persona_obra_social_id", kind: "flow" },
-      { key: "persona_plan_id", label: "persona_plan_id", kind: "flow" },
-      { key: "persona_email", label: "persona_email", kind: "flow" },
-      { key: "persona_contacto_telefono", label: "persona_contacto_telefono", kind: "flow" },
-      { key: "persona_contacto_telefono_2", label: "persona_contacto_telefono_2", kind: "flow" },
-      { key: "persona_planes_activos", label: "persona_planes_activos", kind: "flow" },
-    ]
-
     const flowVars = nodes
       .filter((node) => node.type === "input")
       .map((node) => String(node?.settings?.variable ?? "").trim())
@@ -634,12 +613,18 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       .filter((value, index, arr) => arr.indexOf(value) === index)
       .map((value) => ({ key: value, label: value, kind: "flow" as const }))
 
-    const mergedFlowVars = [...flowVars, ...personLookupVars].filter(
-      (value, index, arr) => arr.findIndex((item) => item.key === value.key) === index,
-    )
-
-    return [...mergedFlowVars, ...builtins]
+    return [...flowVars, ...builtins]
   }, [nodes])
+
+  useEffect(() => {
+    if (!reactFlowInstance || loadingNodes || nodes.length === 0) return
+
+    reactFlowInstance.fitView({
+      padding: 0.2,
+      minZoom: 0.2,
+      maxZoom: 1.6,
+    })
+  }, [reactFlowInstance, loadingNodes, nodes.length, selectedFlowId])
 
   const filteredTemplateVariableOptions = useMemo(() => {
     const q = templateVariableQuery.trim().toLowerCase()
@@ -1326,33 +1311,6 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           tone: getIndexedBranchTone(index),
         })
       })
-    } else if (node.type === "person_lookup") {
-      const successTargetId = node.next_node_id ? Number(node.next_node_id) : null
-      branches.push({
-        id: `person-success-${node.id}`,
-        label: "Encontrado",
-        targetId: successTargetId,
-        targetLabel: getNodeLabel(successTargetId),
-        tone: "success",
-      })
-
-      const notFoundTargetId = settings.not_found_next_node_id ? Number(settings.not_found_next_node_id) : null
-      branches.push({
-        id: `person-not-found-${node.id}`,
-        label: "No encontrado",
-        targetId: notFoundTargetId,
-        targetLabel: getNodeLabel(notFoundTargetId),
-        tone: "warning",
-      })
-
-      const errorTargetId = settings.error_next_node_id ? Number(settings.error_next_node_id) : null
-      branches.push({
-        id: `person-error-${node.id}`,
-        label: "Error",
-        targetId: errorTargetId,
-        targetLabel: getNodeLabel(errorTargetId),
-        tone: "danger",
-      })
     } else if (node.type === "text" || isMediaNodeType(node.type) || (node.type === "input" && settings.response_mode !== "buttons" && settings.response_mode !== "list")) {
       const targetId = node.next_node_id ? Number(node.next_node_id) : null
       branches.push({
@@ -1495,34 +1453,12 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             node.type === "text" ||
             isMediaNodeType(node.type) ||
             node.type === "input" ||
-            node.type === "person_lookup" ||
             node.type === "buttons" ||
             node.type === "list",
           canToggleAutoAdvance: !isReadOnly && (node.type === "text" || isMediaNodeType(node.type)),
           autoAdvanceEnabled: Boolean(node.settings?.auto_advance),
           sourceHandles:
-            node.type === "person_lookup"
-              ? [
-                {
-                  id: "success",
-                  label: "Encontrado",
-                  tone: "success" as const,
-                  hasConnection: Boolean(node.next_node_id),
-                },
-                {
-                  id: "not_found",
-                  label: "No encontrado",
-                  tone: "warning" as const,
-                  hasConnection: Boolean(node.settings?.not_found_next_node_id),
-                },
-                {
-                  id: "error",
-                  label: "Error",
-                  tone: "danger" as const,
-                  hasConnection: Boolean(node.settings?.error_next_node_id),
-                },
-              ]
-              : node.type === "buttons" || (node.type === "input" && node.settings?.response_mode === "buttons")
+            node.type === "buttons" || (node.type === "input" && node.settings?.response_mode === "buttons")
                 ? getNodeBranches(node).map((branch) => ({
                   id: branch.id,
                   label: branch.label,
@@ -1578,15 +1514,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             node.type === "list" ||
             (node.type === "input" && (node.settings?.response_mode === "buttons" || node.settings?.response_mode === "list"))
               ? branch.id
-              : node.type === "person_lookup"
-                ? branch.tone === "success"
-                  ? "success"
-                  : branch.tone === "warning"
-                    ? "not_found"
-                    : branch.tone === "danger"
-                      ? "error"
-                      : undefined
-                : node.type === "text" || isMediaNodeType(node.type) || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
+              : node.type === "text" || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
                   ? "next"
                   : undefined,
           label: branch.label === "Siguiente" ? undefined : branch.label,
@@ -1671,7 +1599,6 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       sourceNode.type === "text" ||
       isMediaNodeType(sourceNode.type) ||
       sourceNode.type === "input" ||
-      sourceNode.type === "person_lookup" ||
       sourceNode.type === "buttons" ||
       sourceNode.type === "list"
     )) {
@@ -1682,23 +1609,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     const settings = sourceNode.settings ?? {}
 
     const patch: Partial<BotNode> =
-      sourceNode.type === "person_lookup"
-        ? sourceHandle === "not_found"
-          ? {
-            settings: {
-              ...settings,
-              not_found_next_node_id: targetId,
-            } as any,
-          }
-          : sourceHandle === "error"
-            ? {
-              settings: {
-                ...settings,
-                error_next_node_id: targetId,
-              } as any,
-            }
-            : { next_node_id: targetId }
-        : (sourceNode.type === "buttons" || (sourceNode.type === "input" && settings.response_mode === "buttons")) && Array.isArray(settings.buttons)
+      (sourceNode.type === "buttons" || (sourceNode.type === "input" && settings.response_mode === "buttons")) && Array.isArray(settings.buttons)
           ? {
             settings: {
               ...settings,
@@ -1727,23 +1638,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         node.id === sourceId
           ? {
             ...node,
-            ...(sourceNode.type === "person_lookup"
-              ? sourceHandle === "not_found"
-                ? {
-                  settings: {
-                    ...(node.settings ?? {}),
-                    not_found_next_node_id: targetId,
-                  },
-                }
-                : sourceHandle === "error"
-                  ? {
-                    settings: {
-                      ...(node.settings ?? {}),
-                      error_next_node_id: targetId,
-                    },
-                  }
-                  : { next_node_id: targetId }
-              : (sourceNode.type === "buttons" || (sourceNode.type === "input" && node.settings?.response_mode === "buttons")) && Array.isArray(node.settings?.buttons)
+            ...((sourceNode.type === "buttons" || (sourceNode.type === "input" && node.settings?.response_mode === "buttons")) && Array.isArray(node.settings?.buttons)
                 ? {
                   settings: {
                     ...(node.settings ?? {}),
@@ -1782,23 +1677,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     const settings = sourceNode.settings ?? {}
 
     const patch: Partial<BotNode> =
-      sourceNode.type === "person_lookup"
-        ? sourceHandle === "not_found"
-          ? {
-            settings: {
-              ...settings,
-              not_found_next_node_id: null,
-            } as any,
-          }
-          : sourceHandle === "error"
-            ? {
-              settings: {
-                ...settings,
-                error_next_node_id: null,
-              } as any,
-            }
-            : { next_node_id: null }
-        : (sourceNode.type === "buttons" || (sourceNode.type === "input" && settings.response_mode === "buttons")) && Array.isArray(settings.buttons)
+      (sourceNode.type === "buttons" || (sourceNode.type === "input" && settings.response_mode === "buttons")) && Array.isArray(settings.buttons)
           ? {
             settings: {
               ...settings,
@@ -1827,23 +1706,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         node.id === sourceId
           ? {
             ...node,
-            ...(sourceNode.type === "person_lookup"
-              ? sourceHandle === "not_found"
-                ? {
-                  settings: {
-                    ...(node.settings ?? {}),
-                    not_found_next_node_id: null,
-                  },
-                }
-                : sourceHandle === "error"
-                  ? {
-                    settings: {
-                      ...(node.settings ?? {}),
-                      error_next_node_id: null,
-                    },
-                  }
-                  : { next_node_id: null }
-              : (sourceNode.type === "buttons" || (sourceNode.type === "input" && node.settings?.response_mode === "buttons")) && Array.isArray(node.settings?.buttons)
+            ...((sourceNode.type === "buttons" || (sourceNode.type === "input" && node.settings?.response_mode === "buttons")) && Array.isArray(node.settings?.buttons)
                 ? {
                   settings: {
                     ...(node.settings ?? {}),
@@ -2807,163 +2670,6 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       )
     }
 
-    if (t === "person_lookup") {
-      const settings = ensureSettings<{
-        dni_variable: string
-        not_found_message: string
-        not_found_next_node_id: number | null
-        error_message: string
-        error_next_node_id: number | null
-      }>({
-        dni_variable: "dni",
-        not_found_message: "No encontramos datos personales para el DNI ingresado.",
-        not_found_next_node_id: null,
-        error_message: "No pudimos consultar tus datos en este momento.",
-        error_next_node_id: null,
-      })
-
-      const update = (field: keyof typeof settings, value: string | number | null) => {
-        setEditNode((prev) =>
-          prev
-            ? {
-              ...prev,
-              settings: {
-                ...settings,
-                [field]: value,
-              },
-            }
-            : prev,
-        )
-      }
-
-      const availableFlowVariables = templateVariableOptions.filter(
-        (item) =>
-          item.kind === "flow" &&
-          !item.key.startsWith("persona_"),
-      )
-
-      return (
-        <div className="space-y-3">
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">
-              Variable que contiene el DNI
-            </label>
-            <Select
-              value={settings.dni_variable ?? ""}
-              onValueChange={(value) => update("dni_variable", value)}
-              disabled={availableFlowVariables.length === 0}
-            >
-              <SelectTrigger className="h-9 text-xs">
-                <SelectValue placeholder="Seleccioná una variable" />
-              </SelectTrigger>
-              <SelectContent>
-                {availableFlowVariables.map((option) => (
-                  <SelectItem key={option.key} value={option.key}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="mt-1 text-[10px] text-muted-foreground">
-              {availableFlowVariables.length > 0
-                ? "Usá una variable capturada previamente en este flujo."
-                : "Primero necesitás un nodo de captura de dato que guarde el DNI en una variable."}
-            </p>
-          </div>
-
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-            Este nodo consulta la API del hospital con el DNI guardado en esa variable, guarda los datos personales en variables como
-            {" "}
-            <span className="font-medium text-slate-700">{"{{ persona_nombres }}"}</span>
-            {" "}
-            y
-            {" "}
-            <span className="font-medium text-slate-700">{"{{ persona_apellidos }}"}</span>.
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">
-              Mensaje cuando no se encuentra la persona
-            </label>
-            <Textarea
-              value={settings.not_found_message ?? ""}
-              onChange={(e) => update("not_found_message", e.target.value.slice(0, TEXT_MESSAGE_MAX))}
-              rows={2}
-              maxLength={TEXT_MESSAGE_MAX}
-              className="text-xs"
-            />
-            <p className="mt-1 text-[10px] text-muted-foreground">
-              {(settings.not_found_message ?? "").length}/{TEXT_MESSAGE_MAX}
-            </p>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">
-              Siguiente nodo si no se encuentra
-            </label>
-            <Select
-              value={settings.not_found_next_node_id ? String(settings.not_found_next_node_id) : "none"}
-              onValueChange={(val) =>
-                update("not_found_next_node_id", val === "none" ? null : Number(val))
-              }
-            >
-              <SelectTrigger className="h-8 text-xs">
-                <SelectValue placeholder="Finalizar flujo" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">Finalizar flujo</SelectItem>
-                {nextNodeOptions.map((opt) => (
-                  <SelectItem key={opt.id} value={String(opt.id)}>
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">
-              Mensaje cuando hay error en la consulta
-            </label>
-            <Textarea
-              value={settings.error_message ?? ""}
-              onChange={(e) => update("error_message", e.target.value.slice(0, ERROR_MESSAGE_MAX))}
-              rows={2}
-              maxLength={ERROR_MESSAGE_MAX}
-              className="text-xs"
-            />
-            <p className="mt-1 text-[10px] text-muted-foreground">
-              {(settings.error_message ?? "").length}/{ERROR_MESSAGE_MAX}
-            </p>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">
-              Siguiente nodo si hay error
-            </label>
-            <Select
-              value={settings.error_next_node_id ? String(settings.error_next_node_id) : "none"}
-              onValueChange={(val) =>
-                update("error_next_node_id", val === "none" ? null : Number(val))
-              }
-            >
-              <SelectTrigger className="h-8 text-xs">
-                <SelectValue placeholder="Finalizar flujo" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">Finalizar flujo</SelectItem>
-                {nextNodeOptions.map((opt) => (
-                  <SelectItem key={opt.id} value={String(opt.id)}>
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      )
-    }
-
     if (isMediaNodeType(t)) {
       const settings = ensureSettings<{
         source_kind: "url" | "id"
@@ -3101,6 +2807,11 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   }
 
   const isLinearType = (t: NodeType) => t === "text" || t === "input" || t === "person_lookup" || isMediaNodeType(t)
+    }    // handoff no tiene settings extra
+    return null
+  }
+
+  const isLinearType = (t: NodeType) => t === "text" || t === "input"
 
   const getBranchToneClass = (tone?: BranchTone) => {
     switch (tone) {
@@ -3579,8 +3290,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     nodes={flowCanvasNodes}
                     edges={flowCanvasEdges}
                     nodeTypes={canvasNodeTypes}
-                    fitView
-                    fitViewOptions={{ padding: 0.2 }}
+                    onInit={setReactFlowInstance}
                     minZoom={0.2}
                     maxZoom={1.6}
                     connectionRadius={42}
@@ -3594,6 +3304,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     onNodeDragStop={handleCanvasNodeDragStop}
                     onPaneClick={requestCloseNodePanel}
                     proOptions={{ hideAttribution: true }}
+                    className="bot-flow-canvas"
                   >
                     <Background color="#cbd5e1" gap={18} />
                     <Controls showInteractive={false} />
@@ -3778,7 +3489,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                     setEditNode((prev) => {
                                       if (!prev) return prev
 
-                                      const linear = val === "text" || val === "input" || val === "person_lookup" || isMediaNodeType(val)
+                                      const linear = val === "text" || val === "input" || isMediaNodeType(val)
                                       const supportsAutoAdvance = val === "text" || isMediaNodeType(val)
 
                                       const cleanedSettings = (() => {
@@ -3838,22 +3549,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                     <SelectItem value="buttons">Botones</SelectItem>
                                     <SelectItem value="list">Lista</SelectItem>
                                     <SelectItem value="input">Capturar dato</SelectItem>
-                                    <SelectItem value="person_lookup">
-                                      <div className="flex w-full items-center justify-between gap-2">
-                                        <span>Buscar datos personales por DNI</span>
-                                        <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">
-                                          Alephoo
-                                        </span>
-                                      </div>
-                                    </SelectItem>
                                     <SelectItem value="handoff">Desactivar bot y pasar a operador</SelectItem>
                                   </SelectContent>
                                 </Select>
-                                {isAlephooNodeType(editNode.type) ? (
-                                  <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
-                                    Este nodo consulta Alephoo. Conviene editarlo con cuidado.
-                                  </div>
-                                ) : null}
                               </div>
                             </div>
 
@@ -4543,3 +4241,4 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     </div>
   )
 }
+

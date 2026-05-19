@@ -52,7 +52,7 @@ export default function Login({ status, canResetPassword }) {
                             className="mt-2 block h-11 w-full border border-[#dbe5ef] bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#2b5f90] focus:ring-[#2b5f90]"
                             autoComplete="username"
                             isFocused={true}
-                            placeholder="tu.usuario@hospital.com"
+                            placeholder="tu.usuario@empresa.com"
                             onChange={(e) => setData('email', e.target.value)}
                         />
 
@@ -109,3 +109,4 @@ export default function Login({ status, canResetPassword }) {
         </GuestLayout>
     );
 }
+
