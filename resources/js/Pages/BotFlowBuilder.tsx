@@ -41,7 +41,7 @@ import {
 import { cn } from "shadcn/lib/utils"
 import { Badge } from "shadcn/components/ui/badge"
 
-type NodeType = "text" | "buttons" | "list" | "input" | "handoff" | "person_lookup"
+type NodeType = "text" | "buttons" | "list" | "input" | "handoff" | "person_lookup" | "image" | "document" | "video" | "audio"
 
 interface BotFlow {
   id: number
@@ -457,6 +457,8 @@ const INTERACTIVE_MESSAGE_MAX = 1024
 const INPUT_VARIABLE_MAX = 80
 const REGEX_MAX = 255
 const ERROR_MESSAGE_MAX = 4096
+const MEDIA_SOURCE_MAX = 2048
+const MEDIA_FILENAME_MAX = 240
 const BUTTON_ID_MAX = 256
 const BUTTON_TITLE_MAX = 20
 const LIST_BUTTON_TEXT_MAX = 20
@@ -466,7 +468,9 @@ const LIST_ROW_TITLE_MAX = 24
 const LIST_ROW_DESCRIPTION_MAX = 72
 
 const getNodeBodyMaxLength = (type: NodeType) =>
-  type === "buttons" || type === "list" ? INTERACTIVE_MESSAGE_MAX : TEXT_MESSAGE_MAX
+  type === "buttons" || type === "list" || type === "image" || type === "video" || type === "document"
+    ? INTERACTIVE_MESSAGE_MAX
+    : TEXT_MESSAGE_MAX
 
 const getNodeTypeLabel = (type: NodeType) => {
   switch (type) {
@@ -480,6 +484,14 @@ const getNodeTypeLabel = (type: NodeType) => {
       return "Capturar dato"
     case "person_lookup":
       return "Buscar datos personales"
+    case "image":
+      return "Imagen"
+    case "document":
+      return "Documento"
+    case "video":
+      return "Video"
+    case "audio":
+      return "Audio"
     case "handoff":
       return "Desactivar bot y pasar a operador"
     default:
@@ -489,6 +501,10 @@ const getNodeTypeLabel = (type: NodeType) => {
 
 const isAlephooNodeType = (type: NodeType) => {
   return type === "person_lookup"
+}
+
+const isMediaNodeType = (type: NodeType) => {
+  return type === "image" || type === "document" || type === "video" || type === "audio"
 }
 
 const serializeNodeSnapshot = (node: BotNode | null) => {
@@ -691,6 +707,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             : true
 
       return inputVariableValidation.isAvailable && hasOptions
+    }
+    if (isMediaNodeType(editNode.type)) {
+      const source = String(editNode.settings?.source ?? "").trim()
+      return source.length > 0
     }
 
     return true
@@ -1139,7 +1159,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const handleSaveNode = async () => {
     if (isReadOnly) return false
     if (!editNode) return
-    if (editNode.type === "input" && !canSaveNode) return false
+    if (!canSaveNode) return false
 
     const snapshot = {
       ...editNode,
@@ -1254,6 +1274,13 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   }
 
   const getNodePreview = (node: BotNode) => {
+    if (isMediaNodeType(node.type)) {
+      const source = String(node.settings?.source ?? "").trim()
+      const filename = String(node.settings?.filename ?? "").trim()
+      const caption = String(node.body ?? "").replace(/\s+/g, " ").trim()
+      return [filename || source || "Media sin configurar", caption].filter(Boolean).join(" · ").slice(0, 90)
+    }
+
     return (node.body ?? "")
       .replace(/\s+/g, " ")
       .trim()
@@ -1325,7 +1352,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         targetLabel: getNodeLabel(errorTargetId),
         tone: "danger",
       })
-    } else if (node.type === "text" || (node.type === "input" && settings.response_mode !== "buttons" && settings.response_mode !== "list")) {
+    } else if (node.type === "text" || isMediaNodeType(node.type) || (node.type === "input" && settings.response_mode !== "buttons" && settings.response_mode !== "list")) {
       const targetId = node.next_node_id ? Number(node.next_node_id) : null
       branches.push({
         id: `next-${node.id}`,
@@ -1465,11 +1492,12 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           canDelete: !isReadOnly,
           canSource:
             node.type === "text" ||
+            isMediaNodeType(node.type) ||
             node.type === "input" ||
             node.type === "person_lookup" ||
             node.type === "buttons" ||
             node.type === "list",
-          canToggleAutoAdvance: !isReadOnly && node.type === "text",
+          canToggleAutoAdvance: !isReadOnly && (node.type === "text" || isMediaNodeType(node.type)),
           autoAdvanceEnabled: Boolean(node.settings?.auto_advance),
           sourceHandles:
             node.type === "person_lookup"
@@ -1507,7 +1535,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     tone: branch.tone ?? "default",
                     hasConnection: Boolean(branch.targetId),
                   }))
-                  : node.type === "text" || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
+                  : node.type === "text" || isMediaNodeType(node.type) || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
                     ? [{ id: "next", label: "Siguiente", tone: "default" as const, hasConnection: Boolean(node.next_node_id) }]
                     : [],
           deleting: deletingNodeId === node.id,
@@ -1557,7 +1585,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     : branch.tone === "danger"
                       ? "error"
                       : undefined
-                : node.type === "text" || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
+                : node.type === "text" || isMediaNodeType(node.type) || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
                   ? "next"
                   : undefined,
           label: branch.label === "Siguiente" ? undefined : branch.label,
@@ -1640,6 +1668,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     if (!sourceNode) return
     if (!(
       sourceNode.type === "text" ||
+      isMediaNodeType(sourceNode.type) ||
       sourceNode.type === "input" ||
       sourceNode.type === "person_lookup" ||
       sourceNode.type === "buttons" ||
@@ -2934,11 +2963,96 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       )
     }
 
+    if (isMediaNodeType(t)) {
+      const settings = ensureSettings<{
+        source_kind: "url" | "id"
+        source: string
+        filename: string
+      }>({
+        source_kind: "url",
+        source: "",
+        filename: "",
+      })
+
+      const update = (field: keyof typeof settings, value: string) => {
+        setEditNode((prev) =>
+          prev
+            ? {
+              ...prev,
+              settings: {
+                ...settings,
+                [field]: value,
+              },
+            }
+            : prev,
+        )
+      }
+
+      return (
+        <div className="space-y-3">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+            El bot enviara este archivo por WhatsApp. Usa una URL publica accesible por Meta o un media ID ya cargado en WhatsApp.
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Origen del archivo</label>
+            <Select
+              value={settings.source_kind ?? "url"}
+              onValueChange={(value) => update("source_kind", value)}
+            >
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="url">URL publica</SelectItem>
+                <SelectItem value="id">Media ID de WhatsApp</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">
+              {settings.source_kind === "id" ? "Media ID" : "URL del archivo"}
+            </label>
+            <Input
+              value={settings.source ?? ""}
+              onChange={(e) => update("source", e.target.value.slice(0, MEDIA_SOURCE_MAX))}
+              placeholder={settings.source_kind === "id" ? "Ej: 123456789..." : "https://..."}
+              maxLength={MEDIA_SOURCE_MAX}
+              className="h-8 text-xs"
+            />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              {(settings.source ?? "").length}/{MEDIA_SOURCE_MAX}
+            </p>
+          </div>
+
+          {t === "document" ? (
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">Nombre del archivo</label>
+              <Input
+                value={settings.filename ?? ""}
+                onChange={(e) => update("filename", e.target.value.slice(0, MEDIA_FILENAME_MAX))}
+                placeholder="Ej: indicaciones.pdf"
+                maxLength={MEDIA_FILENAME_MAX}
+                className="h-8 text-xs"
+              />
+            </div>
+          ) : null}
+
+          {t === "audio" ? (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+              WhatsApp no muestra caption en mensajes de audio. El campo Mensaje queda ignorado para este tipo.
+            </p>
+          ) : null}
+        </div>
+      )
+    }
+
     // handoff no tiene settings extra
     return null
   }
 
-  const isLinearType = (t: NodeType) => t === "text" || t === "input" || t === "person_lookup"
+  const isLinearType = (t: NodeType) => t === "text" || t === "input" || t === "person_lookup" || isMediaNodeType(t)
 
   const getBranchToneClass = (tone?: BranchTone) => {
     switch (tone) {
@@ -3616,8 +3730,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                     setEditNode((prev) => {
                                       if (!prev) return prev
 
-                                      const linear = val === "text" || val === "input" || val === "person_lookup"
-                                      const supportsAutoAdvance = val === "text"
+                                      const linear = val === "text" || val === "input" || val === "person_lookup" || isMediaNodeType(val)
+                                      const supportsAutoAdvance = val === "text" || isMediaNodeType(val)
 
                                       const cleanedSettings = (() => {
                                         const s = { ...(prev.settings ?? {}) }
@@ -3653,6 +3767,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                     <SelectItem value="buttons">Botones</SelectItem>
                                     <SelectItem value="list">Lista</SelectItem>
                                     <SelectItem value="input">Capturar dato</SelectItem>
+                                    <SelectItem value="image">Imagen</SelectItem>
+                                    <SelectItem value="document">Documento</SelectItem>
+                                    <SelectItem value="video">Video</SelectItem>
+                                    <SelectItem value="audio">Audio</SelectItem>
                                     <SelectItem value="person_lookup">
                                       <div className="flex w-full items-center justify-between gap-2">
                                         <span>Buscar datos personales por DNI</span>
@@ -3803,7 +3921,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                               )}
                               <p className="mt-1 text-[10px] text-muted-foreground">
                                 {(editNode.body ?? "").length}/{getNodeBodyMaxLength(editNode.type)}
-                                {editNode.type === "buttons" || editNode.type === "list"
+                                {editNode.type === "buttons" || editNode.type === "list" || editNode.type === "image" || editNode.type === "video" || editNode.type === "document"
                                   ? " (mensaje interactivo)"
                                   : ""}
                               </p>
@@ -3853,8 +3971,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                               </div>
                             )}
 
-                            {/* Auto-disparo (solo para text) */}
-                            {editNode.type === "text" && (
+                            {/* Auto-disparo */}
+                            {(editNode.type === "text" || isMediaNodeType(editNode.type)) && (
                               <div className="border rounded-lg p-3 bg-muted/20 space-y-2">
                                 <div className="flex items-center gap-2">
                                   <Checkbox

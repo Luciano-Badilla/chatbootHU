@@ -984,6 +984,63 @@ class WhatsAppController extends Controller
         }
     }
 
+    private function persistAndPublishOutgoingMedia(
+        Chat $chat,
+        string $messageType,
+        string $body,
+        ?string $mediaUrl,
+        ?string $mediaName,
+        ?string $waMessageId = null,
+        ?string $botNodeType = null
+    ): void {
+        $contact = $chat->contact;
+
+        $message = Message::create([
+            'chat_id' => $chat->id,
+            'sender' => 'user',
+            'sender_subtype' => 'bot',
+            'bot_node_type' => $botNodeType,
+            'interactive_options' => null,
+            'message_type' => $messageType,
+            'body' => $body,
+            'status' => 'sent',
+            'media_url' => $mediaUrl,
+            'media_name' => $mediaName,
+            'whatsapp_message_id' => $waMessageId,
+        ]);
+
+        try {
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_media_bot_' . uniqid());
+            $mqtt->connect();
+
+            $mqtt->publish('sidebar/chat', json_encode([
+                'chat_id' => $chat->id,
+                'name' => $contact->name ?? 'Desconocido',
+                'lastMessage' => $body,
+                'timestamp' => $message->created_at->toIso8601String(),
+            ]), 0);
+
+            $mqtt->publish("chat/{$chat->id}", json_encode([
+                'chat_id' => $chat->id,
+                'message_id' => $message->id,
+                'sender' => $message->sender,
+                'sender_subtype' => $message->sender_subtype,
+                'bot_node_type' => $message->bot_node_type,
+                'interactive_options' => $message->interactive_options,
+                'body' => $message->body,
+                'message_type' => $message->message_type,
+                'media_url' => $message->media_url,
+                'media_name' => $message->media_name,
+                'status' => $message->status,
+                'timestamp' => $message->created_at->toIso8601String(),
+            ]), 0);
+
+            $mqtt->disconnect();
+        } catch (MqttClientException $e) {
+            Log::error('MQTT Error (persistAndPublishOutgoingMedia): ' . $e->getMessage());
+        }
+    }
+
 
     private function ensureChatUsesDefaultFlow(Chat $chat): ?BotFlow
     {
@@ -1159,6 +1216,10 @@ class WhatsAppController extends Controller
                 return $currentNode;
 
                 // 3) Texto plano
+            case 'image':
+            case 'document':
+            case 'video':
+            case 'audio':
             case 'text':
                 if (in_array(mb_strtolower($text), ['menú', 'menu'], true)) {
                     $menuNode = BotNode::where('flow_id', $currentNode->flow_id)
@@ -1295,6 +1356,11 @@ class WhatsAppController extends Controller
             return;
         }
 
+        if (in_array($node->type, ['image', 'document', 'video', 'audio'], true)) {
+            $this->sendBotMediaNode($chat, $node);
+            return;
+        }
+
         // buttons
         if ($node->type === 'buttons') {
             $this->sendWhatsAppButtons($chat, $node);
@@ -1312,6 +1378,91 @@ class WhatsAppController extends Controller
             $this->sendPersonLookupNode($chat, $node);
             return;
         }
+    }
+
+    private function sendBotMediaNode(Chat $chat, BotNode $node): void
+    {
+        $contact = $chat->contact;
+        if (!$contact || !$contact->whatsapp_id) {
+            return;
+        }
+
+        $mediaType = (string) $node->type;
+        if (!in_array($mediaType, ['image', 'document', 'video', 'audio'], true)) {
+            return;
+        }
+
+        $settings = $this->nodeSettings($node);
+        $sourceKind = ($settings['source_kind'] ?? 'url') === 'id' ? 'id' : 'url';
+        $source = trim($this->renderTemplate((string) ($settings['source'] ?? ''), $chat, $node));
+        if ($source === '') {
+            Log::warning('sendBotMediaNode: media source vacío', [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'type' => $mediaType,
+            ]);
+            return;
+        }
+
+        $caption = $mediaType === 'audio'
+            ? ''
+            : trim($this->renderTemplate($node->body ?? '', $chat, $node));
+        $filename = trim($this->renderTemplate((string) ($settings['filename'] ?? ''), $chat, $node));
+
+        $accessToken = $this->whatsappAccessToken();
+        $url = 'https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages';
+        $phoneNumber = $this->formatPhoneNumber($contact->whatsapp_id);
+
+        $payload = [
+            'messaging_product' => 'whatsapp',
+            'to' => $phoneNumber,
+            'type' => $mediaType,
+            $mediaType => [
+                $sourceKind === 'id' ? 'id' : 'link' => $source,
+            ],
+        ];
+
+        if (in_array($mediaType, ['image', 'video'], true) && $caption !== '') {
+            $payload[$mediaType]['caption'] = mb_substr($caption, 0, 1024);
+        }
+
+        if ($mediaType === 'document') {
+            if ($filename !== '') {
+                $payload['document']['filename'] = mb_substr($filename, 0, 240);
+            }
+            if ($caption !== '') {
+                $payload['document']['caption'] = mb_substr($caption, 0, 1024);
+            }
+        }
+
+        $response = Http::withToken($accessToken)->post($url, $payload);
+        if ($response->failed()) {
+            Log::error('API Error (sendBotMediaNode): ' . $response->body(), [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'type' => $mediaType,
+                'payload' => $payload,
+            ]);
+            return;
+        }
+
+        $waMessageId = $response->json('messages.0.id');
+        $body = $caption !== '' ? $caption : match ($mediaType) {
+            'image' => '[Imagen]',
+            'video' => '[Video]',
+            'audio' => '[Audio]',
+            default => '[Documento]',
+        };
+
+        $this->persistAndPublishOutgoingMedia(
+            $chat,
+            $mediaType,
+            $body,
+            $sourceKind === 'url' ? $source : null,
+            $filename !== '' ? $filename : null,
+            $waMessageId,
+            $mediaType,
+        );
     }
 
     private function sendPersonLookupNode(Chat $chat, BotNode $node): void
@@ -1777,7 +1928,7 @@ class WhatsAppController extends Controller
             return false;
 
         // ✅ text y person_lookup pueden ser terminales automáticos
-        if (in_array($sentNode->type, ['text', 'person_lookup'], true) && empty($sentNode->next_node_id)) {
+        if (in_array($sentNode->type, ['text', 'person_lookup', 'image', 'document', 'video', 'audio'], true) && empty($sentNode->next_node_id)) {
             $this->resetChatToStartFromFlow($chat, $flow, 'terminal_text');
             return true;
         }

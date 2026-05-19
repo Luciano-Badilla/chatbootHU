@@ -54,6 +54,9 @@ class AuditService
         'settings.auto_advance_delay_ms' => 'Demora del auto-disparo',
         'settings.auto_advance_max_hops' => 'Maximo de saltos automaticos',
         'settings.canvas_position' => 'Posicion en canvas',
+        'settings.source_kind' => 'Origen del archivo',
+        'settings.source' => 'Archivo',
+        'settings.filename' => 'Nombre del archivo',
         'settings.variable' => 'Variable capturada',
         'settings.validation_regex' => 'Regex de validacion',
         'settings.error_message' => 'Mensaje de error',
@@ -740,6 +743,10 @@ class AuditService
                 'input' => 'Captura de dato',
                 'handoff' => 'Derivar a operador',
                 'person_lookup' => 'Consulta de persona',
+                'image' => 'Imagen',
+                'document' => 'Documento',
+                'video' => 'Video',
+                'audio' => 'Audio',
                 default => (string) $value,
             };
         }
