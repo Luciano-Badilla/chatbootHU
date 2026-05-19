@@ -840,6 +840,14 @@ export default function ChatMain({
         return "Nodo: Input"
       case "text":
         return "Nodo: Text"
+      case "image":
+        return "Nodo: Imagen"
+      case "document":
+        return "Nodo: Documento"
+      case "video":
+        return "Nodo: Video"
+      case "audio":
+        return "Nodo: Audio"
       case "handoff":
         return "Nodo: Handoff"
       default:

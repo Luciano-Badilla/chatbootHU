@@ -10,6 +10,7 @@ use App\Services\AuditService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 
 class BotFlowController extends Controller
@@ -206,6 +207,31 @@ class BotFlowController extends Controller
         );
 
         return response()->json($node, 201);
+    }
+
+    public function uploadMedia(Request $request)
+    {
+        $data = $request->validate([
+            'file' => 'required|file|max:51200',
+            'media_kind' => 'required|in:image,document,video,audio',
+        ]);
+
+        $file = $request->file('file');
+        $kind = $data['media_kind'];
+        $originalName = (string) ($file->getClientOriginalName() ?? ('media_' . uniqid()));
+        $safeName = preg_replace('/[^A-Za-z0-9._-]/', '_', $originalName) ?: ('media_' . uniqid());
+        $storedName = uniqid($kind . '_') . '_' . $safeName;
+        $path = $file->storeAs("bot-media/{$kind}", $storedName, 'public');
+
+        return response()->json([
+            'ok' => true,
+            'url' => Storage::url($path),
+            'absolute_url' => url(Storage::url($path)),
+            'name' => $originalName,
+            'media_kind' => $kind,
+            'size' => $file->getSize(),
+            'mime' => $file->getMimeType(),
+        ]);
     }
 
     public function updateNode(Request $request, BotNode $node)
