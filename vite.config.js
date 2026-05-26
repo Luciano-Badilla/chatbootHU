@@ -9,7 +9,7 @@ export default defineConfig(({ mode }) => {
     return {
         plugins: [
             laravel({
-                input: 'resources/js/app.jsx',
+                input: 'resources/js/app.tsx',
                 refresh: true,
                 devServer: {
                     url: env.VITE_DEV_SERVER, // ✅ Esto toma la IP desde .env

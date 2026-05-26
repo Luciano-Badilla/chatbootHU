@@ -27,7 +27,7 @@
         Carga el punto de entrada de la SPA en React.
         Aquí se monta Inertia y toda la app del frontend.
     -->
-    @vite('resources/js/app.jsx')
+    @vite('resources/js/app.tsx')
 </head>
 
 <body>
