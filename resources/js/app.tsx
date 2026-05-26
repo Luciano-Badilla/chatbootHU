@@ -5,11 +5,11 @@ import { Toaster } from 'sonner'
 
 createInertiaApp({
   resolve: (name) => {
-    const pages = import.meta.glob('./Pages/**/*.{jsx,tsx}')
-    const page = pages[`./Pages/${name}.jsx`] || pages[`./Pages/${name}.tsx`]
+    const pages = import.meta.glob('./Pages/**/*.tsx')
+    const page = pages[`./Pages/${name}.tsx`]
 
     if (!page) {
-      throw new Error(`Page not found: ./Pages/${name}.(jsx|tsx)`)
+      throw new Error(`Page not found: ./Pages/${name}.tsx`)
     }
 
     return page().then((module) => module.default)
