@@ -1252,6 +1252,16 @@ class WhatsAppController extends Controller
 
     private function sendBotNode(Chat $chat, BotNode $node): void
     {
+        Log::info('sendBotNode: enviando nodo', [
+            'chat_id' => $chat->id,
+            'node_id' => $node->id,
+            'node_key' => $node->key,
+            'type' => $node->type,
+            'next_node_id' => $node->next_node_id,
+            'has_body' => trim((string) ($node->body ?? '')) !== '',
+            'settings_keys' => array_keys($this->nodeSettings($node)),
+        ]);
+
         // handoff
         if ($node->type === 'handoff') {
 
@@ -1387,11 +1397,21 @@ class WhatsAppController extends Controller
     {
         $contact = $chat->contact;
         if (!$contact || !$contact->whatsapp_id) {
+            Log::warning('sendBotMediaNode: chat sin contacto o whatsapp_id', [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'contact_id' => $contact?->id,
+            ]);
             return;
         }
 
         $mediaType = (string) $node->type;
         if (!in_array($mediaType, ['image', 'document', 'video', 'audio'], true)) {
+            Log::warning('sendBotMediaNode: tipo de nodo media inválido', [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'type' => $mediaType,
+            ]);
             return;
         }
 
@@ -1411,6 +1431,48 @@ class WhatsAppController extends Controller
             ? ''
             : trim($this->renderTemplate($node->body ?? '', $chat, $node));
         $filename = trim($this->renderTemplate((string) ($settings['filename'] ?? ''), $chat, $node));
+        $resolvedMediaLink = $sourceKind === 'id' ? null : $this->absoluteMediaLink($source);
+        $localMediaPath = null;
+        $localMediaExists = null;
+
+        if ($sourceKind === 'url' && !str_starts_with($source, 'http://') && !str_starts_with($source, 'https://')) {
+            $localMediaPath = ltrim(preg_replace('#^storage/#', '', ltrim($source, '/')), '/');
+            $localMediaExists = Storage::disk('public')->exists($localMediaPath);
+        }
+
+        $uploadedMediaId = null;
+        if ($sourceKind === 'url' && $localMediaExists === true && $localMediaPath) {
+            $uploadedMediaId = $this->uploadBotMediaNodeFileToWhatsApp(
+                $localMediaPath,
+                $mediaType,
+                $filename !== '' ? $filename : null,
+                $chat,
+                $node,
+            );
+
+            if (!$uploadedMediaId) {
+                return;
+            }
+        }
+
+        Log::info('sendBotMediaNode: preparando envío', [
+            'chat_id' => $chat->id,
+            'contact_id' => $contact->id,
+            'node_id' => $node->id,
+            'node_key' => $node->key,
+            'type' => $mediaType,
+            'source_kind' => $sourceKind,
+            'source' => $source,
+            'resolved_link' => $resolvedMediaLink,
+            'local_media_path' => $localMediaPath,
+            'local_media_exists' => $localMediaExists,
+            'uploaded_media_id' => $uploadedMediaId,
+            'filename' => $filename !== '' ? $filename : null,
+            'has_caption' => $caption !== '',
+            'caption_length' => mb_strlen($caption),
+            'next_node_id' => $node->next_node_id,
+            'auto_advance' => (bool) ($settings['auto_advance'] ?? false),
+        ]);
 
         $accessToken = $this->whatsappAccessToken();
         $url = 'https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages';
@@ -1421,7 +1483,9 @@ class WhatsAppController extends Controller
             'to' => $phoneNumber,
             'type' => $mediaType,
             $mediaType => [
-                $sourceKind === 'id' ? 'id' : 'link' => $sourceKind === 'id' ? $source : $this->absoluteMediaLink($source),
+                $sourceKind === 'id' || $uploadedMediaId ? 'id' : 'link' => $sourceKind === 'id'
+                    ? $source
+                    : ($uploadedMediaId ?: $resolvedMediaLink),
             ],
         ];
 
@@ -1438,18 +1502,34 @@ class WhatsAppController extends Controller
             }
         }
 
+        Log::info('sendBotMediaNode: payload listo para WhatsApp', [
+            'chat_id' => $chat->id,
+            'node_id' => $node->id,
+            'type' => $mediaType,
+            'payload' => $payload,
+        ]);
+
         $response = Http::withToken($accessToken)->post($url, $payload);
         if ($response->failed()) {
             Log::error('API Error (sendBotMediaNode): ' . $response->body(), [
                 'chat_id' => $chat->id,
                 'node_id' => $node->id,
                 'type' => $mediaType,
+                'status' => $response->status(),
                 'payload' => $payload,
             ]);
             return;
         }
 
         $waMessageId = $response->json('messages.0.id');
+        Log::info('sendBotMediaNode: WhatsApp aceptó media', [
+            'chat_id' => $chat->id,
+            'node_id' => $node->id,
+            'type' => $mediaType,
+            'wa_message_id' => $waMessageId,
+            'response' => $response->json(),
+        ]);
+
         $body = $caption !== '' ? $caption : match ($mediaType) {
             'image' => '[Imagen]',
             'video' => '[Video]',
@@ -1466,15 +1546,156 @@ class WhatsAppController extends Controller
             $waMessageId,
             $mediaType,
         );
+
+        Log::info('sendBotMediaNode: media persistida y publicada', [
+            'chat_id' => $chat->id,
+            'node_id' => $node->id,
+            'type' => $mediaType,
+            'wa_message_id' => $waMessageId,
+        ]);
     }
 
     private function absoluteMediaLink(string $source): string
     {
         if (str_starts_with($source, 'http://') || str_starts_with($source, 'https://')) {
+            Log::debug('absoluteMediaLink: source ya es absoluta', [
+                'source' => $source,
+            ]);
             return $source;
         }
 
-        return url('/' . ltrim($source, '/'));
+        $absolute = url('/' . ltrim($source, '/'));
+
+        Log::debug('absoluteMediaLink: source local resuelta', [
+            'source' => $source,
+            'absolute' => $absolute,
+        ]);
+
+        return $absolute;
+    }
+
+    private function uploadBotMediaNodeFileToWhatsApp(
+        string $localMediaPath,
+        string $mediaType,
+        ?string $configuredFilename,
+        Chat $chat,
+        BotNode $node,
+    ): ?string {
+        $disk = Storage::disk('public');
+
+        if (!$disk->exists($localMediaPath)) {
+            Log::error('sendBotMediaNode: archivo local no existe para subir a WhatsApp', [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'type' => $mediaType,
+                'local_media_path' => $localMediaPath,
+            ]);
+            return null;
+        }
+
+        $fullPath = $disk->path($localMediaPath);
+        $mime = (string) ($disk->mimeType($localMediaPath) ?: (@mime_content_type($fullPath) ?: ''));
+        $uploadMime = $this->normalizeWhatsAppUploadMime($mime, $mediaType);
+        $originalName = $configuredFilename
+            ?: basename($localMediaPath)
+            ?: ('bot_media_' . $node->id);
+        $size = @filesize($fullPath) ?: null;
+        $sniff = $mediaType === 'audio' ? $this->sniffAudioContainer($fullPath) : null;
+
+        Log::info('sendBotMediaNode: subiendo archivo local a WhatsApp', [
+            'chat_id' => $chat->id,
+            'node_id' => $node->id,
+            'type' => $mediaType,
+            'local_media_path' => $localMediaPath,
+            'original_name' => $originalName,
+            'mime' => $mime,
+            'upload_mime' => $uploadMime,
+            'size' => $size,
+            'sniff' => $sniff,
+        ]);
+
+        if ($mediaType === 'audio') {
+            $allowedAudioMimes = [
+                'audio/ogg',
+                'audio/ogg; codecs=opus',
+                'audio/mpeg',
+                'audio/mp4',
+                'audio/aac',
+                'audio/amr',
+                'audio/opus',
+            ];
+
+            if (!in_array(strtolower($uploadMime), $allowedAudioMimes, true)) {
+                Log::error('sendBotMediaNode: audio no soportado para WhatsApp', [
+                    'chat_id' => $chat->id,
+                    'node_id' => $node->id,
+                    'mime' => $mime,
+                    'upload_mime' => $uploadMime,
+                    'sniff' => $sniff,
+                ]);
+                return null;
+            }
+        }
+
+        $handle = @fopen($fullPath, 'r');
+        if (!$handle) {
+            Log::error('sendBotMediaNode: no se pudo abrir archivo local para subir a WhatsApp', [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'local_media_path' => $localMediaPath,
+            ]);
+            return null;
+        }
+
+        try {
+            $mediaUploadUrl = 'https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/media';
+            $uploadResponse = Http::withToken($this->whatsappAccessToken())
+                ->attach(
+                    'file',
+                    $handle,
+                    $originalName,
+                    ['Content-Type' => $uploadMime]
+                )
+                ->post($mediaUploadUrl, [
+                    'messaging_product' => 'whatsapp',
+                ]);
+        } finally {
+            if (is_resource($handle)) {
+                fclose($handle);
+            }
+        }
+
+        if ($uploadResponse->failed()) {
+            Log::error('API Error (sendBotMediaNode upload): ' . $uploadResponse->body(), [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'type' => $mediaType,
+                'status' => $uploadResponse->status(),
+                'local_media_path' => $localMediaPath,
+                'upload_mime' => $uploadMime,
+            ]);
+            return null;
+        }
+
+        $mediaId = $uploadResponse->json('id');
+        if (!$mediaId) {
+            Log::error('sendBotMediaNode: WhatsApp no devolvió media_id al subir archivo local', [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'type' => $mediaType,
+                'response' => $uploadResponse->json(),
+            ]);
+            return null;
+        }
+
+        Log::info('sendBotMediaNode: archivo local subido a WhatsApp', [
+            'chat_id' => $chat->id,
+            'node_id' => $node->id,
+            'type' => $mediaType,
+            'media_id' => $mediaId,
+        ]);
+
+        return (string) $mediaId;
     }
 
     private function sendPersonLookupNode(Chat $chat, BotNode $node): void
@@ -2437,11 +2658,3 @@ class WhatsAppController extends Controller
         return false;
     }
 }
-
-
-
-
-
-
-
-

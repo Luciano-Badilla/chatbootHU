@@ -3,7 +3,7 @@
 import { createPortal } from "react-dom"
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { usePage } from "@inertiajs/react"
-import { Plus, RefreshCcw, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp, ArrowLeft, PanelLeft, Settings2, X, ArrowDown, InfoIcon } from "lucide-react"
+import { Plus, RefreshCcw, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp, ArrowLeft, PanelLeft, Settings2, X, ArrowDown, InfoIcon, FileText, Music, Video } from "lucide-react"
 import {
   applyNodeChanges,
   ReactFlow,
@@ -97,6 +97,12 @@ interface CanvasNodeData extends Record<string, unknown> {
     tone?: BranchTone
     hasConnection?: boolean
   }>
+  mediaPreview?: {
+    type: NodeType
+    url: string
+    name: string
+  } | null
+  messagePreview?: string
   onSelect: () => void
   onDelete: () => void
   onToggleAutoAdvance: () => void
@@ -108,6 +114,80 @@ const branchToneCycle = ["info", "success", "warning", "danger"] as const
 type BranchTone = "default" | "info" | "success" | "warning" | "danger"
 
 const getIndexedBranchTone = (index: number): BranchTone => branchToneCycle[index % branchToneCycle.length]
+
+function MediaNodePreview({
+  media,
+  className,
+  compact = false,
+}: {
+  media: { type: NodeType; url: string; name: string }
+  className?: string
+  compact?: boolean
+}) {
+  const iconClassName = compact ? "h-4 w-4" : "h-5 w-5"
+
+  if (media.type === "image") {
+    return (
+      <div className={cn("overflow-hidden rounded-xl border border-slate-200 bg-white", className)}>
+        <img
+          src={media.url}
+          alt={media.name}
+          className={cn("w-full object-contain bg-white", compact ? "max-h-32" : "max-h-44")}
+        />
+        <div className="border-t border-slate-100 px-3 py-2 text-[11px] font-medium text-slate-700">
+          <span className="block truncate">{media.name}</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (media.type === "video") {
+    return (
+      <div className={cn("overflow-hidden rounded-xl border border-slate-200 bg-slate-950", className)}>
+        <video
+          src={media.url}
+          muted
+          preload="metadata"
+          className={cn("w-full bg-slate-950 object-contain", compact ? "max-h-32" : "max-h-44")}
+        />
+        <div className="flex items-center gap-2 bg-white px-3 py-2 text-[11px] font-medium text-slate-700">
+          <Video className={iconClassName} />
+          <span className="truncate">{media.name}</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (media.type === "audio") {
+    return (
+      <div className={cn("rounded-xl border border-slate-200 bg-white px-3 py-3", className)}>
+        <div className="mb-2 flex items-center gap-2 text-[11px] font-medium text-slate-700">
+          <Music className={iconClassName} />
+          <span className="truncate">{media.name}</span>
+        </div>
+        {compact ? (
+          <div className="h-2 rounded-full bg-slate-100">
+            <div className="h-2 w-2/5 rounded-full bg-[#013765]" />
+          </div>
+        ) : (
+          <audio src={media.url} controls className="w-full" />
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className={cn("flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3", className)}>
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#013765]/10 text-[#013765]">
+        <FileText className={iconClassName} />
+      </div>
+      <div className="min-w-0">
+        <p className="truncate text-xs font-medium text-slate-800">{media.name}</p>
+        <p className="text-[10px] text-slate-500">Documento listo para enviar</p>
+      </div>
+    </div>
+  )
+}
 
 function HoverTooltip({
   label,
@@ -319,9 +399,23 @@ const CanvasBotNode = memo(function CanvasBotNode({ data }: NodeProps<FlowNode<C
           </div>
         ) : null}
 
-        <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-600">
-          {data.preview || "Sin mensaje configurado."}
-        </div>
+        {data.mediaPreview ? (
+          <div className="mt-3 space-y-2">
+            <MediaNodePreview
+              media={data.mediaPreview}
+              compact
+            />
+            {data.messagePreview ? (
+              <div className="rounded-xl bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-600">
+                {data.messagePreview}
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-600">
+            {data.preview || "Sin mensaje configurado."}
+          </div>
+        )}
 
         {data.sourceHandles.length > 1 ? (
           <div className="mt-3 grid grid-cols-3 gap-1.5">
@@ -578,8 +672,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   )
 
   const hasUnsavedChanges = useMemo(() => {
+    if (!selectedNodeId || !editNode) return false
+
     return serializeNodeSnapshot(editNode) !== lastSavedNodeSnapshotRef.current
-  }, [editNode])
+  }, [editNode, selectedNodeId])
 
   const hasUnsavedFlowChanges = useMemo(() => {
     return (
@@ -1220,11 +1316,16 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     setPendingNavigation(null)
 
     if (nextNavigation.type === "flow") {
+      setSelectedNodeId(null)
+      setEditNode(null)
+      lastSavedNodeSnapshotRef.current = ""
       setSelectedFlowId(nextNavigation.id)
       return
     }
 
     if (nextNavigation.type === "close_node") {
+      setEditNode(null)
+      lastSavedNodeSnapshotRef.current = ""
       setSelectedNodeId(null)
       return
     }
@@ -1259,11 +1360,33 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     return next?.key ?? (next ? `node_${next.id}` : `node_${nodeId}`)
   }
 
+  const getMediaPreview = (node: BotNode) => {
+    if (!isMediaNodeType(node.type)) return null
+
+    const source = String(node.settings?.source ?? "").trim()
+    if (!source) return null
+
+    const name =
+      String(node.settings?.filename ?? "").trim() ||
+      source.split("/").filter(Boolean).pop() ||
+      "Archivo cargado"
+    const url = source.startsWith("http://") || source.startsWith("https://")
+      ? source
+      : `${API_BASE}${source.startsWith("/") ? "" : "/"}${source}`
+
+    return {
+      type: node.type,
+      url,
+      name,
+    }
+  }
+
   const getNodePreview = (node: BotNode) => {
     if (isMediaNodeType(node.type)) {
-      const source = String(node.settings?.source ?? "").trim()
       const filename = String(node.settings?.filename ?? "").trim()
       const caption = String(node.body ?? "").replace(/\s+/g, " ").trim()
+      const mediaPreview = getMediaPreview(node)
+      const source = mediaPreview?.name
       return [filename || source || "Media sin configurar", caption].filter(Boolean).join(" · ").slice(0, 90)
     }
 
@@ -1271,6 +1394,13 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       .replace(/\s+/g, " ")
       .trim()
       .slice(0, 90)
+  }
+
+  const getNodeMessagePreview = (node: BotNode) => {
+    return String(node.body ?? "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120)
   }
 
   const getNodeBranches = (node: BotNode) => {
@@ -1395,7 +1525,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const handleToggleCanvasAutoAdvance = (nodeId: number) => {
     const node = nodesById.get(nodeId)
     if (!node) return
-    if (node.type !== "text") return
+    if (node.type !== "text" && !isMediaNodeType(node.type)) return
 
     const nextValue = !Boolean(node.settings?.auto_advance)
     const nextSettings = {
@@ -1443,6 +1573,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         data: {
           label: node.key || `node_${node.id}`,
           preview: getNodePreview(node),
+          mediaPreview: getMediaPreview(node),
+          messagePreview: getNodeMessagePreview(node),
           type: node.type,
           typeLabel: getNodeTypeLabel(node.type),
           isStart: selectedFlow?.start_node_id === node.id,
@@ -2741,13 +2873,42 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
       return (
         <div className="space-y-3">
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-            El bot enviara el archivo cargado por WhatsApp.
-          </div>
+          {mediaSource ? (
+            <div className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+              <div className="min-w-0 border-b border-slate-200 bg-white px-3 py-2">
+                <p className="block max-w-full text-xs font-medium text-slate-800" title={displayName}>
+                  {displayName}
+                </p>
+                <p className="text-[10px] text-slate-500">{getNodeTypeLabel(t)} cargado</p>
+              </div>
+              {t === "image" && previewUrl ? (
+                <img src={previewUrl} alt={displayName} className="max-h-44 w-full object-contain bg-white" />
+              ) : t === "video" && previewUrl ? (
+                <video src={previewUrl} controls preload="metadata" className="max-h-44 w-full bg-black" />
+              ) : t === "audio" && previewUrl ? (
+                <div className="min-w-0 overflow-hidden bg-white p-3">
+                  <audio
+                    src={previewUrl}
+                    controls
+                    className="block w-full max-w-full min-w-0"
+                    style={{ width: "100%" }}
+                  />
+                </div>
+              ) : (
+                <div className="px-3 py-4 text-xs text-slate-600">
+                  El documento quedo listo para enviarse.
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+              Todavia no hay ningun archivo cargado para este nodo.
+            </div>
+          )}
 
           <div className="rounded-lg border border-dashed border-[#013765]/30 bg-white p-3">
             <label className="mb-2 block text-xs font-medium text-[#013765]">
-              Cargar archivo local
+              Cargar archivo
             </label>
             <Input
               type="file"
@@ -2763,41 +2924,12 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             <p className="mt-2 text-[10px] text-muted-foreground">
               {uploadingMedia
                 ? "Subiendo archivo..."
-                : "Selecciona el archivo que enviara este nodo."}
+                : mediaSource
+                  ? "Selecciona otro archivo para reemplazar el actual."
+                  : "Selecciona el archivo que enviara este nodo."}
             </p>
           </div>
 
-          {mediaSource ? (
-            <div className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-              <div className="border-b border-slate-200 bg-white px-3 py-2">
-                <p className="truncate text-xs font-medium text-slate-800">{displayName}</p>
-                <p className="text-[10px] text-slate-500">{getNodeTypeLabel(t)} cargado</p>
-              </div>
-              {t === "image" && previewUrl ? (
-                <img src={previewUrl} alt={displayName} className="max-h-44 w-full object-contain bg-white" />
-              ) : t === "video" && previewUrl ? (
-                <video src={previewUrl} controls preload="metadata" className="max-h-44 w-full bg-black" />
-              ) : t === "audio" && previewUrl ? (
-                <div className="bg-white p-3">
-                  <audio src={previewUrl} controls className="w-full" />
-                </div>
-              ) : (
-                <div className="px-3 py-4 text-xs text-slate-600">
-                  El documento quedo listo para enviarse.
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
-              Todavia no hay ningun archivo cargado para este nodo.
-            </div>
-          )}
-
-          {t === "audio" ? (
-            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
-              WhatsApp no muestra caption en mensajes de audio. El campo Mensaje queda ignorado para este tipo.
-            </p>
-          ) : null}
         </div>
       )
     }
@@ -2836,6 +2968,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
     const branches = getNodeBranches(node)
     const preview = getNodePreview(node)
+    const mediaPreview = getMediaPreview(node)
+    const messagePreview = getNodeMessagePreview(node)
 
     return (
       <div className="flex flex-col items-center gap-3">
@@ -2917,14 +3051,30 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             </div>
           </div>
 
-          <div
-            className={cn(
-              "rounded-xl px-3 py-2 text-[11px] leading-relaxed",
-              selectedNodeId === node.id ? "bg-white/10 text-white/85" : "bg-slate-50 text-slate-600",
-            )}
-          >
-            {preview || "Sin mensaje configurado."}
-          </div>
+          {mediaPreview ? (
+            <div className="space-y-2">
+              <MediaNodePreview media={mediaPreview} compact />
+              {messagePreview ? (
+                <div
+                  className={cn(
+                    "rounded-xl px-3 py-2 text-[11px] leading-relaxed",
+                    selectedNodeId === node.id ? "bg-white/10 text-white/85" : "bg-slate-50 text-slate-600",
+                  )}
+                >
+                  {messagePreview}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div
+              className={cn(
+                "rounded-xl px-3 py-2 text-[11px] leading-relaxed",
+                selectedNodeId === node.id ? "bg-white/10 text-white/85" : "bg-slate-50 text-slate-600",
+              )}
+            >
+              {preview || "Sin mensaje configurado."}
+            </div>
+          )}
 
           <div className="flex items-center justify-between gap-2 text-[10px]">
             <span className={selectedNodeId === node.id ? "text-white/75" : "text-slate-500"}>
@@ -3685,6 +3835,11 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                   ? " (mensaje interactivo)"
                                   : ""}
                               </p>
+                              {editNode.type === "audio" ? (
+                                <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                                  WhatsApp no muestra texto junto a los audios. Este campo se ignora para este tipo de nodo.
+                                </p>
+                              ) : null}
                             </div>
 
                             {/* Settings específicos según tipo */}
@@ -4236,4 +4391,3 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     </div>
   )
 }
-
