@@ -218,6 +218,26 @@ class BotFlowController extends Controller
 
         $file = $request->file('file');
         $kind = $data['media_kind'];
+        $mime = (string) ($file->getMimeType() ?? '');
+        $allowedMimes = match ($kind) {
+            'image' => ['image/jpeg', 'image/png', 'image/webp'],
+            'video' => ['video/mp4', 'video/3gpp'],
+            'audio' => ['audio/ogg', 'audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/amr', 'audio/opus'],
+            default => [],
+        };
+
+        if ($allowedMimes && !in_array(strtolower($mime), $allowedMimes, true)) {
+            return response()->json([
+                'message' => match ($kind) {
+                    'image' => 'Formato de imagen no compatible con WhatsApp. Usá JPG, PNG o WEBP.',
+                    'video' => 'Formato de video no compatible con WhatsApp. Usá MP4 o 3GP.',
+                    'audio' => 'Formato de audio no compatible con WhatsApp. Usá OGG, MP3, M4A, AAC, AMR u OPUS.',
+                    default => 'Formato no compatible con WhatsApp.',
+                },
+                'mime' => $mime,
+            ], 422);
+        }
+
         $originalName = (string) ($file->getClientOriginalName() ?? ('media_' . uniqid()));
         $safeName = preg_replace('/[^A-Za-z0-9._-]/', '_', $originalName) ?: ('media_' . uniqid());
         $storedName = uniqid($kind . '_') . '_' . $safeName;
@@ -230,7 +250,7 @@ class BotFlowController extends Controller
             'name' => $originalName,
             'media_kind' => $kind,
             'size' => $file->getSize(),
-            'mime' => $file->getMimeType(),
+            'mime' => $mime,
         ]);
     }
 

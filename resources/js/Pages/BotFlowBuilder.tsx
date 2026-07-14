@@ -3,7 +3,8 @@
 import { createPortal } from "react-dom"
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { usePage } from "@inertiajs/react"
-import { Plus, RefreshCcw, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp, ArrowLeft, PanelLeft, Settings2, X, ArrowDown, InfoIcon } from "lucide-react"
+import { toast } from "sonner"
+import { Plus, RefreshCcw, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp, ArrowLeft, PanelLeft, Settings2, X, ArrowDown, InfoIcon, FileText, AudioLines, ImageIcon, Video } from "lucide-react"
 import {
   applyNodeChanges,
   ReactFlow,
@@ -82,6 +83,11 @@ interface TemplateVariableOption {
 interface CanvasNodeData extends Record<string, unknown> {
   label: string
   preview: string
+  imagePreviewUrl?: string | null
+  videoPreviewUrl?: string | null
+  audioPreviewUrl?: string | null
+  documentPreviewUrl?: string | null
+  mediaDisplayName?: string | null
   type: NodeType
   typeLabel: string
   isStart: boolean
@@ -319,9 +325,126 @@ const CanvasBotNode = memo(function CanvasBotNode({ data }: NodeProps<FlowNode<C
           </div>
         ) : null}
 
-        <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-600">
-          {data.preview || "Sin mensaje configurado."}
-        </div>
+        {data.type === "image" ? (
+          <div className="mt-3 overflow-hidden rounded-xl bg-slate-50 text-[11px] leading-relaxed text-slate-600">
+            {data.imagePreviewUrl ? (
+              <img
+                src={data.imagePreviewUrl}
+                alt={data.label}
+                className="h-32 w-full object-cover"
+                loading="lazy"
+              />
+            ) : (
+              <div className="flex items-center gap-3 bg-slate-100 px-3 py-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-[#013765] shadow-sm">
+                  <ImageIcon className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-semibold text-slate-800">
+                    Imagen sin configurar
+                  </p>
+                  <p className="mt-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                    Imagen
+                  </p>
+                </div>
+              </div>
+            )}
+            {data.preview ? (
+              <div className="border-t border-slate-200 bg-slate-100 px-3 py-2 text-slate-700">
+                {data.preview}
+              </div>
+            ) : null}
+          </div>
+        ) : data.type === "video" ? (
+          <div className="mt-3 overflow-hidden rounded-xl bg-slate-50 text-[11px] leading-relaxed text-slate-600">
+            {data.videoPreviewUrl ? (
+              <video
+                src={data.videoPreviewUrl}
+                controls
+                preload="metadata"
+                className="h-32 w-full bg-black object-cover"
+              />
+            ) : (
+              <div className="flex items-center gap-3 bg-slate-100 px-3 py-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-[#013765] shadow-sm">
+                  <Video className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-semibold text-slate-800">
+                    Video sin configurar
+                  </p>
+                  <p className="mt-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                    Video
+                  </p>
+                </div>
+              </div>
+            )}
+            {data.preview ? (
+              <div className="border-t border-slate-200 bg-slate-100 px-3 py-2 text-slate-700">
+                {data.preview}
+              </div>
+            ) : null}
+          </div>
+        ) : data.type === "audio" ? (
+          <div className="mt-3 overflow-hidden rounded-xl bg-slate-50 text-[11px] leading-relaxed text-slate-600">
+            <div className="flex items-center gap-3 bg-slate-100 px-3 py-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-[#013765] shadow-sm">
+                <AudioLines className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-semibold text-slate-800">
+                  {data.mediaDisplayName || "Audio sin configurar"}
+                </p>
+                {data.audioPreviewUrl ? (
+                  <audio src={data.audioPreviewUrl} controls className="mt-1 w-full" />
+                ) : (
+                  <p className="mt-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                    Audio
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : data.type === "document" ? (
+          <div className="mt-3 overflow-hidden rounded-xl bg-slate-50 text-[11px] leading-relaxed text-slate-600">
+            <a
+              href={data.documentPreviewUrl ?? undefined}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => {
+                e.stopPropagation()
+                if (!data.documentPreviewUrl) {
+                  e.preventDefault()
+                }
+              }}
+              className={cn(
+                "flex items-center gap-3 bg-slate-100 px-3 py-3 text-left transition-colors",
+                data.documentPreviewUrl ? "hover:bg-slate-200" : "cursor-default",
+              )}
+            >
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-[#013765] shadow-sm">
+                <FileText className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="truncate text-xs font-semibold text-slate-800">
+                  {data.mediaDisplayName || "Documento sin configurar"}
+                </p>
+                <p className="mt-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                  Documento
+                </p>
+              </div>
+            </a>
+            {data.preview ? (
+              <div className="border-t border-slate-200 bg-slate-100 px-3 py-2 text-slate-700">
+                {data.preview}
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-600">
+            {data.preview || "Sin mensaje configurado."}
+          </div>
+        )}
 
         {data.sourceHandles.length > 1 ? (
           <div className="mt-3 grid grid-cols-3 gap-1.5">
@@ -499,6 +622,36 @@ const getNodeTypeLabel = (type: NodeType) => {
   }
 }
 
+const nodeTypeOptions: NodeType[] = [
+  "text",
+  "image",
+  "document",
+  "video",
+  "audio",
+  "buttons",
+  "list",
+  "input",
+  "person_lookup",
+  "handoff",
+]
+
+function NodeTypeSelectItem({ type }: { type: NodeType }) {
+  if (type === "person_lookup") {
+    return (
+      <SelectItem value={type}>
+        <div className="flex w-full items-center justify-between gap-2">
+          <span>Buscar datos personales por DNI</span>
+          <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+            Alephoo
+          </span>
+        </div>
+      </SelectItem>
+    )
+  }
+
+  return <SelectItem value={type}>{getNodeTypeLabel(type)}</SelectItem>
+}
+
 const isAlephooNodeType = (type: NodeType) => {
   return type === "person_lookup"
 }
@@ -565,6 +718,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
   const [newFlowName, setNewFlowName] = useState("")
   const [newNodeKey, setNewNodeKey] = useState("")
+  const [newNodeType, setNewNodeType] = useState<NodeType>("text")
   const [editFlowName, setEditFlowName] = useState("")
   const [editFlowStartNodeId, setEditFlowStartNodeId] = useState<number | null>(null)
 
@@ -572,6 +726,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const [editNode, setEditNode] = useState<BotNode | null>(null)
   const lastSavedNodeSnapshotRef = useRef("")
   const messageTextareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const mediaFileInputRef = useRef<HTMLInputElement | null>(null)
   const templateVariableOptionRefs = useRef<Array<HTMLButtonElement | null>>([])
 
   // Flow seleccionado
@@ -1044,7 +1199,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           key,
-          type: "text",
+          type: newNodeType,
           body: "",
           settings: {},
         }),
@@ -1061,11 +1216,25 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       setSelectedNodeId(null)
       setEditNode(null)
       setNewNodeKey("")
+      setNewNodeType("text")
       setCreateModal(null)
     } catch (err) {
       console.error("Error de red al crear node:", err)
     } finally {
       setCreatingNode(false)
+    }
+  }
+
+  const handleCreateModalSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+
+    if (createModal === "flow") {
+      handleCreateFlow()
+      return
+    }
+
+    if (createModal === "node") {
+      handleCreateNode()
     }
   }
 
@@ -1197,7 +1366,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const requestSelectFlow = (flowId: number) => {
     if (flowId === selectedFlowId) return
 
-    if (hasUnsavedChanges) {
+    if (selectedNodeId && hasUnsavedChanges) {
       setPendingNavigation({ type: "flow", id: flowId })
       return
     }
@@ -1209,7 +1378,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const requestSelectNode = (nodeId: number) => {
     if (nodeId === selectedNodeId) return
 
-    if (hasUnsavedChanges) {
+    if (selectedNodeId && hasUnsavedChanges) {
       setPendingNavigation({ type: "node", id: nodeId })
       return
     }
@@ -1228,6 +1397,25 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     setSelectedNodeId(null)
   }
 
+  const syncEditNodeFromSavedState = (nodeId: number | null) => {
+    if (!nodeId) {
+      setEditNode(null)
+      lastSavedNodeSnapshotRef.current = ""
+      return
+    }
+
+    const savedNode = nodes.find((node) => node.id === nodeId) ?? null
+    if (!savedNode) {
+      setEditNode(null)
+      lastSavedNodeSnapshotRef.current = ""
+      return
+    }
+
+    const normalizedNode = { ...savedNode, settings: savedNode.settings ?? {} }
+    lastSavedNodeSnapshotRef.current = serializeNodeSnapshot(normalizedNode)
+    setEditNode(normalizedNode)
+  }
+
   const handleDiscardPendingNavigation = () => {
     if (!pendingNavigation) return
 
@@ -1235,15 +1423,18 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     setPendingNavigation(null)
 
     if (nextNavigation.type === "flow") {
+      syncEditNodeFromSavedState(null)
       setSelectedFlowId(nextNavigation.id)
       return
     }
 
     if (nextNavigation.type === "close_node") {
+      syncEditNodeFromSavedState(null)
       setSelectedNodeId(null)
       return
     }
 
+    syncEditNodeFromSavedState(nextNavigation.id)
     setSelectedNodeId(nextNavigation.id)
   }
 
@@ -1274,7 +1465,31 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     return next?.key ?? (next ? `node_${next.id}` : `node_${nodeId}`)
   }
 
+  const getMediaPreviewUrl = (node: BotNode) => {
+    const source = String(node.settings?.source ?? "").trim()
+    if (!source) return null
+
+    return source.startsWith("http://") || source.startsWith("https://")
+      ? source
+      : `${API_BASE}${source.startsWith("/") ? "" : "/"}${source}`
+  }
+
+  const getMediaDisplayName = (node: BotNode) => {
+    const source = String(node.settings?.source ?? "").trim()
+    const filename = String(node.settings?.filename ?? "").trim()
+
+    return filename || source.split("/").filter(Boolean).pop() || null
+  }
+
   const getNodePreview = (node: BotNode) => {
+    if (node.type === "audio") {
+      return ""
+    }
+
+    if (node.type === "image" || node.type === "document" || node.type === "video") {
+      return String(node.body ?? "").replace(/\s+/g, " ").trim().slice(0, 90)
+    }
+
     if (isMediaNodeType(node.type)) {
       const source = String(node.settings?.source ?? "").trim()
       const filename = String(node.settings?.filename ?? "").trim()
@@ -1437,7 +1652,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const handleToggleCanvasAutoAdvance = (nodeId: number) => {
     const node = nodesById.get(nodeId)
     if (!node) return
-    if (node.type !== "text") return
+    if (node.type !== "text" && !isMediaNodeType(node.type)) return
 
     const nextValue = !Boolean(node.settings?.auto_advance)
     const nextSettings = {
@@ -1485,6 +1700,11 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         data: {
           label: node.key || `node_${node.id}`,
           preview: getNodePreview(node),
+          imagePreviewUrl: node.type === "image" ? getMediaPreviewUrl(node) : null,
+          videoPreviewUrl: node.type === "video" ? getMediaPreviewUrl(node) : null,
+          audioPreviewUrl: node.type === "audio" ? getMediaPreviewUrl(node) : null,
+          documentPreviewUrl: node.type === "document" ? getMediaPreviewUrl(node) : null,
+          mediaDisplayName: isMediaNodeType(node.type) ? getMediaDisplayName(node) : null,
           type: node.type,
           typeLabel: getNodeTypeLabel(node.type),
           isStart: selectedFlow?.start_node_id === node.id,
@@ -1575,8 +1795,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           interactionWidth: 28,
           sourceHandle:
             node.type === "buttons" ||
-            node.type === "list" ||
-            (node.type === "input" && (node.settings?.response_mode === "buttons" || node.settings?.response_mode === "list"))
+              node.type === "list" ||
+              (node.type === "input" && (node.settings?.response_mode === "buttons" || node.settings?.response_mode === "list"))
               ? branch.id
               : node.type === "person_lookup"
                 ? branch.tone === "success"
@@ -2977,11 +3197,11 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
       const mediaAccept =
         t === "image"
-          ? "image/*"
+          ? "image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
           : t === "video"
-            ? "video/*"
+            ? "video/mp4,video/3gpp,.mp4,.3gp"
             : t === "audio"
-              ? "audio/*"
+              ? "audio/ogg,audio/mpeg,audio/mp4,audio/aac,audio/amr,audio/opus,.ogg,.opus,.mp3,.m4a,.aac,.amr"
               : ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
       const uploadLocalMedia = async (file: File | null) => {
@@ -2999,7 +3219,16 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           })
 
           if (!res.ok) {
-            console.error("Error al subir media del bot", await res.text())
+            let errorMessage = "No se pudo subir el archivo"
+            const rawError = await res.text()
+            try {
+              const payload = rawError ? JSON.parse(rawError) : null
+              errorMessage = String(payload?.message ?? errorMessage)
+            } catch {
+              if (rawError) errorMessage = rawError
+            }
+            toast.error(errorMessage)
+            console.error("Error al subir media del bot", errorMessage)
             return
           }
 
@@ -3035,37 +3264,13 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
       return (
         <div className="space-y-3">
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-            El bot enviara el archivo cargado por WhatsApp.
-          </div>
-
-          <div className="rounded-lg border border-dashed border-[#013765]/30 bg-white p-3">
-            <label className="mb-2 block text-xs font-medium text-[#013765]">
-              Cargar archivo local
-            </label>
-            <Input
-              type="file"
-              accept={mediaAccept}
-              disabled={uploadingMedia}
-              onChange={(e) => {
-                const file = e.currentTarget.files?.[0] ?? null
-                void uploadLocalMedia(file)
-                e.currentTarget.value = ""
-              }}
-              className="h-9 text-xs"
-            />
-            <p className="mt-2 text-[10px] text-muted-foreground">
-              {uploadingMedia
-                ? "Subiendo archivo..."
-                : "Selecciona el archivo que enviara este nodo."}
-            </p>
-          </div>
-
           {mediaSource ? (
             <div className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
               <div className="border-b border-slate-200 bg-white px-3 py-2">
-                <p className="truncate text-xs font-medium text-slate-800">{displayName}</p>
-                <p className="text-[10px] text-slate-500">{getNodeTypeLabel(t)} cargado</p>
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-medium text-slate-800">{displayName}</p>
+                  <p className="text-[10px] text-slate-500">{getNodeTypeLabel(t)} cargado</p>
+                </div>
               </div>
               {t === "image" && previewUrl ? (
                 <img src={previewUrl} alt={displayName} className="max-h-44 w-full object-contain bg-white" />
@@ -3075,11 +3280,44 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                 <div className="bg-white p-3">
                   <audio src={previewUrl} controls className="w-full" />
                 </div>
-              ) : (
-                <div className="px-3 py-4 text-xs text-slate-600">
-                  El documento quedo listo para enviarse.
-                </div>
-              )}
+              ) : t === "document" && previewUrl ? (
+                <a
+                  href={previewUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-3 bg-slate-100 px-3 py-3 text-left transition-colors hover:bg-slate-200"
+                >
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-[#013765] shadow-sm">
+                    <FileText className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-semibold text-slate-800">{displayName}</p>
+                    <p className="mt-0.5 text-[10px] font-medium text-slate-500">
+                      Abrir documento
+                    </p>
+                  </div>
+                </a>
+              ) : null}
+              <input
+                ref={mediaFileInputRef}
+                type="file"
+                accept={mediaAccept}
+                disabled={uploadingMedia}
+                onChange={(e) => {
+                  const file = e.currentTarget.files?.[0] ?? null
+                  void uploadLocalMedia(file)
+                  e.currentTarget.value = ""
+                }}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => mediaFileInputRef.current?.click()}
+                disabled={uploadingMedia}
+                className="flex w-full items-center justify-center border-t border-slate-200 bg-slate-100 px-3 py-2 text-xs font-medium text-[#013765] transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {uploadingMedia ? "Subiendo..." : "Reemplazar"}
+              </button>
             </div>
           ) : (
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
@@ -3087,10 +3325,28 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             </div>
           )}
 
-          {t === "audio" ? (
-            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
-              WhatsApp no muestra caption en mensajes de audio. El campo Mensaje queda ignorado para este tipo.
-            </p>
+          {!mediaSource ? (
+            <div className="rounded-lg border border-dashed border-[#013765]/30 bg-white p-3">
+              <label className="mb-2 block text-xs font-medium text-[#013765]">
+                Cargar archivo
+              </label>
+              <Input
+                type="file"
+                accept={mediaAccept}
+                disabled={uploadingMedia}
+                onChange={(e) => {
+                  const file = e.currentTarget.files?.[0] ?? null
+                  void uploadLocalMedia(file)
+                  e.currentTarget.value = ""
+                }}
+                className="h-9 text-xs"
+              />
+              <p className="mt-2 text-[10px] text-muted-foreground">
+                {uploadingMedia
+                  ? "Subiendo archivo..."
+                  : "Selecciona el archivo que enviara este nodo."}
+              </p>
+            </div>
           ) : null}
         </div>
       )
@@ -3321,7 +3577,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           <h1 className="flex items-center justify-center gap-2 text-lg font-semibold">
             Constructor de flujo de bot
           </h1>
-          
+
           {selectedFlow ? (
             <p className="mt-1 text-xs opacity-80">
               {isReadOnly ? "Supervisando flujo: " : "Editando flujo: "}
@@ -3330,7 +3586,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           ) : (
             <p className="mt-1 text-xs opacity-80">Selecciona un flujo o crea uno nuevo.</p>
           )}
-          
+
         </div>
 
         {!isReadOnly ? (
@@ -3830,23 +4086,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                     <SelectValue />
                                   </SelectTrigger>
                                   <SelectContent>
-                                    <SelectItem value="text">Texto</SelectItem>
-                                    <SelectItem value="image">Imagen</SelectItem>
-                                    <SelectItem value="document">Documento</SelectItem>
-                                    <SelectItem value="video">Video</SelectItem>
-                                    <SelectItem value="audio">Audio</SelectItem>
-                                    <SelectItem value="buttons">Botones</SelectItem>
-                                    <SelectItem value="list">Lista</SelectItem>
-                                    <SelectItem value="input">Capturar dato</SelectItem>
-                                    <SelectItem value="person_lookup">
-                                      <div className="flex w-full items-center justify-between gap-2">
-                                        <span>Buscar datos personales por DNI</span>
-                                        <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">
-                                          Alephoo
-                                        </span>
-                                      </div>
-                                    </SelectItem>
-                                    <SelectItem value="handoff">Desactivar bot y pasar a operador</SelectItem>
+                                    {nodeTypeOptions.map((type) => (
+                                      <NodeTypeSelectItem key={type} type={type} />
+                                    ))}
                                   </SelectContent>
                                 </Select>
                                 {isAlephooNodeType(editNode.type) ? (
@@ -3992,6 +4234,11 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                   ? " (mensaje interactivo)"
                                   : ""}
                               </p>
+                              {editNode.type === "audio" ? (
+                                <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                                  WhatsApp no muestra texto en los mensajes de audio. El campo «Mensaje» se ignora para este tipo de archivo.
+                                </p>
+                              ) : null}
                             </div>
 
                             {/* Settings específicos según tipo */}
@@ -4000,43 +4247,43 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                             {/* Siguiente nodo lineal (solo para text + input) */}
                             {isLinearType(editNode.type) &&
                               !(editNode.type === "input" && ["buttons", "list"].includes(editNode.settings?.response_mode ?? "text")) && (
-                              <div>
-                                <label className="text-xs mb-1 block text-muted-foreground">
-                                  Siguiente nodo
-                                </label>
+                                <div>
+                                  <label className="text-xs mb-1 block text-muted-foreground">
+                                    Siguiente nodo
+                                  </label>
 
-                                <Select
-                                  value={editNode.next_node_id ? String(editNode.next_node_id) : "none"}
-                                  onValueChange={(val) =>
-                                    setEditNode((prev) =>
-                                      prev
-                                        ? {
-                                          ...prev,
-                                          next_node_id: val === "none" ? null : Number(val),
-                                        }
-                                        : prev,
-                                    )
-                                  }
-                                >
-                                  <SelectTrigger className="h-8 text-xs">
-                                    <SelectValue placeholder="Seleccionar siguiente nodo..." />
-                                  </SelectTrigger>
+                                  <Select
+                                    value={editNode.next_node_id ? String(editNode.next_node_id) : "none"}
+                                    onValueChange={(val) =>
+                                      setEditNode((prev) =>
+                                        prev
+                                          ? {
+                                            ...prev,
+                                            next_node_id: val === "none" ? null : Number(val),
+                                          }
+                                          : prev,
+                                      )
+                                    }
+                                  >
+                                    <SelectTrigger className="h-8 text-xs">
+                                      <SelectValue placeholder="Seleccionar siguiente nodo..." />
+                                    </SelectTrigger>
 
-                                  <SelectContent>
-                                    <SelectItem value="none">Finalizar flujo</SelectItem>
-                                    {nextNodeOptions.map((opt) => (
-                                      <SelectItem key={opt.id} value={String(opt.id)}>
-                                        {opt.label}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
+                                    <SelectContent>
+                                      <SelectItem value="none">Finalizar flujo</SelectItem>
+                                      {nextNodeOptions.map((opt) => (
+                                        <SelectItem key={opt.id} value={String(opt.id)}>
+                                          {opt.label}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
 
-                                <p className="text-[10px] text-muted-foreground mt-1">
-                                  Para avanzar al próximo nodo (lineal).
-                                </p>
-                              </div>
-                            )}
+                                  <p className="text-[10px] text-muted-foreground mt-1">
+                                    Para avanzar al próximo nodo (lineal).
+                                  </p>
+                                </div>
+                              )}
 
                             {/* Auto-disparo */}
                             {(editNode.type === "text" || isMediaNodeType(editNode.type)) && (
@@ -4208,7 +4455,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
       {createModal && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]">
-          <div className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+          <form
+            onSubmit={handleCreateModalSubmit}
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+          >
             <div className="border-b border-slate-200 bg-slate-50 px-5 py-4">
               <h3 className="text-base font-semibold text-slate-900">
                 {createModal === "flow" ? "Crear nuevo flujo" : "Crear nuevo nodo"}
@@ -4220,7 +4470,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               </p>
             </div>
 
-            <div className="px-5 py-4">
+            <div className="space-y-4 px-5 py-4">
               <label className="mb-1 block text-xs text-slate-500">
                 {createModal === "flow" ? "Nombre del flujo" : "Key del nodo"}
               </label>
@@ -4238,6 +4488,26 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                 }
                 className="h-9 text-sm"
               />
+              {createModal === "node" ? (
+                <div>
+                  <label className="mb-1 block text-xs text-slate-500">
+                    Tipo de nodo
+                  </label>
+                  <Select
+                    value={newNodeType}
+                    onValueChange={(value: NodeType) => setNewNodeType(value)}
+                  >
+                    <SelectTrigger className="h-9 text-sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {nodeTypeOptions.map((type) => (
+                        <NodeTypeSelectItem key={type} type={type} />
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
               {createModal === "node" && !selectedFlowId ? (
                 <p className="mt-2 text-xs text-amber-600">
                   Seleccioná un flujo antes de crear nodos.
@@ -4254,8 +4524,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                 Cancelar
               </button>
               <button
-                type="button"
-                onClick={createModal === "flow" ? handleCreateFlow : handleCreateNode}
+                type="submit"
                 disabled={
                   createModal === "flow"
                     ? creatingFlow || !newFlowName.trim()
@@ -4276,7 +4545,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                 )}
               </button>
             </div>
-          </div>
+          </form>
         </div>
       )}
 

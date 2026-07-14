@@ -4,6 +4,7 @@ import {
   CalendarDays,
   Check,
   ChevronsUpDown,
+  ClipboardPaste,
   Download,
   Loader2,
   Upload,
@@ -399,6 +400,19 @@ export default function SettingsPanel({
       })
     } finally {
       setSavingIntegrations(false)
+    }
+  }
+
+  const handlePasteWhatsappToken = async () => {
+    try {
+      const text = await navigator.clipboard.readText()
+      setWhatsappToken(text.trim())
+      toast.success("Token pegado desde el portapapeles")
+    } catch (err) {
+      console.error("Error leyendo portapapeles:", err)
+      toast.error("No se pudo leer el portapapeles", {
+        description: "Revisa los permisos del navegador e intenta nuevamente.",
+      })
     }
   }
 
@@ -912,11 +926,22 @@ export default function SettingsPanel({
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="space-y-1.5 md:col-span-2">
                   <label className="text-sm font-medium text-[#013765]">Token</label>
-                  <Input
-                    value={whatsappToken}
-                    onChange={(e) => setWhatsappToken(e.target.value)}
-                    placeholder="Token de acceso de WhatsApp"
-                  />
+                  <div className="relative">
+                    <Input
+                      value={whatsappToken}
+                      onChange={(e) => setWhatsappToken(e.target.value)}
+                      placeholder="Token de acceso de WhatsApp"
+                      className="pr-28"
+                    />
+                    <button
+                      type="button"
+                      onClick={handlePasteWhatsappToken}
+                      className="absolute right-1 top-1/2 inline-flex h-8 -translate-y-1/2 items-center gap-1.5 rounded-md border border-[#dbe5ef] bg-white px-2.5 text-xs font-medium text-[#013765] transition-colors hover:bg-slate-50"
+                    >
+                      <ClipboardPaste className="h-3.5 w-3.5" />
+                      Pegar
+                    </button>
+                  </div>
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium text-[#013765]">Phone Number ID</label>
