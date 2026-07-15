@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\BotFlowController;
+use App\Http\Controllers\AgendaContactController;
 use App\Http\Controllers\AuditController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\ChatMediaController;
@@ -37,9 +38,16 @@ Route::middleware($sessionAuthenticated)->group(function () {
     Route::post('/chats/{chat}/open', [ChatController::class, 'open']);
     Route::post('/message/send', [WhatsAppController::class, 'sendMessage']);
     Route::post('/message/send-media', [WhatsAppController::class, 'sendMedia']);
+    Route::post('/message/send-contact', [WhatsAppController::class, 'sendContact']);
     Route::post('/chats/{chat}/bot', [WhatsAppController::class, 'updateBotStatus'])->middleware('permission:can_toggle_bot');
     Route::post('/chats/{chat}/operator', [ChatController::class, 'updateOperator'])->middleware('permission:can_assign_chats');
     Route::get('/chats/{chat}/media', [ChatMediaController::class, 'index']);
+    Route::get('/agenda/contacts', [AgendaContactController::class, 'apiIndex']);
+    Route::post('/agenda/contacts', [AgendaContactController::class, 'store']);
+    Route::put('/agenda/contacts/{agendaContact}', [AgendaContactController::class, 'update']);
+    Route::delete('/agenda/contacts/{agendaContact}', [AgendaContactController::class, 'destroy']);
+    Route::post('/agenda/contacts/{id}/restore', [AgendaContactController::class, 'restore']);
+    Route::delete('/agenda/contacts/{id}/force', [AgendaContactController::class, 'forceDestroy']);
 
     Route::middleware('permission:can_view_audit')->group(function () {
         Route::get('/audit/logs', [AuditController::class, 'logs']);

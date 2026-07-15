@@ -4,7 +4,7 @@ import { createPortal } from "react-dom"
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { usePage } from "@inertiajs/react"
 import { toast } from "sonner"
-import { Plus, RefreshCcw, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp, ArrowLeft, PanelLeft, Settings2, X, ArrowDown, InfoIcon, FileText, AudioLines, ImageIcon, Video } from "lucide-react"
+import { Plus, RefreshCcw, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp, ArrowLeft, PanelLeft, Settings2, X, ArrowDown, InfoIcon, FileText, AudioLines, ImageIcon, Video, Contact } from "lucide-react"
 import {
   applyNodeChanges,
   ReactFlow,
@@ -21,7 +21,9 @@ import {
 } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
 import { Button } from "shadcn/components/ui/button"
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "shadcn/components/ui/command"
 import { Input } from "shadcn/components/ui/input"
+import { Popover, PopoverContent, PopoverTrigger } from "shadcn/components/ui/popover"
 import { Textarea } from "shadcn/components/ui/textarea"
 import { Checkbox } from "shadcn/components/ui/checkbox"
 
@@ -42,7 +44,7 @@ import {
 import { cn } from "shadcn/lib/utils"
 import { Badge } from "shadcn/components/ui/badge"
 
-type NodeType = "text" | "buttons" | "list" | "input" | "handoff" | "person_lookup" | "image" | "document" | "video" | "audio"
+type NodeType = "text" | "buttons" | "list" | "input" | "handoff" | "person_lookup" | "image" | "document" | "video" | "audio" | "contact"
 
 interface BotFlow {
   id: number
@@ -72,6 +74,16 @@ interface TrashedNodeSummary {
   key: string | null
   type: NodeType
   deleted_at?: string | null
+}
+
+interface AgendaContact {
+  id: number
+  first_name?: string | null
+  last_name?: string | null
+  formatted_name: string
+  phone: string
+  organization?: string | null
+  title?: string | null
 }
 
 interface TemplateVariableOption {
@@ -440,6 +452,22 @@ const CanvasBotNode = memo(function CanvasBotNode({ data }: NodeProps<FlowNode<C
               </div>
             ) : null}
           </div>
+        ) : data.type === "contact" ? (
+          <div className="mt-3 overflow-hidden rounded-xl bg-slate-50 text-[11px] leading-relaxed text-slate-600">
+            <div className="flex items-center gap-3 bg-slate-100 px-3 py-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-[#013765] shadow-sm">
+                <Contact className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="truncate text-xs font-semibold text-slate-800">
+                  {data.preview || "Contacto sin configurar"}
+                </p>
+                <p className="mt-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                  Contacto
+                </p>
+              </div>
+            </div>
+          </div>
         ) : (
           <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-600">
             {data.preview || "Sin mensaje configurado."}
@@ -590,6 +618,29 @@ const LIST_ROW_ID_MAX = 200
 const LIST_ROW_TITLE_MAX = 24
 const LIST_ROW_DESCRIPTION_MAX = 72
 
+const normalizeContactPhone = (phone: string) => phone.replace(/[^\d+]/g, "")
+
+const validateContactSettings = (settings: any) => {
+  const formattedName = String(settings?.formatted_name ?? "").trim()
+  const firstName = String(settings?.first_name ?? "").trim()
+  const lastName = String(settings?.last_name ?? "").trim()
+  const displayName = formattedName || [firstName, lastName].filter(Boolean).join(" ").trim()
+  const phone = normalizeContactPhone(String(settings?.phone ?? ""))
+
+  return {
+    displayName,
+    phone,
+    phoneDigits: phone.replace(/\D/g, ""),
+    hasName: displayName.length > 0,
+    hasPhone: phone.length > 0,
+    hasOnlyValidPhoneChars: /^\+?\d+$/.test(phone),
+    isPhoneTooShort: phone.replace(/\D/g, "").length > 0 && phone.replace(/\D/g, "").length < 7,
+    isPhoneTooLong: phone.replace(/\D/g, "").length > 15,
+    hasValidPhone: /^\+?\d+$/.test(phone) && phone.replace(/\D/g, "").length >= 7 && phone.replace(/\D/g, "").length <= 15,
+    isValid: displayName.length > 0 && /^\+?\d+$/.test(phone) && phone.replace(/\D/g, "").length >= 7 && phone.replace(/\D/g, "").length <= 15,
+  }
+}
+
 const getNodeBodyMaxLength = (type: NodeType) =>
   type === "buttons" || type === "list" || type === "image" || type === "video" || type === "document"
     ? INTERACTIVE_MESSAGE_MAX
@@ -615,6 +666,8 @@ const getNodeTypeLabel = (type: NodeType) => {
       return "Video"
     case "audio":
       return "Audio"
+    case "contact":
+      return "Contacto"
     case "handoff":
       return "Desactivar bot y pasar a operador"
     default:
@@ -628,6 +681,7 @@ const nodeTypeOptions: NodeType[] = [
   "document",
   "video",
   "audio",
+  "contact",
   "buttons",
   "list",
   "input",
@@ -658,6 +712,10 @@ const isAlephooNodeType = (type: NodeType) => {
 
 const isMediaNodeType = (type: NodeType) => {
   return type === "image" || type === "document" || type === "video" || type === "audio"
+}
+
+const isContactNodeType = (type: NodeType) => {
+  return type === "contact"
 }
 
 const serializeNodeSnapshot = (node: BotNode | null) => {
@@ -696,6 +754,12 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const [trashedFlows, setTrashedFlows] = useState<BotFlow[]>([])
   const [trashedNodes, setTrashedNodes] = useState<TrashedNodeSummary[]>([])
   const [trashSearch, setTrashSearch] = useState("")
+  const [agendaContacts, setAgendaContacts] = useState<AgendaContact[]>([])
+  const [loadingAgendaContacts, setLoadingAgendaContacts] = useState(false)
+  const [agendaContactsLoaded, setAgendaContactsLoaded] = useState(false)
+  const [agendaContactSelectOpen, setAgendaContactSelectOpen] = useState(false)
+  const [contactNodeSubmitted, setContactNodeSubmitted] = useState(false)
+  const [contactNodeTouchedFields, setContactNodeTouchedFields] = useState<Record<string, boolean>>({})
   const [confirmDelete, setConfirmDelete] = useState<
     | { type: "flow"; id: number; name: string }
     | { type: "node"; id: number; name: string }
@@ -868,6 +932,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       const source = String(editNode.settings?.source ?? "").trim()
       return source.length > 0
     }
+    if (editNode.type === "contact") {
+      return validateContactSettings(editNode.settings ?? {}).isValid
+    }
 
     return true
   }, [editNode, inputVariableValidation.isAvailable])
@@ -969,6 +1036,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     setTemplateVariableQuery("")
     setTemplateVariableStart(null)
     setTemplateVariableSelectedIndex(0)
+    setAgendaContactSelectOpen(false)
+    setContactNodeSubmitted(false)
+    setContactNodeTouchedFields({})
   }, [selectedNodeId, selectedFlowId])
 
   useEffect(() => {
@@ -1000,6 +1070,31 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
     loadTrash()
   }, [trashOpen])
+
+  useEffect(() => {
+    if (editNode?.type !== "contact" || agendaContactsLoaded || loadingAgendaContacts) return
+
+    const loadAgendaContacts = async () => {
+      try {
+        setLoadingAgendaContacts(true)
+        const res = await fetch(`${API_BASE}/api/agenda/contacts`)
+        if (!res.ok) {
+          console.error("Error al cargar contactos de agenda", await res.text())
+          return
+        }
+
+        const data = await res.json()
+        setAgendaContacts(Array.isArray(data.contacts) ? data.contacts : [])
+      } catch (err) {
+        console.error("Error de red cargando agenda:", err)
+      } finally {
+        setAgendaContactsLoaded(true)
+        setLoadingAgendaContacts(false)
+      }
+    }
+
+    loadAgendaContacts()
+  }, [editNode?.type, agendaContactsLoaded, loadingAgendaContacts])
 
   // Crear flujo nuevo
   const handleCreateFlow = async () => {
@@ -1329,6 +1424,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const handleSaveNode = async () => {
     if (isReadOnly) return false
     if (!editNode) return
+    if (editNode.type === "contact") setContactNodeSubmitted(true)
     if (!canSaveNode) return false
 
     const snapshot = {
@@ -1482,6 +1578,16 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   }
 
   const getNodePreview = (node: BotNode) => {
+    if (node.type === "contact") {
+      const settings = node.settings ?? {}
+      const firstName = String(settings.first_name ?? "").trim()
+      const lastName = String(settings.last_name ?? "").trim()
+      const formattedName = String(settings.formatted_name ?? "").trim()
+      const phone = String(settings.phone ?? "").trim()
+      const name = formattedName || [firstName, lastName].filter(Boolean).join(" ")
+      return [name || "Contacto sin configurar", phone].filter(Boolean).join(" · ").slice(0, 90)
+    }
+
     if (node.type === "audio") {
       return ""
     }
@@ -1568,7 +1674,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         targetLabel: getNodeLabel(errorTargetId),
         tone: "danger",
       })
-    } else if (node.type === "text" || isMediaNodeType(node.type) || (node.type === "input" && settings.response_mode !== "buttons" && settings.response_mode !== "list")) {
+    } else if (node.type === "text" || isMediaNodeType(node.type) || isContactNodeType(node.type) || (node.type === "input" && settings.response_mode !== "buttons" && settings.response_mode !== "list")) {
       const targetId = node.next_node_id ? Number(node.next_node_id) : null
       branches.push({
         id: `next-${node.id}`,
@@ -1652,7 +1758,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const handleToggleCanvasAutoAdvance = (nodeId: number) => {
     const node = nodesById.get(nodeId)
     if (!node) return
-    if (node.type !== "text" && !isMediaNodeType(node.type)) return
+    if (node.type !== "text" && !isMediaNodeType(node.type) && !isContactNodeType(node.type)) return
 
     const nextValue = !Boolean(node.settings?.auto_advance)
     const nextSettings = {
@@ -1714,11 +1820,12 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           canSource:
             node.type === "text" ||
             isMediaNodeType(node.type) ||
+            isContactNodeType(node.type) ||
             node.type === "input" ||
             node.type === "person_lookup" ||
             node.type === "buttons" ||
             node.type === "list",
-          canToggleAutoAdvance: !isReadOnly && (node.type === "text" || isMediaNodeType(node.type)),
+          canToggleAutoAdvance: !isReadOnly && (node.type === "text" || isMediaNodeType(node.type) || isContactNodeType(node.type)),
           autoAdvanceEnabled: Boolean(node.settings?.auto_advance),
           sourceHandles:
             node.type === "person_lookup"
@@ -1756,7 +1863,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     tone: branch.tone ?? "default",
                     hasConnection: Boolean(branch.targetId),
                   }))
-                  : node.type === "text" || isMediaNodeType(node.type) || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
+                  : node.type === "text" || isMediaNodeType(node.type) || isContactNodeType(node.type) || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
                     ? [{ id: "next", label: "Siguiente", tone: "default" as const, hasConnection: Boolean(node.next_node_id) }]
                     : [],
           deleting: deletingNodeId === node.id,
@@ -1806,7 +1913,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     : branch.tone === "danger"
                       ? "error"
                       : undefined
-                : node.type === "text" || isMediaNodeType(node.type) || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
+                : node.type === "text" || isMediaNodeType(node.type) || isContactNodeType(node.type) || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
                   ? "next"
                   : undefined,
           label: branch.label === "Siguiente" ? undefined : branch.label,
@@ -1890,6 +1997,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     if (!(
       sourceNode.type === "text" ||
       isMediaNodeType(sourceNode.type) ||
+      isContactNodeType(sourceNode.type) ||
       sourceNode.type === "input" ||
       sourceNode.type === "person_lookup" ||
       sourceNode.type === "buttons" ||
@@ -3184,6 +3292,268 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       )
     }
 
+    if (t === "contact") {
+      const settings = ensureSettings<{
+        agenda_contact_id?: number | null
+        first_name: string
+        last_name: string
+        formatted_name: string
+        phone: string
+        organization: string
+        title: string
+      }>({
+        first_name: "",
+        last_name: "",
+        formatted_name: "",
+        phone: "",
+        organization: "",
+        title: "",
+      })
+
+      const update = (field: keyof typeof settings, value: string) => {
+        setEditNode((prev) =>
+          prev
+            ? {
+              ...prev,
+              settings: {
+                ...settings,
+                [field]: value,
+              },
+            }
+            : prev,
+        )
+        setContactNodeTouchedFields((current) => ({ ...current, [field]: true }))
+      }
+
+      const selectedAgendaContact = agendaContacts.find((contact) => contact.id === Number(settings.agenda_contact_id ?? 0))
+      const selectedAgendaContactLabel = selectedAgendaContact
+        ? `${selectedAgendaContact.formatted_name} · ${selectedAgendaContact.phone}`
+        : "Completar manualmente"
+      const contactFieldsReadOnly = Boolean(selectedAgendaContact)
+      const contactValidation = validateContactSettings(settings)
+      const shouldShowContactNameError = contactNodeSubmitted || contactNodeTouchedFields.formatted_name || contactNodeTouchedFields.first_name || contactNodeTouchedFields.last_name
+      const shouldShowContactPhoneError = contactNodeSubmitted || contactNodeTouchedFields.phone
+
+
+      const applyAgendaContact = (contactId: string) => {
+        if (contactId === "manual") {
+          deselectAgendaContact()
+          return
+        }
+        const contact = agendaContacts.find((item) => String(item.id) === contactId)
+        if (!contact) return
+
+        setEditNode((prev) =>
+          prev
+            ? {
+              ...prev,
+              settings: {
+                ...(prev.settings ?? {}),
+                agenda_contact_id: contact.id,
+                first_name: contact.first_name ?? "",
+                last_name: contact.last_name ?? "",
+                formatted_name: contact.formatted_name ?? "",
+                phone: contact.phone ?? "",
+                organization: contact.organization ?? "",
+                title: contact.title ?? "",
+              },
+            }
+            : prev,
+        )
+        setContactNodeSubmitted(false)
+        setContactNodeTouchedFields({})
+        setAgendaContactSelectOpen(false)
+      }
+
+      const deselectAgendaContact = () => {
+        setEditNode((prev) =>
+          prev
+            ? {
+              ...prev,
+              settings: {
+                ...(prev.settings ?? {}),
+                agenda_contact_id: null,
+              },
+            }
+            : prev,
+        )
+        setAgendaContactSelectOpen(false)
+      }
+
+      return (
+        <div className="space-y-3">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+            Este nodo envía una tarjeta de contacto de WhatsApp. El teléfono debe incluir código de país, sin espacios ni signos. Ej "+5492610000000"
+          </div>
+
+          <div>
+            <label className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
+              Contacto de agenda
+              {loadingAgendaContacts ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+            </label>
+            <Popover open={agendaContactSelectOpen} onOpenChange={setAgendaContactSelectOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={loadingAgendaContacts}
+                  className="h-8 w-full justify-between text-left text-xs font-normal"
+                >
+                  <span className="truncate">{selectedAgendaContactLabel}</span>
+                  <ArrowDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-60" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="z-[10000] w-[var(--radix-popover-trigger-width)] p-0" align="start">
+                <Command>
+                  <CommandInput placeholder="Buscar contacto..." className="h-9" />
+                  <CommandList className="max-h-64">
+                    <CommandEmpty>No se encontraron contactos.</CommandEmpty>
+                    <CommandGroup>
+                      <CommandItem value="manual" onSelect={() => applyAgendaContact("manual")}>
+                        Completar manualmente
+                      </CommandItem>
+                      {agendaContacts.map((contact) => (
+                        <CommandItem
+                          key={contact.id}
+                          value={`${contact.formatted_name} ${contact.phone} ${contact.organization ?? ""} ${contact.title ?? ""}`}
+                          onSelect={() => applyAgendaContact(String(contact.id))}
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-xs font-medium text-slate-900">{contact.formatted_name}</p>
+                            <p className="truncate text-[10px] text-slate-500">{contact.phone}</p>
+                          </div>
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+            {selectedAgendaContact ? (
+              <button
+                type="button"
+                onClick={deselectAgendaContact}
+                className="mt-2 flex w-full items-center justify-center rounded-md border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-medium text-[#013765] transition-colors hover:bg-slate-200"
+              >
+                Deseleccionar contacto
+              </button>
+            ) : null}
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">
+                Nombre
+              </label>
+              <Input
+                value={settings.first_name ?? ""}
+                onChange={(e) => update("first_name", e.target.value.slice(0, 80))}
+                readOnly={contactFieldsReadOnly}
+                placeholder="Ej: Juan"
+                maxLength={80}
+                className={cn("text-xs", contactFieldsReadOnly ? "cursor-default bg-slate-50 text-slate-600" : "")}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">
+                Apellido
+              </label>
+              <Input
+                value={settings.last_name ?? ""}
+                onChange={(e) => update("last_name", e.target.value.slice(0, 80))}
+                readOnly={contactFieldsReadOnly}
+                placeholder="Ej: Pérez"
+                maxLength={80}
+                className={cn("text-xs", contactFieldsReadOnly ? "cursor-default bg-slate-50 text-slate-600" : "")}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">
+              Nombre a mostrar
+            </label>
+            <Input
+              value={settings.formatted_name ?? ""}
+              onChange={(e) => update("formatted_name", e.target.value.slice(0, 160))}
+              readOnly={contactFieldsReadOnly}
+              placeholder="Ej: Juan Pérez"
+              maxLength={160}
+              className={cn("text-xs", contactFieldsReadOnly ? "cursor-default bg-slate-50 text-slate-600" : "")}
+            />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              Si lo dejás vacío, se arma con nombre y apellido.
+            </p>
+            {shouldShowContactNameError && !contactValidation.hasName ? (
+              <p className="mt-1 text-[10px] font-medium text-red-600">
+                Indicá un nombre a mostrar o completá nombre/apellido.
+              </p>
+            ) : null}
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">
+              Teléfono WhatsApp
+            </label>
+            <Input
+              value={settings.phone ?? ""}
+              onChange={(e) => update("phone", normalizeContactPhone(e.target.value).slice(0, 32))}
+              readOnly={contactFieldsReadOnly}
+              placeholder="Ej: 5492612155672"
+              maxLength={32}
+              className={cn("text-xs", contactFieldsReadOnly ? "cursor-default bg-slate-50 text-slate-600" : "")}
+            />
+            {shouldShowContactPhoneError && !contactValidation.hasPhone ? (
+              <p className="mt-1 text-[10px] font-medium text-red-600">
+                El teléfono es obligatorio.
+              </p>
+            ) : shouldShowContactPhoneError && !contactValidation.hasOnlyValidPhoneChars ? (
+              <p className="mt-1 text-[10px] font-medium text-red-600">
+                El teléfono solo puede incluir números y un + inicial.
+              </p>
+            ) : shouldShowContactPhoneError && contactValidation.isPhoneTooShort ? (
+              <p className="mt-1 text-[10px] font-medium text-red-600">
+                El teléfono debe tener al menos 7 dígitos.
+              </p>
+            ) : shouldShowContactPhoneError && contactValidation.isPhoneTooLong ? (
+              <p className="mt-1 text-[10px] font-medium text-red-600">
+                El teléfono no puede superar los 15 dígitos.
+              </p>
+            ) : null}
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">
+                Empresa
+              </label>
+              <Input
+                value={settings.organization ?? ""}
+                onChange={(e) => update("organization", e.target.value.slice(0, 120))}
+                readOnly={contactFieldsReadOnly}
+                placeholder="Opcional"
+                maxLength={120}
+                className={cn("text-xs", contactFieldsReadOnly ? "cursor-default bg-slate-50 text-slate-600" : "")}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">
+                Cargo
+              </label>
+              <Input
+                value={settings.title ?? ""}
+                onChange={(e) => update("title", e.target.value.slice(0, 120))}
+                readOnly={contactFieldsReadOnly}
+                placeholder="Opcional"
+                maxLength={120}
+                className={cn("text-xs", contactFieldsReadOnly ? "cursor-default bg-slate-50 text-slate-600" : "")}
+              />
+            </div>
+          </div>
+        </div>
+      )
+    }
+
     if (isMediaNodeType(t)) {
       const settings = ensureSettings<{
         source_kind: "url" | "id"
@@ -3391,7 +3761,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     return null
   }
 
-  const isLinearType = (t: NodeType) => t === "text" || t === "input" || t === "person_lookup" || isMediaNodeType(t)
+  const isLinearType = (t: NodeType) => t === "text" || t === "input" || t === "person_lookup" || isMediaNodeType(t) || isContactNodeType(t)
 
   const getBranchToneClass = (tone?: BranchTone) => {
     switch (tone) {
@@ -4069,8 +4439,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                     setEditNode((prev) => {
                                       if (!prev) return prev
 
-                                      const linear = val === "text" || val === "input" || val === "person_lookup" || isMediaNodeType(val)
-                                      const supportsAutoAdvance = val === "text" || isMediaNodeType(val)
+                                      const linear = val === "text" || val === "input" || val === "person_lookup" || isMediaNodeType(val) || isContactNodeType(val)
+                                      const supportsAutoAdvance = val === "text" || isMediaNodeType(val) || isContactNodeType(val)
 
                                       const cleanedSettings = (() => {
                                         const s = { ...(prev.settings ?? {}) }
@@ -4093,6 +4463,22 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                             source_kind: keepExistingMedia ? (s.source_kind ?? "url") : "url",
                                             source: keepExistingMedia ? (s.source ?? "") : "",
                                             filename: keepExistingMedia ? (s.filename ?? "") : "",
+                                          }
+                                        }
+
+                                        if (isContactNodeType(val)) {
+                                          const keepExistingContact = prev.type === val
+                                          return {
+                                            ...(s.canvas_position ? { canvas_position: s.canvas_position } : {}),
+                                            ...(s.auto_advance ? { auto_advance: s.auto_advance } : {}),
+                                            ...(s.auto_advance_delay_ms ? { auto_advance_delay_ms: s.auto_advance_delay_ms } : {}),
+                                            ...(s.auto_advance_max_hops ? { auto_advance_max_hops: s.auto_advance_max_hops } : {}),
+                                            first_name: keepExistingContact ? (s.first_name ?? "") : "",
+                                            last_name: keepExistingContact ? (s.last_name ?? "") : "",
+                                            formatted_name: keepExistingContact ? (s.formatted_name ?? "") : "",
+                                            phone: keepExistingContact ? (s.phone ?? "") : "",
+                                            organization: keepExistingContact ? (s.organization ?? "") : "",
+                                            title: keepExistingContact ? (s.title ?? "") : "",
                                           }
                                         }
 
@@ -4135,6 +4521,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                             </div>
 
                             {/* Texto principal */}
+                            {!["audio", "contact"].includes(editNode.type) ? (
                             <div className="relative">
                               <div className="mb-1 flex items-center gap-2">
                                 <label className="text-xs block text-muted-foreground">
@@ -4269,12 +4656,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                   ? " (mensaje interactivo)"
                                   : ""}
                               </p>
-                              {editNode.type === "audio" ? (
-                                <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
-                                  WhatsApp no muestra texto en los mensajes de audio. El campo «Mensaje» se ignora para este tipo de archivo.
-                                </p>
-                              ) : null}
                             </div>
+                            ) : null}
 
                             {/* Settings específicos según tipo */}
                             {renderSettingsFields()}
@@ -4321,7 +4704,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                               )}
 
                             {/* Auto-disparo */}
-                            {(editNode.type === "text" || isMediaNodeType(editNode.type)) && (
+                            {(editNode.type === "text" || isMediaNodeType(editNode.type) || isContactNodeType(editNode.type)) && (
                               <div className="border rounded-lg p-3 bg-muted/20 space-y-2">
                                 <div className="flex items-center gap-2">
                                   <Checkbox
@@ -4417,7 +4800,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                   setSelectedNodeId(null)
                                 }
                               }}
-                              disabled={isReadOnly || savingNode || !hasUnsavedChanges || !canSaveNode}
+                              disabled={isReadOnly || savingNode || !hasUnsavedChanges || (editNode.type !== "contact" && !canSaveNode)}
                             >
                               {savingNode ? "Guardando..." : "Guardar nodo"}
                             </Button>

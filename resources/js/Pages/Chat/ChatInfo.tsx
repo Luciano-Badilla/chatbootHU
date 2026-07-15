@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useEffect, useMemo, useRef, useState } from "react"
-import { Code, Database, Zap, User, Image as ImageIcon, FileText, Video, Music, Bot, Clock3, MessageSquare, PowerOff, Power, Loader2, ChevronDown, ChevronRight } from "lucide-react"
+import { AudioLines, Code, Contact, Database, Zap, User, Image as ImageIcon, FileText, Video, Bot, Clock3, MessageSquare, PowerOff, Power, Loader2, ChevronDown, ChevronRight, ExternalLink, X } from "lucide-react"
 import { Avatar } from "shadcn/components/ui/avatar"
 import { Badge } from "shadcn/components/ui/badge"
 import { Button } from "shadcn/components/ui/button"
@@ -18,14 +18,14 @@ interface ChatInfoProps {
 }
 
 type VarType = "string" | "number" | "boolean" | "object" | "array" | "null" | "unknown"
-type MediaType = "image" | "video" | "audio" | "document"
+type MediaType = "image" | "video" | "audio" | "document" | "contacts"
 
 interface MediaItem {
   id: number
   sender: "user" | "contact"
   message_type: MediaType
   body?: string | null
-  media_url: string
+  media_url?: string | null
   media_name?: string | null
   created_at?: string | null
 }
@@ -39,9 +39,15 @@ type VarsByDateMap = Record<string, Record<string, VarEntry>>
 type DisplayVar = ChatVariable & { updated_at?: string | null }
 
 type PreviewMedia = {
-  url: string
+  url?: string
   name: string
   type: MediaType
+  contact?: {
+    name: string
+    phone: string
+    organization?: string
+    title?: string
+  }
 }
 
 const API_BASE = (import.meta.env.VITE_APP_URL || "").replace(/\/$/, "")
@@ -312,10 +318,84 @@ export default function ChatInfo({
   }, [media, activeMediaType])
 
   const mediaCounts = useMemo(() => {
-    const c = { image: 0, video: 0, audio: 0, document: 0 }
+    const c = { image: 0, video: 0, audio: 0, document: 0, contacts: 0 }
     for (const m of media) c[m.message_type]++
     return c
   }, [media])
+
+  const getContactCardData = (item: Pick<MediaItem, "body" | "media_name">) => {
+    const rawBody = String(item.body ?? "").trim()
+
+    try {
+      const parsed = JSON.parse(rawBody)
+      const contact = parsed?.contacts?.[0] ?? parsed
+      const name = String(
+        parsed?.display_name ??
+        contact?.name?.formatted_name ??
+        [contact?.name?.first_name, contact?.name?.last_name].filter(Boolean).join(" ") ??
+        "",
+      ).trim()
+      const phone = String(
+        parsed?.phone ??
+        contact?.phones?.[0]?.wa_id ??
+        contact?.phones?.[0]?.phone ??
+        "",
+      ).trim()
+      const organization = String(contact?.org?.company ?? "").trim()
+      const title = String(contact?.org?.title ?? "").trim()
+
+      return {
+        name: name || item.media_name || "Contacto",
+        phone,
+        organization,
+        title,
+      }
+    } catch {
+      return {
+        name: item.media_name || rawBody.replace(/^Contacto:\s*/i, "").trim() || "Contacto",
+        phone: "",
+        organization: "",
+        title: "",
+      }
+    }
+  }
+
+  const ContactPreviewCard = ({ contact }: { contact: NonNullable<PreviewMedia["contact"]> }) => (
+    <div className="mx-auto max-w-xl rounded-2xl border border-slate-200 bg-slate-50 p-5">
+      <div className="mb-5 flex items-center gap-4">
+        <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-white text-[#013765] shadow-sm">
+          <Contact className="h-8 w-8" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tarjeta de contacto</p>
+          <p className="break-words text-lg font-semibold text-slate-900">{contact.name}</p>
+        </div>
+      </div>
+
+      <div className="grid gap-3">
+        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Nombre</p>
+          <p className="mt-1 break-words text-sm font-semibold text-slate-800">{contact.name || "Sin nombre"}</p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Teléfono</p>
+          <p className="mt-1 break-words text-sm font-semibold text-slate-800">{contact.phone || "Sin teléfono"}</p>
+        </div>
+        {(contact.title || contact.organization) && (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Cargo</p>
+              <p className="mt-1 break-words text-sm font-semibold text-slate-800">{contact.title || "Sin cargo"}</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Empresa</p>
+              <p className="mt-1 break-words text-sm font-semibold text-slate-800">{contact.organization || "Sin empresa"}</p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
 
   const isPreviewableDocument = (name: string, url: string) => {
     const target = `${name} ${url}`.toLowerCase()
@@ -549,9 +629,8 @@ export default function ChatInfo({
 
           const msgType = String(data.message_type || "")
           const mediaUrl = data.media_url ? String(data.media_url) : ""
-          if (!mediaUrl) return
-
-          if (!["image", "video", "audio", "document"].includes(msgType)) return
+          if (!["image", "video", "audio", "document", "contacts"].includes(msgType)) return
+          if (msgType !== "contacts" && !mediaUrl) return
 
           const item: MediaItem = {
             id: Number(data.message_id),
@@ -751,7 +830,7 @@ export default function ChatInfo({
               <div className="rounded-md border border-gray-200 px-2.5 py-2">
                 <div className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase mb-1">RED</div>
                 <div className="mt-1 text-[10px] text-muted-foreground">
-                  Estado MQTT:{" "}
+                  Estado del servidor:{" "}
                   <span className="inline-flex items-center gap-1 text-foreground font-medium">
                     <span className={`inline-block h-2 w-2 rounded-full ${mqttStatusMeta.dot}`} />
                     {mqttStatusMeta.label}
@@ -893,12 +972,18 @@ export default function ChatInfo({
                 count={mediaCounts.image}
               />
               <MediaTabBtn label="Videos" value="video" icon={<Video className="h-4 w-4" />} count={mediaCounts.video} />
-              <MediaTabBtn label="Audio" value="audio" icon={<Music className="h-4 w-4" />} count={mediaCounts.audio} />
+              <MediaTabBtn label="Audio" value="audio" icon={<AudioLines className="h-4 w-4" />} count={mediaCounts.audio} />
               <MediaTabBtn
                 label="Docs"
                 value="document"
                 icon={<FileText className="h-4 w-4" />}
                 count={mediaCounts.document}
+              />
+              <MediaTabBtn
+                label="Contactos"
+                value="contacts"
+                icon={<Contact className="h-4 w-4" />}
+                count={mediaCounts.contacts}
               />
             </div>
 
@@ -908,10 +993,44 @@ export default function ChatInfo({
               </div>
             ) : (
               <div className="border rounded-lg p-3 bg-white">
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   {mediaFiltered.slice(0, 90).map((m) => {
-                    const url = resolveMediaUrl(m.media_url)
+                    const url = m.media_url ? resolveMediaUrl(m.media_url) : ""
                     const name = m.media_name ?? `${m.message_type} #${m.id}`
+
+                    if (m.message_type === "contacts") {
+                      const contactData = getContactCardData(m)
+
+                      return (
+                        <button
+                          key={m.id}
+                          type="button"
+                          title={contactData.name}
+                          className="block text-left"
+                          onClick={() =>
+                            setPreview({
+                              type: "contacts",
+                              name: contactData.name,
+                              contact: contactData,
+                            })
+                          }
+                        >
+                          <MediaCard name={contactData.name}>
+                            <div className="flex h-24 flex-col items-center justify-center gap-1 px-3 text-center">
+                              <Contact className="h-6 w-6 shrink-0 text-[#013765]" />
+                              <div className="line-clamp-2 w-full break-words text-[11px] font-semibold leading-tight text-slate-700">
+                                {contactData.name}
+                              </div>
+                              {contactData.phone ? (
+                                <div className="w-full truncate text-[10px] text-muted-foreground">
+                                  {contactData.phone}
+                                </div>
+                              ) : null}
+                            </div>
+                          </MediaCard>
+                        </button>
+                      )
+                    }
 
                     if (m.message_type === "image") {
                       return (
@@ -972,7 +1091,7 @@ export default function ChatInfo({
                         >
                           <MediaCard name={name}>
                             <div className="w-full h-24 flex flex-col items-center justify-center gap-1">
-                              <Music className="h-6 w-6 text-muted-foreground" />
+                              <AudioLines className="h-6 w-6 text-muted-foreground" />
                               <div className="text-[10px] text-muted-foreground">Reproducir</div>
                             </div>
                           </MediaCard>
@@ -1007,70 +1126,134 @@ export default function ChatInfo({
             {/* Preview modal */}
             {preview && (
               <div
-                className="fixed inset-0 bg-black/60 flex items-center justify-center z-[9999] p-4"
+                className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm"
                 onClick={() => setPreview(null)}
               >
-                <div className="max-w-3xl w-full" onClick={(e) => e.stopPropagation()}>
-                  <div className="bg-white rounded-xl overflow-hidden">
-                    {/* Header con nombre */}
-                    <div className="p-2 border-b flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="text-[11px] text-muted-foreground">Vista previa</div>
-                        <div className="text-sm font-medium truncate">{preview.name}</div>
+                <div className="w-full max-w-5xl" onClick={(e) => e.stopPropagation()}>
+                  <div className="overflow-hidden rounded-2xl border border-white/10 bg-white shadow-2xl">
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#013765]/10 text-[#013765]">
+                          {preview.type === "image" ? (
+                            <ImageIcon className="h-5 w-5" />
+                          ) : preview.type === "video" ? (
+                            <Video className="h-5 w-5" />
+                          ) : preview.type === "audio" ? (
+                            <AudioLines className="h-5 w-5" />
+                          ) : preview.type === "contacts" ? (
+                            <Contact className="h-5 w-5" />
+                          ) : (
+                            <FileText className="h-5 w-5" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                            Vista previa · {preview.type === "image"
+                              ? "Imagen"
+                              : preview.type === "video"
+                                ? "Video"
+                                : preview.type === "audio"
+                                  ? "Audio"
+                                  : preview.type === "contacts"
+                                    ? "Contacto"
+                                  : "Documento"}
+                          </div>
+                          <div className="truncate text-sm font-semibold text-slate-900">{preview.name}</div>
+                        </div>
                       </div>
 
                       <div className="flex items-center gap-2">
-                        <a
-                          href={preview.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-xs underline text-muted-foreground hover:text-foreground"
-                        >
-                          Abrir
-                        </a>
+                        {preview.url ? (
+                          <a
+                            href={preview.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-100"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            Abrir
+                          </a>
+                        ) : null}
 
-                        <Button size="sm" variant="outline" onClick={() => setPreview(null)}>
-                          Cerrar
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setPreview(null)}
+                          className="h-9 w-9 rounded-lg border-slate-200 bg-white p-0"
+                          title="Cerrar vista previa"
+                        >
+                          <X className="h-4 w-4" />
                         </Button>
                       </div>
                     </div>
 
-                    {/* Body */}
-                    <div className="bg-black">
+                    <div className="bg-slate-950">
                       {preview.type === "image" && (
-                        <img src={preview.url} alt={preview.name} className="w-full max-h-[75vh] object-contain" />
+                        <div className="flex max-h-[78vh] min-h-[320px] items-center justify-center p-3">
+                          <img src={preview.url ?? ""} alt={preview.name} className="max-h-[75vh] w-full object-contain" />
+                        </div>
                       )}
 
                       {preview.type === "video" && (
-                        <video controls preload="metadata" className="w-full max-h-[75vh] object-contain">
-                          <source src={preview.url} />
-                        </video>
+                        <div className="flex max-h-[78vh] min-h-[320px] items-center justify-center p-3">
+                          <video autoPlay controls playsInline preload="metadata" className="max-h-[75vh] w-full rounded-xl bg-black object-contain">
+                            <source src={preview.url ?? ""} />
+                          </video>
+                        </div>
                       )}
 
                       {preview.type === "audio" && (
-                        <div className="p-4 bg-white">
-                          <audio controls className="w-full">
-                            <source src={preview.url} />
-                          </audio>
+                        <div className="bg-white p-6">
+                          <div className="mx-auto max-w-xl rounded-2xl bg-slate-100 p-4">
+                            <div className="flex items-center gap-3">
+                              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-[#013765] shadow-sm">
+                                <AudioLines className="h-6 w-6" />
+                              </div>
+                              <audio controls className="min-w-0 flex-1">
+                                <source src={preview.url ?? ""} />
+                              </audio>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {preview.type === "contacts" && (
+                        <div className="bg-white p-6">
+                          <ContactPreviewCard
+                            contact={preview.contact ?? { name: preview.name, phone: "" }}
+                          />
                         </div>
                       )}
 
                       {preview.type === "document" && (
                         <div className="bg-white">
-                          {isPreviewableDocument(preview.name, preview.url) ? (
+                          {isPreviewableDocument(preview.name, preview.url ?? "") ? (
                             <iframe
-                              src={preview.url}
+                              src={preview.url ?? ""}
                               title={preview.name}
-                              className="w-full h-[75vh]"
+                              className="h-[78vh] w-full bg-white"
                             />
                           ) : (
-                            <div className="p-4">
-                              <p className="text-sm text-muted-foreground mb-2">
-                                Vista previa no disponible para este formato.
-                              </p>
-                              <a href={preview.url} target="_blank" rel="noreferrer" className="text-sm underline">
-                                Abrir documento: {preview.name}
-                              </a>
+                            <div className="flex min-h-[320px] items-center justify-center p-6">
+                              <div className="max-w-md rounded-2xl border border-slate-200 bg-slate-50 p-6 text-center">
+                                <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-[#013765] shadow-sm">
+                                  <FileText className="h-7 w-7" />
+                                </div>
+                                <p className="mb-2 text-sm font-semibold text-slate-900">{preview.name}</p>
+                                <p className="mb-4 text-sm text-slate-500">
+                                  Vista previa no disponible para este formato.
+                                </p>
+                                <a
+                                  href={preview.url ?? ""}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex items-center gap-2 rounded-lg bg-[#013765] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#012e54]"
+                                >
+                                  <ExternalLink className="h-4 w-4" />
+                                  Abrir documento
+                                </a>
+                              </div>
                             </div>
                           )}
                         </div>

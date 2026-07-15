@@ -15,8 +15,15 @@ class ChatMediaController extends Controller
 
         $media = Message::query()
             ->where('chat_id', $chat->id)
-            ->whereNotNull('media_url')
-            ->whereIn('message_type', ['image','video','audio','document'])
+            ->where(function ($query) {
+                $query
+                    ->where(function ($mediaQuery) {
+                        $mediaQuery
+                            ->whereNotNull('media_url')
+                            ->whereIn('message_type', ['image', 'video', 'audio', 'document']);
+                    })
+                    ->orWhere('message_type', 'contacts');
+            })
             ->orderByDesc('id')
             ->limit($limit)
             ->get([

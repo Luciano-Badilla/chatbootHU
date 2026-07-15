@@ -5,6 +5,7 @@ import {
   Check,
   ChevronsUpDown,
   ClipboardPaste,
+  Contact,
   Download,
   Loader2,
   Upload,
@@ -580,6 +581,16 @@ export default function SettingsPanel({
           >
             <CalendarDays className="mr-2 h-4 w-4" />
             Ver auditoria
+          </Button>
+          <Button
+            variant="outline"
+            className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white"
+            onClick={() => {
+              window.location.href = `${APP_URL}/agenda-panel`
+            }}
+          >
+            <Contact className="mr-2 h-4 w-4" />
+            Ver agenda
           </Button>
           <Button
             variant="outline"

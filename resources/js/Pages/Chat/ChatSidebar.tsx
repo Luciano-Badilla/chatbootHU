@@ -26,8 +26,38 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
     const message = String(raw ?? "").trim()
     if (!message) return ""
 
+    try {
+      const parsed = JSON.parse(message)
+      const contact = parsed?.contacts?.[0] ?? parsed
+      const name = String(
+        parsed?.display_name ??
+        contact?.name?.formatted_name ??
+        [contact?.name?.first_name, contact?.name?.last_name].filter(Boolean).join(" ") ??
+        "",
+      ).trim()
+      const phone = String(
+        parsed?.phone ??
+        contact?.phones?.[0]?.wa_id ??
+        contact?.phones?.[0]?.phone ??
+        "",
+      ).trim()
+
+      if (name || phone) {
+        return `👤 Contacto${name ? `: ${name}` : ""}${phone ? ` · ${phone}` : ""}`
+      }
+    } catch {
+      // no es JSON de contacto
+    }
+
     const lower = message.toLowerCase()
     const withoutTags = message.replace(/\[[^\]]+\]\s*/g, "").trim()
+
+    if (lower.includes("[mensaje tipo contacts]")) {
+      return "👤 Contacto"
+    }
+    if (lower.startsWith("contacto:")) {
+      return `👤 ${message}`
+    }
 
     if (lower.includes("[sticker]")) {
       return withoutTags ? `🏷️ Sticker: ${withoutTags}` : "🏷️ Sticker"

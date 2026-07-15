@@ -3,6 +3,7 @@
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\AuditController;
+use App\Http\Controllers\AgendaContactController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\WhatsAppController;
 use App\Models\Chat;
@@ -43,6 +44,7 @@ Route::middleware('auth')->group(function () {
 
     // routes/web.php
     Route::get('/chat-panel', [ChatController::class, 'index']);
+    Route::get('/agenda-panel', [AgendaContactController::class, 'index']);
 
     Route::get('/bot/flows', [BotFlowController::class, 'index'])->middleware('permission:can_view_flows');
     Route::get('/settings-panel', [SettingsController::class, 'index'])->middleware('permission:can_manage_settings');

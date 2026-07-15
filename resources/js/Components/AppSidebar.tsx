@@ -1,6 +1,7 @@
 import { usePage } from "@inertiajs/react"
 import {
   Activity,
+  Contact,
   GitBranch,
   LayoutDashboard,
   LogOut,
@@ -34,6 +35,7 @@ const HOSPITAL_FAVICON_URL = `${APP_URL}/favicon-48x48.png`
 const navigationItems = [
   { label: "Dashboard", href: `${APP_URL}/dashboard`, icon: LayoutDashboard },
   { label: "Mensajes", href: `${APP_URL}/chat-panel`, icon: MessageSquare },
+  { label: "Agenda", href: `${APP_URL}/agenda-panel`, icon: Contact },
   { label: "Flujos", href: `${APP_URL}/bot/flows`, icon: GitBranch },
   { label: "Configuracion", href: `${APP_URL}/settings-panel`, icon: Settings },
   { label: "Auditoria", href: `${APP_URL}/audit-panel`, icon: ShieldCheck },

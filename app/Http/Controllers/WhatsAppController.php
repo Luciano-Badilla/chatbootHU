@@ -159,6 +159,20 @@ class WhatsAppController extends Controller
                 $mime = $messageData['sticker']['mime_type'] ?? null;
                 break;
 
+            case 'contacts':
+                $messageType = 'contacts';
+                $contacts = is_array($messageData['contacts'] ?? null) ? $messageData['contacts'] : [];
+                $firstContact = $contacts[0] ?? [];
+                $displayName = (string) ($firstContact['name']['formatted_name'] ?? $firstContact['name']['first_name'] ?? 'Contacto');
+                $phone = (string) ($firstContact['phones'][0]['wa_id'] ?? $firstContact['phones'][0]['phone'] ?? '');
+                $body = json_encode([
+                    'contacts' => $contacts,
+                    'display_name' => $displayName,
+                    'phone' => $phone,
+                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                $mediaName = $displayName;
+                break;
+
             default:
                 $messageType = 'text';
                 $body = $body ?? ('[Mensaje tipo ' . $type . ']');
@@ -464,7 +478,7 @@ class WhatsAppController extends Controller
     {
         $validated = $request->validate([
             'chat_id' => 'required|integer|exists:chats,id',
-            'file' => 'required|file|max:51200',
+            'file' => 'required|file|max:102400',
             'caption' => 'nullable|string',
             'media_kind' => 'nullable|in:image,video,audio,document',
         ]);
@@ -496,7 +510,74 @@ class WhatsAppController extends Controller
         $messageType = $validated['media_kind'] ?? $this->resolveOutgoingMediaType($mime);
         $uploadMime = $this->normalizeWhatsAppUploadMime($mime, $messageType);
         $originalName = (string) ($file->getClientOriginalName() ?? ('file_' . uniqid()));
+        $extension = strtolower((string) ($file->getClientOriginalExtension() ?: pathinfo($originalName, PATHINFO_EXTENSION)));
         $sniff = $this->sniffAudioContainer($file->getRealPath());
+
+        $allowedMimes = match ($messageType) {
+            'image' => ['image/jpeg', 'image/png', 'image/webp'],
+            'video' => ['video/mp4', 'video/3gpp'],
+            'audio' => ['audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg', 'audio/opus'],
+            'document' => [
+                'text/plain',
+                'application/pdf',
+                'application/msword',
+                'application/vnd.ms-excel',
+                'application/vnd.ms-powerpoint',
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            ],
+            default => [],
+        };
+        $allowedExtensions = match ($messageType) {
+            'image' => ['jpg', 'jpeg', 'png', 'webp'],
+            'video' => ['mp4', '3gp'],
+            'audio' => ['aac', 'm4a', 'mp3', 'amr', 'ogg', 'opus'],
+            'document' => ['txt', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'],
+            default => [],
+        };
+
+        if (
+            $allowedMimes
+            && !in_array(strtolower($uploadMime), $allowedMimes, true)
+            && !in_array(strtolower($mime), $allowedMimes, true)
+            && !in_array($extension, $allowedExtensions, true)
+        ) {
+            return response()->json([
+                'error' => match ($messageType) {
+                    'image' => 'Formato de imagen no compatible con WhatsApp. Usá JPG, PNG o WEBP.',
+                    'video' => 'Formato de video no compatible con WhatsApp. Usá MP4 o 3GP.',
+                    'audio' => 'Formato de audio no compatible con WhatsApp. Usá AAC, M4A, MP3, AMR, OGG u OPUS.',
+                    'document' => 'Formato de documento no compatible con WhatsApp. Usá PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX o TXT.',
+                    default => 'Formato no compatible con WhatsApp.',
+                },
+            ], 422);
+        }
+
+        if ($allowedExtensions && $extension !== '' && !in_array($extension, $allowedExtensions, true)) {
+            return response()->json([
+                'error' => match ($messageType) {
+                    'image' => 'Formato de imagen no compatible con WhatsApp. Usá JPG, PNG o WEBP.',
+                    'video' => 'Formato de video no compatible con WhatsApp. Usá MP4 o 3GP.',
+                    'audio' => 'Formato de audio no compatible con WhatsApp. Usá AAC, M4A, MP3, AMR, OGG u OPUS.',
+                    'document' => 'Formato de documento no compatible con WhatsApp. Usá PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX o TXT.',
+                    default => 'Formato no compatible con WhatsApp.',
+                },
+            ], 422);
+        }
+
+        $maxSize = $this->maxWhatsAppMediaBytes($messageType);
+        if ($maxSize > 0 && (int) $file->getSize() > $maxSize) {
+            return response()->json([
+                'error' => match ($messageType) {
+                    'image' => 'La imagen supera el limite de WhatsApp. Usá un archivo de hasta 5 MB.',
+                    'video' => 'El video supera el limite de WhatsApp. Usá un archivo de hasta 16 MB.',
+                    'audio' => 'El audio supera el limite de WhatsApp. Usá un archivo de hasta 16 MB.',
+                    'document' => 'El documento supera el limite de WhatsApp. Usá un archivo de hasta 100 MB.',
+                    default => 'El archivo supera el limite permitido por WhatsApp.',
+                },
+            ], 422);
+        }
 
         $accessToken = $this->whatsappAccessToken();
         $phoneId = $this->whatsappPhoneId();
@@ -767,6 +848,128 @@ class WhatsAppController extends Controller
     /**
      * Formatear número de teléfono a formato internacional.
      */
+    public function sendContact(Request $request)
+    {
+        $validated = $request->validate([
+            'chat_id' => 'required|integer|exists:chats,id',
+            'first_name' => 'nullable|string|max:80',
+            'last_name' => 'nullable|string|max:80',
+            'formatted_name' => 'required|string|max:160',
+            'phone' => 'required|string|max:32',
+            'organization' => 'nullable|string|max:120',
+            'title' => 'nullable|string|max:120',
+        ]);
+
+        $chat = Chat::with('contact')->findOrFail($validated['chat_id']);
+        $contact = $chat->contact;
+
+        if (!$contact || !$contact->whatsapp_id) {
+            return response()->json(['error' => 'Contacto sin whatsapp_id'], 422);
+        }
+
+        $firstName = trim((string) ($validated['first_name'] ?? ''));
+        $lastName = trim((string) ($validated['last_name'] ?? ''));
+        $formattedName = trim((string) $validated['formatted_name']);
+        $phone = preg_replace('/[^\d+]/', '', (string) $validated['phone']);
+        $organization = trim((string) ($validated['organization'] ?? ''));
+        $title = trim((string) ($validated['title'] ?? ''));
+
+        if ($firstName === '') {
+            $firstName = $formattedName;
+        }
+
+        $contactPayload = [
+            'name' => array_filter([
+                'formatted_name' => mb_substr($formattedName, 0, 160),
+                'first_name' => mb_substr($firstName, 0, 80),
+                'last_name' => $lastName !== '' ? mb_substr($lastName, 0, 80) : null,
+            ], fn ($value) => $value !== null && $value !== ''),
+            'phones' => [
+                array_filter([
+                    'phone' => mb_substr($phone, 0, 32),
+                    'wa_id' => preg_replace('/\D+/', '', $phone),
+                    'type' => 'CELL',
+                ], fn ($value) => $value !== null && $value !== ''),
+            ],
+        ];
+
+        if ($organization !== '' || $title !== '') {
+            $contactPayload['org'] = array_filter([
+                'company' => $organization !== '' ? mb_substr($organization, 0, 120) : null,
+                'title' => $title !== '' ? mb_substr($title, 0, 120) : null,
+            ], fn ($value) => $value !== null && $value !== '');
+        }
+
+        $payload = [
+            'messaging_product' => 'whatsapp',
+            'to' => $this->formatPhoneNumber($contact->whatsapp_id),
+            'type' => 'contacts',
+            'contacts' => [$contactPayload],
+        ];
+
+        $url = 'https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages';
+        $response = Http::withToken($this->whatsappAccessToken())->post($url, $payload);
+
+        if ($response->failed()) {
+            Log::error('API Error (sendContact): ' . $response->body(), [
+                'chat_id' => $chat->id,
+                'payload' => $payload,
+            ]);
+            return response()->json(['error' => 'Error enviando contacto a WhatsApp'], 500);
+        }
+
+        $body = json_encode([
+            'contacts' => [$contactPayload],
+            'display_name' => $formattedName,
+            'phone' => $phone,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        $message = Message::create([
+            'chat_id' => $chat->id,
+            'sender' => 'user',
+            'sender_subtype' => 'operator',
+            'bot_node_type' => null,
+            'interactive_options' => null,
+            'message_type' => 'contacts',
+            'body' => $body,
+            'status' => 'sent',
+            'whatsapp_message_id' => $response->json('messages.0.id'),
+        ]);
+
+        try {
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_contact_' . uniqid());
+            $mqtt->connect();
+
+            $mqtt->publish('sidebar/chat', json_encode([
+                'chat_id' => $chat->id,
+                'name' => $contact->name ?? 'Desconocido',
+                'lastMessage' => $body,
+                'timestamp' => $message->created_at->toIso8601String(),
+            ]), 0);
+
+            $mqtt->publish("chat/{$chat->id}", json_encode([
+                'chat_id' => $chat->id,
+                'message_id' => $message->id,
+                'sender' => $message->sender,
+                'sender_subtype' => $message->sender_subtype,
+                'bot_node_type' => $message->bot_node_type,
+                'interactive_options' => $message->interactive_options,
+                'body' => $message->body,
+                'message_type' => $message->message_type,
+                'media_url' => null,
+                'media_name' => null,
+                'status' => $message->status,
+                'timestamp' => $message->created_at?->toIso8601String(),
+            ]), 0);
+
+            $mqtt->disconnect();
+        } catch (MqttClientException $e) {
+            Log::error('MQTT Error (sendContact): ' . $e->getMessage());
+        }
+
+        return response()->json(['ok' => true, 'message' => $message]);
+    }
+
     private function formatPhoneNumber($number)
     {
         if (strpos($number, '549') === 0) {
@@ -1368,6 +1571,11 @@ class WhatsAppController extends Controller
             return;
         }
 
+        if ($node->type === 'contact') {
+            $this->sendBotContactNode($chat, $node);
+            return;
+        }
+
         // buttons
         if ($node->type === 'buttons') {
             $this->sendWhatsAppButtons($chat, $node);
@@ -1491,6 +1699,130 @@ class WhatsAppController extends Controller
             $waMessageId,
             $mediaType,
         );
+    }
+
+    private function sendBotContactNode(Chat $chat, BotNode $node): void
+    {
+        $contact = $chat->contact;
+        if (!$contact || !$contact->whatsapp_id) {
+            return;
+        }
+
+        $settings = $this->nodeSettings($node);
+        $firstName = trim($this->renderTemplate((string) ($settings['first_name'] ?? ''), $chat, $node));
+        $lastName = trim($this->renderTemplate((string) ($settings['last_name'] ?? ''), $chat, $node));
+        $formattedName = trim($this->renderTemplate((string) ($settings['formatted_name'] ?? ''), $chat, $node));
+        $phone = preg_replace('/[^\d+]/', '', $this->renderTemplate((string) ($settings['phone'] ?? ''), $chat, $node));
+        $organization = trim($this->renderTemplate((string) ($settings['organization'] ?? ''), $chat, $node));
+        $title = trim($this->renderTemplate((string) ($settings['title'] ?? ''), $chat, $node));
+
+        if ($formattedName === '') {
+            $formattedName = trim($firstName . ' ' . $lastName);
+        }
+
+        if ($firstName === '') {
+            $firstName = $formattedName !== '' ? $formattedName : 'Contacto';
+        }
+
+        if ($formattedName === '' || $phone === '') {
+            Log::warning('sendBotContactNode: contacto incompleto', [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'formatted_name' => $formattedName,
+                'phone' => $phone,
+            ]);
+            return;
+        }
+
+        $contactPayload = [
+            'name' => array_filter([
+                'formatted_name' => mb_substr($formattedName, 0, 160),
+                'first_name' => mb_substr($firstName, 0, 80),
+                'last_name' => $lastName !== '' ? mb_substr($lastName, 0, 80) : null,
+            ], fn ($value) => $value !== null && $value !== ''),
+            'phones' => [
+                array_filter([
+                    'phone' => mb_substr($phone, 0, 32),
+                    'wa_id' => preg_replace('/\D+/', '', $phone),
+                    'type' => 'CELL',
+                ], fn ($value) => $value !== null && $value !== ''),
+            ],
+        ];
+
+        if ($organization !== '' || $title !== '') {
+            $contactPayload['org'] = array_filter([
+                'company' => $organization !== '' ? mb_substr($organization, 0, 120) : null,
+                'title' => $title !== '' ? mb_substr($title, 0, 120) : null,
+            ], fn ($value) => $value !== null && $value !== '');
+        }
+
+        $payload = [
+            'messaging_product' => 'whatsapp',
+            'to' => $this->formatPhoneNumber($contact->whatsapp_id),
+            'type' => 'contacts',
+            'contacts' => [$contactPayload],
+        ];
+
+        $url = 'https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages';
+        $response = Http::withToken($this->whatsappAccessToken())->post($url, $payload);
+
+        if ($response->failed()) {
+            Log::error('API Error (sendBotContactNode): ' . $response->body(), [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'payload' => $payload,
+            ]);
+            throw new \RuntimeException("Error enviando contacto del nodo {$node->id} a WhatsApp");
+        }
+
+        $waMessageId = $response->json('messages.0.id');
+        $body = json_encode([
+            'contacts' => [$contactPayload],
+            'display_name' => $formattedName,
+            'phone' => $phone,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        $message = Message::create([
+            'chat_id' => $chat->id,
+            'sender' => 'user',
+            'sender_subtype' => 'bot',
+            'bot_node_type' => 'contact',
+            'interactive_options' => [],
+            'message_type' => 'contacts',
+            'body' => $body,
+            'status' => 'sent',
+            'whatsapp_message_id' => $waMessageId,
+        ]);
+
+        try {
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_contact_bot_' . uniqid());
+            $mqtt->connect();
+
+            $mqtt->publish('sidebar/chat', json_encode([
+                'chat_id' => $chat->id,
+                'name' => $contact->name ?? 'Desconocido',
+                'lastMessage' => $body,
+                'timestamp' => $message->created_at->toIso8601String(),
+            ]), 0);
+
+            $mqtt->publish("chat/{$chat->id}", json_encode([
+                'chat_id' => $chat->id,
+                'message_id' => $message->id,
+                'sender' => $message->sender,
+                'sender_subtype' => $message->sender_subtype,
+                'bot_node_type' => $message->bot_node_type,
+                'interactive_options' => $message->interactive_options,
+                'body' => $message->body,
+                'message_type' => $message->message_type,
+                'media_url' => $message->media_url,
+                'media_name' => $message->media_name,
+                'status' => $message->status,
+                'timestamp' => $message->created_at?->toIso8601String(),
+            ]), 0);
+            $mqtt->disconnect();
+        } catch (MqttClientException $e) {
+            Log::error('MQTT Error (sendBotContactNode): ' . $e->getMessage());
+        }
     }
 
     private function absoluteMediaLink(string $source): string
