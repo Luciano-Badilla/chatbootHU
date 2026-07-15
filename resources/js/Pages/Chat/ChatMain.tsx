@@ -2,6 +2,7 @@
 
 import type React from "react"
 import { useEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { AudioLines, Bot, ChevronDown, ChevronUp, Clock3, Contact, ExternalLink, FileText, Headset, ImageIcon, MapPin, Mic, MessageSquare, Play, Plus, Search, Send, Square, User, Video, X } from "lucide-react"
 import { Button } from "shadcn/components/ui/button"
 import { Input } from "shadcn/components/ui/input"
@@ -71,6 +72,77 @@ const validateContactDraft = (draft: AgendaContact) => {
   if (phone.replace(/\D/g, "").length > 15) return "El teléfono no puede superar los 15 dígitos."
 
   return ""
+}
+
+function HoverTooltip({
+  label,
+  children,
+  position = "top",
+  align = "center",
+}: {
+  label: string
+  children: React.ReactNode
+  position?: "top" | "bottom"
+  align?: "left" | "center" | "right"
+}) {
+  const [open, setOpen] = useState(false)
+  const [mounted, setMounted] = useState(false)
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null)
+  const triggerRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
+  const updateTooltipPosition = () => {
+    if (!triggerRef.current) return
+
+    const rect = triggerRef.current.getBoundingClientRect()
+    const top = position === "top" ? rect.top - 8 : rect.bottom + 8
+    const left =
+      align === "left"
+        ? rect.left
+        : align === "right"
+          ? rect.right
+          : rect.left + rect.width / 2
+
+    setCoords({ top, left })
+  }
+
+  return (
+    <div
+      ref={triggerRef}
+      className="relative inline-flex"
+      onMouseEnter={() => {
+        updateTooltipPosition()
+        setOpen(true)
+      }}
+      onMouseLeave={() => setOpen(false)}
+    >
+      {children}
+      {mounted && open && coords
+        ? createPortal(
+          <div
+            className={cn(
+              "pointer-events-none fixed z-[10000]",
+              position === "top" ? "-translate-y-full" : "",
+              align === "left"
+                ? ""
+                : align === "right"
+                  ? "-translate-x-full"
+                  : "-translate-x-1/2",
+            )}
+            style={{ top: coords.top, left: coords.left }}
+          >
+            <div className="whitespace-nowrap rounded-xl border border-[#013765] bg-[#013765] px-2.5 py-1 text-[11px] font-medium text-white shadow-lg">
+              {label}
+            </div>
+          </div>,
+          document.body,
+        )
+        : null}
+    </div>
+  )
 }
 
 export default function ChatMain({
@@ -196,6 +268,7 @@ export default function ChatMain({
             id: m.id,
             sender: m.sender === "user" ? "user" : "contact",
             sender_subtype: m.sender_subtype ?? (m.sender === "contact" ? "contact" : "operator"),
+            operator_name: m.operator_name ?? null,
             bot_node_type: m.bot_node_type ?? null,
             interactive_options: Array.isArray(m.interactive_options) ? m.interactive_options : null,
             body: m.body,
@@ -240,6 +313,7 @@ export default function ChatMain({
           id: data.message_id ?? data.id ?? `mqtt-${Date.now()}`,
           sender: data.sender === "user" ? "user" : "contact",
           sender_subtype: data.sender_subtype ?? (data.sender === "contact" ? "contact" : "operator"),
+          operator_name: data.operator_name ?? null,
           bot_node_type: data.bot_node_type ?? null,
           interactive_options: Array.isArray(data.interactive_options) ? data.interactive_options : null,
           body: data.body ?? null,
@@ -1534,6 +1608,9 @@ export default function ChatMain({
               const isMediaCard = isVisualMedia || isAudio || isDocument || isContactCard
               const isBotMessage = message.sender === "user" && message.sender_subtype === "bot"
               const isOperatorMessage = message.sender === "user" && !isBotMessage
+              const operatorTooltip = isOperatorMessage
+                ? `${message.operator_name ?? chat?.operator_name ?? "Sin nombre"}`
+                : undefined
               const isSearchMatch = searchResultIdSet.has(messageId)
               const isActiveSearchMatch = activeSearchResultId === messageId
 
@@ -1631,14 +1708,20 @@ export default function ChatMain({
                     </div>
 
                     {message.sender === "user" && (
-                      <Avatar
-                        className={cn(
-                          "h-8 w-8 mt-1 flex items-center justify-center text-white",
-                          isBotMessage ? "bg-slate-600" : "bg-[#013765]",
-                        )}
-                      >
-                        {isOperatorMessage ? <Headset className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
-                      </Avatar>
+                      isOperatorMessage && operatorTooltip ? (
+                        <HoverTooltip label={operatorTooltip} position="top">
+                          <Avatar
+                            aria-label={operatorTooltip}
+                            className="h-8 w-8 mt-1 flex items-center justify-center bg-[#013765] text-white"
+                          >
+                            <Headset className="h-4 w-4" />
+                          </Avatar>
+                        </HoverTooltip>
+                      ) : (
+                        <Avatar className="h-8 w-8 mt-1 flex items-center justify-center bg-slate-600 text-white">
+                          <Bot className="h-4 w-4" />
+                        </Avatar>
+                      )
                     )}
                   </div>
                 </div>

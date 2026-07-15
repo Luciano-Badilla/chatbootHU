@@ -51,7 +51,7 @@ class WhatsAppController extends Controller
     }
 
     /**
-     * Webhook de recepción de mensajes desde WhatsApp.
+     * Webhook de recepciÃƒÂ³n de mensajes desde WhatsApp.
      */
     public function receiveMessage(Request $request)
     {
@@ -102,7 +102,7 @@ class WhatsAppController extends Controller
         }
 
         // --------------------------------
-        // 3) Normalizar info según tipo
+        // 3) Normalizar info segÃƒÂºn tipo
         // --------------------------------
         switch ($type) {
             case 'text':
@@ -241,10 +241,10 @@ class WhatsAppController extends Controller
             $this->botInactivityService->processExpiredChat($chat, $flow);
 
 
-            // 3) Actualizar última interacción del usuario (entrante)
+            // 3) Actualizar ÃƒÂºltima interacciÃƒÂ³n del usuario (entrante)
             $chat->last_user_message_at = now();
 
-            // Si por algún motivo quedó sin nodo, iniciamos
+            // Si por algÃƒÂºn motivo quedÃƒÂ³ sin nodo, iniciamos
             if (!$chat->bot_node_id) {
                 $chat->bot_node_id = $flow->start_node_id ?? null;
             }
@@ -254,7 +254,7 @@ class WhatsAppController extends Controller
 
 
         // --------------------------------
-        // 6) Descargar media (si hay) y generar URL pública
+        // 6) Descargar media (si hay) y generar URL pÃƒÂºblica
         // --------------------------------
         $publicMediaUrl = null;  // lo que va a la DB y al front
 
@@ -268,7 +268,7 @@ class WhatsAppController extends Controller
                 $fileResponse = Http::withToken($accessToken)->get($mediaUrl);
 
                 if ($fileResponse->successful()) {
-                    // extensión a partir del mime_type
+                    // extensiÃƒÂ³n a partir del mime_type
                     $ext = null;
                     if ($mime && str_contains($mime, '/')) {
                         $parts = explode('/', $mime);
@@ -283,7 +283,7 @@ class WhatsAppController extends Controller
                     // Base del nombre
                     $baseName = $mediaName ?? uniqid();
 
-                    // Evitar duplicar extensión si el nombre ya la trae (documentos)
+                    // Evitar duplicar extensiÃƒÂ³n si el nombre ya la trae (documentos)
                     if ($ext && !str_contains($baseName, '.')) {
                         $fileName = ($messageType ?: 'file') . '_' . $baseName . '.' . $ext;
                     } else {
@@ -294,7 +294,7 @@ class WhatsAppController extends Controller
 
                     Storage::disk('public')->put($path, $fileResponse->body());
 
-                    // URL pública relativa (requiere php artisan storage:link)
+                    // URL pÃƒÂºblica relativa (requiere php artisan storage:link)
                     $publicMediaUrl = '/storage/' . $path;
                 } else {
                     Log::warning('No se pudo descargar el media: ' . $fileResponse->status());
@@ -359,6 +359,7 @@ class WhatsAppController extends Controller
                 'message_id' => $message->id,
                 'sender' => $message->sender,
                 'sender_subtype' => $message->sender_subtype,
+                'operator_name' => $message->operator_name,
                 'bot_node_type' => $message->bot_node_type,
                 'interactive_options' => $message->interactive_options,
                 'body' => $message->body,
@@ -394,7 +395,7 @@ class WhatsAppController extends Controller
                         $start = BotNode::find($flowForRuntime->start_node_id);
                         if ($start) {
                             $this->sendBotNode($chat, $start);
-                            // opcional: si el start también tiene auto_advance, lo corrés
+                            // opcional: si el start tambiÃƒÂ©n tiene auto_advance, lo corrÃƒÂ©s
                             $this->runAutoAdvance($chat, $flowForRuntime, $start);
                         }
                     }*/
@@ -424,7 +425,7 @@ class WhatsAppController extends Controller
         $actor = $request->user();
 
         try {
-            $message = $this->sendWhatsAppText($chat, $messageBody, 'user', 'operator');
+            $message = $this->sendWhatsAppText($chat, $messageBody, 'user', 'operator', null, null, $actor?->name);
         } catch (\Throwable $e) {
             $this->auditService->recordMessageAction(
                 'message_send_failed',
@@ -465,6 +466,7 @@ class WhatsAppController extends Controller
                 'chat_id' => $message->chat_id,
                 'sender' => $message->sender,
                 'sender_subtype' => $message->sender_subtype,
+                'operator_name' => $message->operator_name,
                 'body' => $message->body,
                 'timestamp' => $message->created_at->toIso8601String(),
             ],
@@ -545,10 +547,10 @@ class WhatsAppController extends Controller
         ) {
             return response()->json([
                 'error' => match ($messageType) {
-                    'image' => 'Formato de imagen no compatible con WhatsApp. Usá JPG, PNG o WEBP.',
-                    'video' => 'Formato de video no compatible con WhatsApp. Usá MP4 o 3GP.',
-                    'audio' => 'Formato de audio no compatible con WhatsApp. Usá AAC, M4A, MP3, AMR, OGG u OPUS.',
-                    'document' => 'Formato de documento no compatible con WhatsApp. Usá PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX o TXT.',
+                    'image' => 'Formato de imagen no compatible con WhatsApp. UsÃƒÂ¡ JPG, PNG o WEBP.',
+                    'video' => 'Formato de video no compatible con WhatsApp. UsÃƒÂ¡ MP4 o 3GP.',
+                    'audio' => 'Formato de audio no compatible con WhatsApp. UsÃƒÂ¡ AAC, M4A, MP3, AMR, OGG u OPUS.',
+                    'document' => 'Formato de documento no compatible con WhatsApp. UsÃƒÂ¡ PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX o TXT.',
                     default => 'Formato no compatible con WhatsApp.',
                 },
             ], 422);
@@ -557,10 +559,10 @@ class WhatsAppController extends Controller
         if ($allowedExtensions && $extension !== '' && !in_array($extension, $allowedExtensions, true)) {
             return response()->json([
                 'error' => match ($messageType) {
-                    'image' => 'Formato de imagen no compatible con WhatsApp. Usá JPG, PNG o WEBP.',
-                    'video' => 'Formato de video no compatible con WhatsApp. Usá MP4 o 3GP.',
-                    'audio' => 'Formato de audio no compatible con WhatsApp. Usá AAC, M4A, MP3, AMR, OGG u OPUS.',
-                    'document' => 'Formato de documento no compatible con WhatsApp. Usá PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX o TXT.',
+                    'image' => 'Formato de imagen no compatible con WhatsApp. UsÃƒÂ¡ JPG, PNG o WEBP.',
+                    'video' => 'Formato de video no compatible con WhatsApp. UsÃƒÂ¡ MP4 o 3GP.',
+                    'audio' => 'Formato de audio no compatible con WhatsApp. UsÃƒÂ¡ AAC, M4A, MP3, AMR, OGG u OPUS.',
+                    'document' => 'Formato de documento no compatible con WhatsApp. UsÃƒÂ¡ PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX o TXT.',
                     default => 'Formato no compatible con WhatsApp.',
                 },
             ], 422);
@@ -570,10 +572,10 @@ class WhatsAppController extends Controller
         if ($maxSize > 0 && (int) $file->getSize() > $maxSize) {
             return response()->json([
                 'error' => match ($messageType) {
-                    'image' => 'La imagen supera el limite de WhatsApp. Usá un archivo de hasta 5 MB.',
-                    'video' => 'El video supera el limite de WhatsApp. Usá un archivo de hasta 16 MB.',
-                    'audio' => 'El audio supera el limite de WhatsApp. Usá un archivo de hasta 16 MB.',
-                    'document' => 'El documento supera el limite de WhatsApp. Usá un archivo de hasta 100 MB.',
+                    'image' => 'La imagen supera el limite de WhatsApp. UsÃƒÂ¡ un archivo de hasta 5 MB.',
+                    'video' => 'El video supera el limite de WhatsApp. UsÃƒÂ¡ un archivo de hasta 16 MB.',
+                    'audio' => 'El audio supera el limite de WhatsApp. UsÃƒÂ¡ un archivo de hasta 16 MB.',
+                    'document' => 'El documento supera el limite de WhatsApp. UsÃƒÂ¡ un archivo de hasta 100 MB.',
                     default => 'El archivo supera el limite permitido por WhatsApp.',
                 },
             ], 422);
@@ -596,23 +598,23 @@ class WhatsAppController extends Controller
 
             if (!in_array(strtolower($uploadMime), $allowedAudioMimes, true)) {
                 return response()->json([
-                    'error' => "Audio no soportado para WhatsApp: {$mime} (uploadMime={$uploadMime}). Subí OGG/OPUS o MP3/M4A.",
+                    'error' => "Audio no soportado para WhatsApp: {$mime} (uploadMime={$uploadMime}). SubÃƒÂ­ OGG/OPUS o MP3/M4A.",
                 ], 422);
             }
 
             if ($uploadMime === 'audio/mp4' && $sniff !== 'mp4') {
                 return response()->json([
-                    'error' => "El archivo NO parece MP4/M4A válido (firma={$sniff}).",
+                    'error' => "El archivo NO parece MP4/M4A vÃƒÂ¡lido (firma={$sniff}).",
                 ], 422);
             }
             if ($uploadMime === 'audio/mpeg' && $sniff !== 'mp3') {
                 return response()->json([
-                    'error' => "El archivo NO parece MP3 válido (firma={$sniff}).",
+                    'error' => "El archivo NO parece MP3 vÃƒÂ¡lido (firma={$sniff}).",
                 ], 422);
             }
             if (str_starts_with($uploadMime, 'audio/ogg') && $sniff !== 'ogg') {
                 return response()->json([
-                    'error' => "El archivo NO parece OGG válido (firma={$sniff}).",
+                    'error' => "El archivo NO parece OGG vÃƒÂ¡lido (firma={$sniff}).",
                 ], 422);
             }
         }
@@ -730,7 +732,7 @@ class WhatsAppController extends Controller
                 return response()->json(['error' => 'Error enviando media a WhatsApp'], 500);
             }
 
-            // 3) Guardar copia local para previsualización en front
+            // 3) Guardar copia local para previsualizaciÃƒÂ³n en front
             $storedName = uniqid($messageType . '_') . '_' . preg_replace('/[^A-Za-z0-9._-]/', '_', $originalName);
             $localPath = "whatsapp/{$chat->id}/{$storedName}";
             Storage::disk('public')->put($localPath, file_get_contents($file->getRealPath()));
@@ -742,6 +744,7 @@ class WhatsAppController extends Controller
                 'chat_id' => $chat->id,
                 'sender' => 'user',
                 'sender_subtype' => 'operator',
+                'operator_name' => $actor?->name,
                 'bot_node_type' => null,
                 'interactive_options' => null,
                 'message_type' => $messageType,
@@ -796,6 +799,7 @@ class WhatsAppController extends Controller
                     'message_id' => $message->id,
                     'sender' => $message->sender,
                     'sender_subtype' => $message->sender_subtype,
+                    'operator_name' => $message->operator_name,
                     'bot_node_type' => $message->bot_node_type,
                     'interactive_options' => $message->interactive_options,
                     'body' => $message->body,
@@ -818,6 +822,7 @@ class WhatsAppController extends Controller
                     'chat_id' => $message->chat_id,
                     'sender' => $message->sender,
                     'sender_subtype' => $message->sender_subtype,
+                    'operator_name' => $message->operator_name,
                     'message_type' => $message->message_type,
                     'body' => $message->body,
                     'media_url' => $message->media_url,
@@ -846,7 +851,7 @@ class WhatsAppController extends Controller
     }
 
     /**
-     * Formatear número de teléfono a formato internacional.
+     * Formatear nÃƒÂºmero de telÃƒÂ©fono a formato internacional.
      */
     public function sendContact(Request $request)
     {
@@ -928,6 +933,7 @@ class WhatsAppController extends Controller
             'chat_id' => $chat->id,
             'sender' => 'user',
             'sender_subtype' => 'operator',
+            'operator_name' => $request->user()?->name,
             'bot_node_type' => null,
             'interactive_options' => null,
             'message_type' => 'contacts',
@@ -952,6 +958,7 @@ class WhatsAppController extends Controller
                 'message_id' => $message->id,
                 'sender' => $message->sender,
                 'sender_subtype' => $message->sender_subtype,
+                'operator_name' => $message->operator_name,
                 'bot_node_type' => $message->bot_node_type,
                 'interactive_options' => $message->interactive_options,
                 'body' => $message->body,
@@ -1044,13 +1051,13 @@ class WhatsAppController extends Controller
     }
 
     /**
-     * Lógica del bot (mini "árbol" de estados) dentro del controlador.
+     * LÃƒÂ³gica del bot (mini "ÃƒÂ¡rbol" de estados) dentro del controlador.
      */
 
 
     /**
      * Enviar texto por WhatsApp, guardar mensaje y publicar por MQTT.
-     * $sender = 'user' (desde tu sistema) o 'contact' si algún día hicieras eco, etc.
+     * $sender = 'user' (desde tu sistema) o 'contact' si algÃƒÂºn dÃƒÂ­a hicieras eco, etc.
      */
     private function sendWhatsAppText(
         Chat $chat,
@@ -1058,7 +1065,8 @@ class WhatsAppController extends Controller
         string $sender = 'user',
         string $senderSubtype = 'bot',
         ?string $botNodeType = null,
-        ?array $interactiveOptions = null
+        ?array $interactiveOptions = null,
+        ?string $operatorName = null
     ): Message {
         $contact = $chat->contact;
 
@@ -1089,6 +1097,7 @@ class WhatsAppController extends Controller
             'chat_id' => $chat->id,
             'sender' => $sender, // 'user' desde tu sistema (incluye bot)
             'sender_subtype' => $sender === 'contact' ? 'contact' : $senderSubtype,
+            'operator_name' => $senderSubtype === 'operator' ? $operatorName : null,
             'bot_node_type' => $botNodeType,
             'interactive_options' => $interactiveOptions,
             'message_type' => 'text',
@@ -1116,6 +1125,7 @@ class WhatsAppController extends Controller
                 'message_id' => $message->id,
                 'sender' => $message->sender,
                 'sender_subtype' => $message->sender_subtype,
+                'operator_name' => $message->operator_name,
                 'bot_node_type' => $message->bot_node_type,
                 'interactive_options' => $message->interactive_options,
                 'body' => $message->body,
@@ -1171,6 +1181,7 @@ class WhatsAppController extends Controller
                 'message_id' => $message->id,
                 'sender' => $message->sender,
                 'sender_subtype' => $message->sender_subtype,
+                'operator_name' => $message->operator_name,
                 'bot_node_type' => $message->bot_node_type,
                 'interactive_options' => $message->interactive_options,
                 'body' => $message->body,
@@ -1228,6 +1239,7 @@ class WhatsAppController extends Controller
                 'message_id' => $message->id,
                 'sender' => $message->sender,
                 'sender_subtype' => $message->sender_subtype,
+                'operator_name' => $message->operator_name,
                 'bot_node_type' => $message->bot_node_type,
                 'interactive_options' => $message->interactive_options,
                 'body' => $message->body,
@@ -1253,7 +1265,7 @@ class WhatsAppController extends Controller
             return null;
         }
 
-        // Si el chat está en otro flow, lo sincronizamos al default
+        // Si el chat estÃƒÂ¡ en otro flow, lo sincronizamos al default
         if ((int) $chat->bot_flow_id !== (int) $flow->id) {
             $chat->bot_flow_id = $flow->id;
             $chat->bot_node_id = $flow->start_node_id; // resetea el puntero al inicio
@@ -1264,7 +1276,7 @@ class WhatsAppController extends Controller
             return $flow;
         }
 
-        // Si ya está en el default, pero no tiene nodo, lo inicializamos
+        // Si ya estÃƒÂ¡ en el default, pero no tiene nodo, lo inicializamos
         if (!$chat->bot_node_id) {
             $chat->bot_node_id = $flow->start_node_id;
             $chat->bot_enabled = true;
@@ -1290,7 +1302,7 @@ class WhatsAppController extends Controller
 
                 if (!$option) {
                     $state = $this->getState($chat);
-                    $state['pending_input']['last_error'] = $pending['error_message'] ?? 'Elegí una opción válida.';
+                    $state['pending_input']['last_error'] = $pending['error_message'] ?? 'ElegÃƒÂ­ una opciÃƒÂ³n vÃƒÂ¡lida.';
                     $this->setState($chat, $state);
 
                     return BotNode::find($pending['node_id']);
@@ -1302,7 +1314,7 @@ class WhatsAppController extends Controller
 
             if ($value === '') {
                 $state = $this->getState($chat);
-                $state['pending_input']['last_error'] = $pending['error_message'] ?? 'Valor inválido, intentá de nuevo.';
+                $state['pending_input']['last_error'] = $pending['error_message'] ?? 'Valor invÃƒÂ¡lido, intentÃƒÂ¡ de nuevo.';
                 $this->setState($chat, $state);
 
                 return BotNode::find($pending['node_id']);
@@ -1321,14 +1333,14 @@ class WhatsAppController extends Controller
 
                 if (@preg_match($pattern, '') !== false && !preg_match($pattern, $value)) {
                     $state = $this->getState($chat);
-                    $state['pending_input']['last_error'] = $pending['error_message'] ?? 'Valor inválido, intentá de nuevo.';
+                    $state['pending_input']['last_error'] = $pending['error_message'] ?? 'Valor invÃƒÂ¡lido, intentÃƒÂ¡ de nuevo.';
                     $this->setState($chat, $state);
 
                     return BotNode::find($pending['node_id']);
                 }
             }
 
-            // ✅ guardar variable
+            // Ã¢Å“â€¦ guardar variable
             $varName = trim((string) ($pending['variable'] ?? ''));
             if ($varName !== '') {
                 $this->setVar($chat, $varName, $value); // este ya guarda en DB
@@ -1336,10 +1348,10 @@ class WhatsAppController extends Controller
 
             $nextId = $pending['selected_next_node_id'] ?? ($pending['next_node_id'] ?? null);
 
-            // ✅ SIEMPRE limpiamos pending_input
+            // Ã¢Å“â€¦ SIEMPRE limpiamos pending_input
             $this->clearPendingInput($chat);
 
-            // ✅ CASO: finalizar flujo
+            // Ã¢Å“â€¦ CASO: finalizar flujo
             if (!$nextId) {
                 $flow = $this->getDefaultFlow();
                 if ($flow) {
@@ -1359,7 +1371,7 @@ class WhatsAppController extends Controller
             return $nextNode;
         }
 
-        // ✅ 1) Si el bot está apagado, no respondemos
+        // Ã¢Å“â€¦ 1) Si el bot estÃƒÂ¡ apagado, no respondemos
         if (!$chat->bot_enabled) {
             return null;
         }
@@ -1414,7 +1426,7 @@ class WhatsAppController extends Controller
 
             case 'input':
             case 'person_lookup':
-                // devolvemos el mismo nodo (para que el bot lo envíe)
+                // devolvemos el mismo nodo (para que el bot lo envÃƒÂ­e)
                 // y sendBotNode va a setear pending_input
                 return $currentNode;
 
@@ -1424,7 +1436,7 @@ class WhatsAppController extends Controller
             case 'video':
             case 'audio':
             case 'text':
-                if (in_array(mb_strtolower($text), ['menú', 'menu'], true)) {
+                if (in_array(mb_strtolower($text), ['menÃƒÂº', 'menu'], true)) {
                     $menuNode = BotNode::where('flow_id', $currentNode->flow_id)
                         ->where('key', 'menu_principal')
                         ->first();
@@ -1436,7 +1448,7 @@ class WhatsAppController extends Controller
                     }
                 }
 
-                // mover puntero al próximo (sea handoff o lo que sea)
+                // mover puntero al prÃƒÂ³ximo (sea handoff o lo que sea)
                 if ($currentNode->next_node_id) {
                     $chat->bot_node_id = $currentNode->next_node_id;
                     $chat->save();
@@ -1474,16 +1486,16 @@ class WhatsAppController extends Controller
             // apagar bot
             $chat->bot_enabled = false;
 
-            // por seguridad (por si venía de un input)
+            // por seguridad (por si venÃƒÂ­a de un input)
             $this->clearPendingInput($chat);
 
-            // ✅ preparar puntero para cuando se reactive
+            // Ã¢Å“â€¦ preparar puntero para cuando se reactive
             $flow = $this->ensureChatUsesDefaultFlow($chat) ?? $this->getDefaultFlow();
             if ($flow && $flow->start_node_id) {
                 $chat->bot_node_id = $flow->start_node_id;
             }
 
-            // ✅ marcar que está/estuvo en handoff (para UI)
+            // Ã¢Å“â€¦ marcar que estÃƒÂ¡/estuvo en handoff (para UI)
             $state = $this->getState($chat);
             $state['handoff'] = [
                 'node_id' => $node->id,
@@ -1513,7 +1525,7 @@ class WhatsAppController extends Controller
         // input
         if ($node->type === 'input') {
 
-            // 1) Si ya había pending_input, lo leemos para ver si hay error
+            // 1) Si ya habÃƒÂ­a pending_input, lo leemos para ver si hay error
             $pending = $this->getPendingInput($chat);
             $errorToSend = is_array($pending) ? ($pending['last_error'] ?? null) : null;
             $responseMode = (string) (($node->settings ?? [])['response_mode'] ?? 'text');
@@ -1548,7 +1560,7 @@ class WhatsAppController extends Controller
                 }
             }
 
-            // 3) Asegurar que pending_input exista (si no existía)
+            // 3) Asegurar que pending_input exista (si no existÃƒÂ­a)
             $this->setPendingInput($chat, $node);
 
             $chat->bot_node_id = $node->id;
@@ -1611,7 +1623,7 @@ class WhatsAppController extends Controller
         $sourceKind = ($settings['source_kind'] ?? 'url') === 'id' ? 'id' : 'url';
         $source = trim($this->renderTemplate((string) ($settings['source'] ?? ''), $chat, $node));
         if ($source === '') {
-            Log::warning('sendBotMediaNode: media source vacío', [
+            Log::warning('sendBotMediaNode: media source vacÃƒÂ­o', [
                 'chat_id' => $chat->id,
                 'node_id' => $node->id,
                 'type' => $mediaType,
@@ -1810,6 +1822,7 @@ class WhatsAppController extends Controller
                 'message_id' => $message->id,
                 'sender' => $message->sender,
                 'sender_subtype' => $message->sender_subtype,
+                'operator_name' => $message->operator_name,
                 'bot_node_type' => $message->bot_node_type,
                 'interactive_options' => $message->interactive_options,
                 'body' => $message->body,
@@ -1892,7 +1905,7 @@ class WhatsAppController extends Controller
             }
 
             if ($uploadMime === 'audio/mp4' && $sniff !== 'mp4') {
-                Log::error('sendBotMediaNode: el audio no parece MP4/M4A válido', [
+                Log::error('sendBotMediaNode: el audio no parece MP4/M4A vÃƒÂ¡lido', [
                     'source' => $source,
                     'mime' => $mime,
                     'upload_mime' => $uploadMime,
@@ -1901,7 +1914,7 @@ class WhatsAppController extends Controller
                 return false;
             }
             if ($uploadMime === 'audio/mpeg' && $sniff !== 'mp3') {
-                Log::error('sendBotMediaNode: el audio no parece MP3 válido', [
+                Log::error('sendBotMediaNode: el audio no parece MP3 vÃƒÂ¡lido', [
                     'source' => $source,
                     'mime' => $mime,
                     'upload_mime' => $uploadMime,
@@ -1910,7 +1923,7 @@ class WhatsAppController extends Controller
                 return false;
             }
             if (str_starts_with($uploadMime, 'audio/ogg') && $sniff !== 'ogg') {
-                Log::error('sendBotMediaNode: el audio no parece OGG válido', [
+                Log::error('sendBotMediaNode: el audio no parece OGG vÃƒÂ¡lido', [
                     'source' => $source,
                     'mime' => $mime,
                     'upload_mime' => $uploadMime,
@@ -1953,7 +1966,7 @@ class WhatsAppController extends Controller
 
         $mediaId = $uploadResponse->json('id');
         if (!$mediaId) {
-            Log::error('sendBotMediaNode upload: Meta no devolvió media_id', [
+            Log::error('sendBotMediaNode upload: Meta no devolviÃƒÂ³ media_id', [
                 'source' => $source,
                 'path' => $localPath,
                 'type' => $mediaType,
@@ -2287,7 +2300,7 @@ class WhatsAppController extends Controller
         $sectionTitle = $settings['section_title'] ?? 'Opciones';
         $rows = $settings['rows'] ?? [];
 
-        // ✅ Render con variables
+        // Ã¢Å“â€¦ Render con variables
         $bodyText = $this->renderTemplate($node->body ?? '', $chat, $node);
         $buttonText = $this->renderTemplate((string) $buttonText, $chat, $node);
         $sectionTitle = $this->renderTemplate((string) $sectionTitle, $chat, $node);
@@ -2352,7 +2365,7 @@ class WhatsAppController extends Controller
 
         $waMessageId = $response->json()['messages'][0]['id'] ?? null;
 
-        // ✅ persistimos el texto renderizado
+        // Ã¢Å“â€¦ persistimos el texto renderizado
         $this->persistAndPublishOutgoing($chat, $bodyText, $waMessageId, $botNodeType, $interactiveOptions);
     }
 
@@ -2432,7 +2445,7 @@ class WhatsAppController extends Controller
         if (!$flow->start_node_id)
             return;
 
-        // ✅ preservar variables ya capturadas
+        // Ã¢Å“â€¦ preservar variables ya capturadas
         $state = $this->getState($chat);
         $vars = is_array($state['vars'] ?? null) ? $state['vars'] : [];
         $varsByDate = is_array($state['vars_by_date'] ?? null) ? $state['vars_by_date'] : [];
@@ -2440,7 +2453,7 @@ class WhatsAppController extends Controller
         $chat->bot_flow_id = $flow->id;
         $chat->bot_node_id = $flow->start_node_id;
 
-        // ✅ limpiamos solo lo que rompe el próximo ciclo
+        // Ã¢Å“â€¦ limpiamos solo lo que rompe el prÃƒÂ³ximo ciclo
         $chat->bot_state = [
             'vars' => $vars,
             'vars_by_date' => $varsByDate,
@@ -2460,7 +2473,7 @@ class WhatsAppController extends Controller
         if (!$chat->bot_enabled)
             return false;
 
-        // ✅ text y person_lookup pueden ser terminales automáticos
+        // Ã¢Å“â€¦ text y person_lookup pueden ser terminales automÃƒÂ¡ticos
         if (in_array($sentNode->type, ['text', 'person_lookup', 'image', 'document', 'video', 'audio'], true) && empty($sentNode->next_node_id)) {
             $this->resetChatToStartFromFlow($chat, $flow, 'terminal_text');
             return true;
@@ -2517,7 +2530,7 @@ class WhatsAppController extends Controller
         if (!$chat->bot_enabled)
             return;
 
-        // Solo si el nodo recién enviado tiene next_node_id y auto_advance activo
+        // Solo si el nodo reciÃƒÂ©n enviado tiene next_node_id y auto_advance activo
         if (!$this->shouldAutoAdvance($justSent))
             return;
         if (!$justSent->next_node_id)
@@ -2562,7 +2575,7 @@ class WhatsAppController extends Controller
                 $chat->save();
             }
 
-            // ✅ si el nodo apagó el bot (handoff), cortar acá
+            // Ã¢Å“â€¦ si el nodo apagÃƒÂ³ el bot (handoff), cortar acÃƒÂ¡
             if (!$chat->bot_enabled) {
                 break;
             }
@@ -2573,8 +2586,8 @@ class WhatsAppController extends Controller
                 break;
             }
 
-            // Si el siguiente nodo también tiene auto_advance, seguimos.
-            // Si no, cortamos (la conversación queda esperando input).
+            // Si el siguiente nodo tambiÃƒÂ©n tiene auto_advance, seguimos.
+            // Si no, cortamos (la conversaciÃƒÂ³n queda esperando input).
             if (!$this->shouldAutoAdvance($nextNode)) {
                 break;
             }
@@ -2665,8 +2678,8 @@ class WhatsAppController extends Controller
             'node_id' => $node->id,
             'variable' => (string) ($settings['variable'] ?? ''),
             'validation_regex' => (string) ($settings['validation_regex'] ?? ''),
-            'error_message' => (string) ($settings['error_message'] ?? 'Valor inválido, intentá de nuevo.'),
-            'next_node_id' => $node->next_node_id, // clave: a dónde avanzar cuando capture OK
+            'error_message' => (string) ($settings['error_message'] ?? 'Valor invÃƒÂ¡lido, intentÃƒÂ¡ de nuevo.'),
+            'next_node_id' => $node->next_node_id, // clave: a dÃƒÂ³nde avanzar cuando capture OK
             'response_mode' => $responseMode,
             'options' => $this->pendingInputOptions($settings, $responseMode, $chat, $node),
         ];
@@ -2801,7 +2814,7 @@ class WhatsAppController extends Controller
 
             $value = (string) ($value ?? '');
 
-            // default si vacío
+            // default si vacÃƒÂ­o
             if ($value === '' && $default !== null) {
                 $value = (string) $default;
             }
@@ -2825,7 +2838,7 @@ class WhatsAppController extends Controller
     private function isDefaultCandidate(string $s): bool
     {
         // cualquier texto que no sea un pipe conocido lo tratamos como default
-        // (si querés, podés hacerlo más estricto)
+        // (si querÃƒÂ©s, podÃƒÂ©s hacerlo mÃƒÂ¡s estricto)
         $pipes = ['upper', 'lower', 'trim'];
         return !in_array(strtolower(trim($s)), $pipes, true);
     }

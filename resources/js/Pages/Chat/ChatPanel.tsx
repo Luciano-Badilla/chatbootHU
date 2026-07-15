@@ -40,6 +40,7 @@ export type Message = {
   id: number | string
   sender: "user" | "contact"
   sender_subtype?: "operator" | "bot" | "contact" | null
+  operator_name?: string | null
   bot_node_type?: string | null
   interactive_options?: Array<{
     id: string

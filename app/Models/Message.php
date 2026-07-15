@@ -13,6 +13,7 @@ class Message extends Model
         'chat_id',
         'sender',
         'sender_subtype',
+        'operator_name',
         'bot_node_type',
         'interactive_options',
         'message_type',
