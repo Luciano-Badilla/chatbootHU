@@ -212,29 +212,89 @@ class BotFlowController extends Controller
     public function uploadMedia(Request $request)
     {
         $data = $request->validate([
-            'file' => 'required|file|max:51200',
+            'file' => 'required|file|max:102400',
             'media_kind' => 'required|in:image,document,video,audio',
         ]);
 
         $file = $request->file('file');
         $kind = $data['media_kind'];
-        $mime = (string) ($file->getMimeType() ?? '');
+        $mime = strtolower((string) ($file->getMimeType() ?? ''));
+        $extension = strtolower((string) ($file->getClientOriginalExtension() ?: pathinfo((string) $file->getClientOriginalName(), PATHINFO_EXTENSION)));
         $allowedMimes = match ($kind) {
             'image' => ['image/jpeg', 'image/png', 'image/webp'],
             'video' => ['video/mp4', 'video/3gpp'],
-            'audio' => ['audio/ogg', 'audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/amr', 'audio/opus'],
+            'audio' => ['audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg', 'audio/opus'],
+            'document' => [
+                'text/plain',
+                'application/pdf',
+                'application/msword',
+                'application/vnd.ms-excel',
+                'application/vnd.ms-powerpoint',
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            ],
             default => [],
         };
+        $allowedExtensions = match ($kind) {
+            'image' => ['jpg', 'jpeg', 'png', 'webp'],
+            'video' => ['mp4', '3gp'],
+            'audio' => ['aac', 'm4a', 'mp3', 'amr', 'ogg', 'opus'],
+            'document' => ['txt', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'],
+            default => [],
+        };
+        $maxBytes = match ($kind) {
+            'image' => 5 * 1024 * 1024,
+            'video', 'audio' => 16 * 1024 * 1024,
+            'document' => 100 * 1024 * 1024,
+            default => 0,
+        };
 
-        if ($allowedMimes && !in_array(strtolower($mime), $allowedMimes, true)) {
+        if ($maxBytes > 0 && (int) $file->getSize() > $maxBytes) {
+            return response()->json([
+                'message' => match ($kind) {
+                    'image' => 'La imagen supera el limite de WhatsApp. Usá un archivo de hasta 5 MB.',
+                    'video' => 'El video supera el limite de WhatsApp. Usá un archivo de hasta 16 MB.',
+                    'audio' => 'El audio supera el limite de WhatsApp. Usá un archivo de hasta 16 MB.',
+                    'document' => 'El documento supera el limite de WhatsApp. Usá un archivo de hasta 100 MB.',
+                    default => 'El archivo supera el limite permitido por WhatsApp.',
+                },
+                'size' => $file->getSize(),
+                'max_size' => $maxBytes,
+            ], 422);
+        }
+
+        if (
+            $allowedMimes
+            && !in_array($mime, $allowedMimes, true)
+            && !in_array($extension, $allowedExtensions, true)
+        ) {
             return response()->json([
                 'message' => match ($kind) {
                     'image' => 'Formato de imagen no compatible con WhatsApp. Usá JPG, PNG o WEBP.',
                     'video' => 'Formato de video no compatible con WhatsApp. Usá MP4 o 3GP.',
-                    'audio' => 'Formato de audio no compatible con WhatsApp. Usá OGG, MP3, M4A, AAC, AMR u OPUS.',
+                    'audio' => 'Formato de audio no compatible con WhatsApp. Usá AAC, M4A, MP3, AMR, OGG u OPUS.',
+                    'document' => 'Formato de documento no compatible con WhatsApp. Usá PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX o TXT.',
                     default => 'Formato no compatible con WhatsApp.',
                 },
                 'mime' => $mime,
+                'extension' => $extension,
+                'allowed_extensions' => $allowedExtensions,
+            ], 422);
+        }
+
+        if ($allowedExtensions && $extension !== '' && !in_array($extension, $allowedExtensions, true)) {
+            return response()->json([
+                'message' => match ($kind) {
+                    'image' => 'Formato de imagen no compatible con WhatsApp. Usá JPG, PNG o WEBP.',
+                    'video' => 'Formato de video no compatible con WhatsApp. Usá MP4 o 3GP.',
+                    'audio' => 'Formato de audio no compatible con WhatsApp. Usá AAC, M4A, MP3, AMR, OGG u OPUS.',
+                    'document' => 'Formato de documento no compatible con WhatsApp. Usá PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX o TXT.',
+                    default => 'Formato no compatible con WhatsApp.',
+                },
+                'mime' => $mime,
+                'extension' => $extension,
+                'allowed_extensions' => $allowedExtensions,
             ], 422);
         }
 

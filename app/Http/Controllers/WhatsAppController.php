@@ -1525,6 +1525,19 @@ class WhatsAppController extends Controller
             'sniff' => $sniff,
         ]);
 
+        $fileSize = (int) (filesize($localPath) ?: 0);
+        $maxSize = $this->maxWhatsAppMediaBytes($mediaType);
+        if ($maxSize > 0 && $fileSize > $maxSize) {
+            Log::error('sendBotMediaNode: archivo supera limite de WhatsApp', [
+                'source' => $source,
+                'path' => $localPath,
+                'type' => $mediaType,
+                'size' => $fileSize,
+                'max_size' => $maxSize,
+            ]);
+            return false;
+        }
+
         if ($mediaType === 'audio') {
             $allowedAudioMimes = [
                 'audio/ogg',
@@ -1617,6 +1630,16 @@ class WhatsAppController extends Controller
         }
 
         return (string) $mediaId;
+    }
+
+    private function maxWhatsAppMediaBytes(string $mediaType): int
+    {
+        return match ($mediaType) {
+            'image' => 5 * 1024 * 1024,
+            'video', 'audio' => 16 * 1024 * 1024,
+            'document' => 100 * 1024 * 1024,
+            default => 0,
+        };
     }
 
     private function localPublicStoragePathFromSource(string $source): ?string

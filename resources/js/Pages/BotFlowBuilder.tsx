@@ -3202,10 +3202,34 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             ? "video/mp4,video/3gpp,.mp4,.3gp"
             : t === "audio"
               ? "audio/ogg,audio/mpeg,audio/mp4,audio/aac,audio/amr,audio/opus,.ogg,.opus,.mp3,.m4a,.aac,.amr"
-              : ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              : ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+      const mediaFormatHint =
+        t === "image"
+          ? "Formatos aceptados por WhatsApp: JPG, PNG o WEBP. Tamaño máximo: 5 MB."
+          : t === "video"
+            ? "Formatos aceptados por WhatsApp: MP4 o 3GP. Tamaño máximo: 16 MB."
+            : t === "audio"
+              ? "Formatos aceptados por WhatsApp: AAC, M4A, MP3, AMR, OGG u OPUS. Tamaño máximo: 16 MB."
+              : "Formatos aceptados por WhatsApp: PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX o TXT. Tamaño máximo: 100 MB."
+      const maxMediaBytes =
+        t === "image"
+          ? 5 * 1024 * 1024
+          : t === "video" || t === "audio"
+            ? 16 * 1024 * 1024
+            : 100 * 1024 * 1024
+      const maxMediaLabel =
+        t === "image"
+          ? "5 MB"
+          : t === "video" || t === "audio"
+            ? "16 MB"
+            : "100 MB"
 
       const uploadLocalMedia = async (file: File | null) => {
         if (!file) return
+        if (file.size > maxMediaBytes) {
+          toast.error(`El archivo supera el limite de WhatsApp para este tipo. Máximo: ${maxMediaLabel}.`)
+          return
+        }
         setUploadingMedia(true)
 
         try {
@@ -3327,10 +3351,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
           {!mediaSource ? (
             <div className="rounded-lg border border-dashed border-[#013765]/30 bg-white p-3">
-              <label className="mb-2 block text-xs font-medium text-[#013765]">
-                Cargar archivo
-              </label>
-              <Input
+              <input
+                ref={mediaFileInputRef}
                 type="file"
                 accept={mediaAccept}
                 disabled={uploadingMedia}
@@ -3339,15 +3361,28 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                   void uploadLocalMedia(file)
                   e.currentTarget.value = ""
                 }}
-                className="h-9 text-xs"
+                className="hidden"
               />
+              <button
+                type="button"
+                onClick={() => mediaFileInputRef.current?.click()}
+                disabled={uploadingMedia}
+                className="flex w-full items-center justify-center rounded-md border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-medium text-[#013765] transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {uploadingMedia ? "Subiendo archivo..." : "Subir archivo"}
+              </button>
               <p className="mt-2 text-[10px] text-muted-foreground">
-                {uploadingMedia
-                  ? "Subiendo archivo..."
-                  : "Selecciona el archivo que enviara este nodo."}
+                Selecciona el archivo que enviara este nodo.
+              </p>
+              <p className="mt-1 text-[10px] font-medium text-slate-500">
+                {mediaFormatHint}
               </p>
             </div>
-          ) : null}
+          ) : (
+            <p className="text-[10px] font-medium text-slate-500">
+              {mediaFormatHint}
+            </p>
+          )}
         </div>
       )
     }
