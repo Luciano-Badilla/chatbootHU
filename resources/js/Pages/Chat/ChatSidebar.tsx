@@ -19,6 +19,7 @@ interface ChatSidebarProps {
 export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: ChatSidebarProps) {
   const [search, setSearch] = useState("")
   const [now, setNow] = useState(Date.now())
+  const [failedAvatars, setFailedAvatars] = useState<Record<string, boolean>>({})
 
   const normalizePhone = (value?: string | null) => String(value ?? "").replace(/\D/g, "")
 
@@ -26,13 +27,23 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
     const message = String(raw ?? "").trim()
     if (!message) return ""
 
+    const icons = {
+      contact: "\u{1F464}",
+      location: "\u{1F4CD}",
+      sticker: "\u{1F3F7}\uFE0F",
+      audio: "\u{1F3B5}",
+      video: "\u{1F3AC}",
+      image: "\u{1F5BC}\uFE0F",
+      document: "\u{1F4C4}",
+    }
+
     const formatLocationPreview = (parsed: any) => {
       if (!Number.isFinite(Number(parsed?.latitude)) || !Number.isFinite(Number(parsed?.longitude))) {
         return null
       }
 
       const label = String(parsed?.name ?? parsed?.address ?? "").trim()
-      return label ? `Ubicacion: ${label}` : "Ubicacion"
+      return label ? `${icons.location} Ubicación: ${label}` : `${icons.location} Ubicación`
     }
 
     try {
@@ -55,10 +66,10 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
       ).trim()
 
       if (name || phone) {
-        return `👤 Contacto${name ? `: ${name}` : ""}${phone ? ` · ${phone}` : ""}`
+        return `${icons.contact} Contacto${name ? `: ${name}` : ""}${phone ? ` · ${phone}` : ""}`
       }
     } catch {
-      // no es JSON de contacto
+      // no es JSON de contacto o ubicacion
     }
 
     const jsonStart = message.indexOf("{")
@@ -76,31 +87,34 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
     const withoutTags = message.replace(/\[[^\]]+\]\s*/g, "").trim()
 
     if (lower.includes("[mensaje tipo contacts]")) {
-      return "👤 Contacto"
+      return `${icons.contact} Contacto`
     }
     if (lower.startsWith("contacto:")) {
-      return `👤 ${message}`
+      return `${icons.contact} ${message}`
+    }
+    if (lower.includes("[ubicacion]") || lower.includes("[ubicación]") || lower.includes("[location]")) {
+      const label = withoutTags.replace(/^ubicaci[oó]n:\s*/i, "").trim()
+      return label ? `${icons.location} Ubicación: ${label}` : `${icons.location} Ubicación`
     }
 
     if (lower.includes("[sticker]")) {
-      return withoutTags ? `🏷️ Sticker: ${withoutTags}` : "🏷️ Sticker"
+      return withoutTags ? `${icons.sticker} Sticker: ${withoutTags}` : `${icons.sticker} Sticker`
     }
     if (lower.includes("[audio]")) {
-      return withoutTags ? `🎵 Audio: ${withoutTags}` : "🎵 Audio"
+      return withoutTags ? `${icons.audio} Audio: ${withoutTags}` : `${icons.audio} Audio`
     }
     if (lower.includes("[video]")) {
-      return withoutTags ? `🎬 Video: ${withoutTags}` : "🎬 Video"
+      return withoutTags ? `${icons.video} Video: ${withoutTags}` : `${icons.video} Video`
     }
     if (lower.includes("[imagen]") || lower.includes("[image]")) {
-      return withoutTags ? `🖼️ Imagen: ${withoutTags}` : "🖼️ Imagen"
+      return withoutTags ? `${icons.image} Imagen: ${withoutTags}` : `${icons.image} Imagen`
     }
     if (lower.includes("[documento]") || lower.includes("[document]")) {
-      return withoutTags ? `📄 Documento: ${withoutTags}` : "📄 Documento"
+      return withoutTags ? `${icons.document} Documento: ${withoutTags}` : `${icons.document} Documento`
     }
 
     return message
   }
-
   useEffect(() => {
     const interval = setInterval(() => {
       setNow(Date.now())
@@ -109,7 +123,7 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
     return () => clearInterval(interval)
   }, [])
 
-  // 🔹 Filtrar + ordenar: primero no leídos, luego por timestamp desc
+  // ðŸ”¹ Filtrar + ordenar: primero no leÃ­dos, luego por timestamp desc
   const visibleChats = useMemo(() => {
     const query = search.toLowerCase()
     const phoneQuery = normalizePhone(search)
@@ -125,12 +139,12 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
       const aHasUnread = (a.unread ?? 0) > 0
       const bHasUnread = (b.unread ?? 0) > 0
 
-      // primero los que tienen no leídos
+      // primero los que tienen no leÃ­dos
       if (aHasUnread !== bHasUnread) {
         return aHasUnread ? -1 : 1
       }
 
-      // si ambos están en el mismo estado de unread, ordenar por timestamp (más nuevo primero)
+      // si ambos estÃ¡n en el mismo estado de unread, ordenar por timestamp (mÃ¡s nuevo primero)
       if (a.timestamp && b.timestamp) {
         const dateA = new Date(a.timestamp).getTime()
         const dateB = new Date(b.timestamp).getTime()
@@ -175,7 +189,7 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
         headers: { "Content-Type": "application/json" },
       })
     } catch (err) {
-      console.error("Error marcando como leído:", err)
+      console.error("Error marcando como leÃ­do:", err)
     }
   }
 
@@ -221,8 +235,22 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
                     {isSelected && (
                       <div className="absolute left-0 top-2 bottom-2 w-1 rounded-r bg-[#013765]" />
                     )}
-                    <Avatar className="h-12 w-12 flex items-center justify-center bg-[#2b5f90] text-white">
-                      <User />
+                    <Avatar className="h-12 w-12 overflow-hidden flex items-center justify-center bg-[#2b5f90] text-white">
+                      {chat.avatar && !failedAvatars[String(chat.id)] ? (
+                        <img
+                          src={chat.avatar}
+                          alt={chat.name}
+                          className="h-full w-full object-cover"
+                          onError={() =>
+                            setFailedAvatars((prev) => ({
+                              ...prev,
+                              [String(chat.id)]: true,
+                            }))
+                          }
+                        />
+                      ) : (
+                        <User />
+                      )}
                     </Avatar>
 
                     <div className="flex-1 min-w-0">
@@ -305,7 +333,7 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
               </div>
               <p className="text-sm font-medium text-foreground">No se encontraron conversaciones</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Probá con otro nombre, número o fragmento del mensaje.
+                ProbÃ¡ con otro nombre, nÃºmero o fragmento del mensaje.
               </p>
             </div>
           )}

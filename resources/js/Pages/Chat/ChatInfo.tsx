@@ -167,6 +167,8 @@ export default function ChatInfo({
   readOnly = false,
   canToggleBot = false,
 }: ChatInfoProps) {
+  const [contactAvatarFailed, setContactAvatarFailed] = useState(false)
+
   // ---------------------------
   // Helpers Variables
   // ---------------------------
@@ -335,6 +337,10 @@ export default function ChatInfo({
     setMqttLastEventAt(null)
     knownMessageIdsRef.current = new Set()
   }, [chat?.id])
+
+  useEffect(() => {
+    setContactAvatarFailed(false)
+  }, [chat?.id, chat?.avatar])
 
   // Mantener sincronizado el estado del bot con la data del chat.
   useEffect(() => {
@@ -934,8 +940,17 @@ export default function ChatInfo({
           {/* Contacto */}
           <div className="flex flex-col items-center text-center mb-6">
             <div className="relative mb-3">
-              <Avatar className="h-16 w-16 bg-[#2b5f90] text-white flex items-center justify-center">
-                <User className="h-6 w-6" />
+              <Avatar className="h-16 w-16 overflow-hidden bg-[#2b5f90] text-white flex items-center justify-center">
+                {chat.avatar && !contactAvatarFailed ? (
+                  <img
+                    src={chat.avatar}
+                    alt={chat.name}
+                    className="h-full w-full object-cover"
+                    onError={() => setContactAvatarFailed(true)}
+                  />
+                ) : (
+                  <User className="h-6 w-6" />
+                )}
               </Avatar>
             </div>
             <h3 className="font-semibold text-foreground text-lg">{chat.name}</h3>

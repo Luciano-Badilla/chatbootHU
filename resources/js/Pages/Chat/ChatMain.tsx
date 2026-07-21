@@ -3,7 +3,7 @@
 import type React from "react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
-import { AudioLines, Bot, ChevronDown, ChevronUp, Contact, ExternalLink, FileText, Headset, ImageIcon, MapPin, Mic, Play, Plus, Search, Send, Square, User, Video, X } from "lucide-react"
+import { AudioLines, Bot, Check, CheckCheck, ChevronDown, ChevronUp, Contact, ExternalLink, FileText, Headset, ImageIcon, MapPin, Mic, Play, Plus, Search, Send, Square, User, Video, X } from "lucide-react"
 import { Button } from "shadcn/components/ui/button"
 import { Input } from "shadcn/components/ui/input"
 import { Avatar } from "shadcn/components/ui/avatar"
@@ -214,6 +214,7 @@ export default function ChatMain({
   const [lastSentContactDraft, setLastSentContactDraft] = useState<AgendaContact | null>(null)
   const [contactSubmitted, setContactSubmitted] = useState(false)
   const [contactTouchedFields, setContactTouchedFields] = useState<Record<string, boolean>>({})
+  const [contactAvatarFailed, setContactAvatarFailed] = useState(false)
   const [locationModalOpen, setLocationModalOpen] = useState(false)
   const [locationDraft, setLocationDraft] = useState<LocationDraft>(emptyLocationDraft)
   const [locationSubmitted, setLocationSubmitted] = useState(false)
@@ -234,6 +235,7 @@ export default function ChatMain({
   const audioChunksRef = useRef<Blob[]>([])
   const recordingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const pendingMediaRef = useRef<PendingMedia[]>([])
+  const pendingMessageStatusRef = useRef<Record<string, Message["status"]>>({})
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const previousSearchQueryRef = useRef("")
   const attachmentMenuRef = useRef<HTMLDivElement | null>(null)
@@ -302,6 +304,8 @@ export default function ChatMain({
 
   // 🔹 Cargar mensajes cuando cambia el chat seleccionado
   useEffect(() => {
+    setContactAvatarFailed(false)
+
     if (!chat) {
       setMessages([])
       return
@@ -332,6 +336,7 @@ export default function ChatMain({
             interactive_options: Array.isArray(m.interactive_options) ? m.interactive_options : null,
             body: m.body,
             timestamp: m.timestamp ?? m.created_at ?? new Date().toISOString(),
+            status: m.status ?? null,
             message_type: m.message_type ?? "text",
             media_url: m.media_url ?? null,
             media_name: m.media_name ?? null,
@@ -360,6 +365,7 @@ export default function ChatMain({
     client.on("connect", () => {
       const topic = `chat/${chat.id}`
       client.subscribe(topic)
+      client.subscribe(`${topic}/status`)
     })
 
     client.on("message", (topic, payload) => {
@@ -367,6 +373,35 @@ export default function ChatMain({
         const data = JSON.parse(payload.toString())
 
         if (String(data.chat_id) !== String(chat.id)) return
+
+        if (topic === `chat/${chat.id}/status`) {
+          const messageId = String(data.message_id ?? "")
+          if (!messageId) return
+
+          setMessages((prev) => {
+            let matched = false
+            const next = prev.map((message) => {
+              if (String(message.id) !== messageId) return message
+              matched = true
+              return {
+                ...message,
+                status: pickNewestMessageStatus(message.status, data.status),
+              }
+            })
+
+            if (!matched) {
+              pendingMessageStatusRef.current[messageId] = pickNewestMessageStatus(
+                pendingMessageStatusRef.current[messageId],
+                data.status,
+              )
+            } else {
+              delete pendingMessageStatusRef.current[messageId]
+            }
+
+            return next
+          })
+          return
+        }
 
         const incoming: Message = {
           id: data.message_id ?? data.id ?? `mqtt-${Date.now()}`,
@@ -377,12 +412,19 @@ export default function ChatMain({
           interactive_options: Array.isArray(data.interactive_options) ? data.interactive_options : null,
           body: data.body ?? null,
           timestamp: data.timestamp ?? new Date().toISOString(),
+          status: data.status ?? null,
           message_type: data.message_type ?? "text",
           media_url: data.media_url ?? null,
           media_name: data.media_name ?? null,
         }
 
         setMessages((prev) => {
+          const pendingStatus = pendingMessageStatusRef.current[String(incoming.id)]
+          if (pendingStatus) {
+            incoming.status = pickNewestMessageStatus(incoming.status, pendingStatus)
+            delete pendingMessageStatusRef.current[String(incoming.id)]
+          }
+
           const exists = prev.some(
             (m) => String(m.id) === String(incoming.id),
           )
@@ -400,6 +442,52 @@ export default function ChatMain({
   }, [chat?.id])
 
   // 🔹 Scroll al último mensaje
+  useEffect(() => {
+    if (!chat) return
+
+    let cancelled = false
+
+    const syncMessageStatuses = async () => {
+      try {
+        const res = await fetch(`${import.meta.env.VITE_APP_URL}/api/chat/messages/${chat.id}`)
+        if (!res.ok || cancelled) return
+
+        const data = await res.json()
+        const rows = Array.isArray(data) ? data : data.messages
+        if (!Array.isArray(rows)) return
+
+        const statusesById = new Map<string, Message["status"]>()
+        rows.forEach((row: any) => {
+          if (row?.id === undefined || row?.id === null) return
+          statusesById.set(String(row.id), row.status ?? null)
+        })
+
+        setMessages((prev) =>
+          prev.map((message) => {
+            const syncedStatus = statusesById.get(String(message.id))
+            if (!syncedStatus) return message
+
+            return {
+              ...message,
+              status: pickNewestMessageStatus(message.status, syncedStatus),
+            }
+          }),
+        )
+      } catch (error) {
+        console.error("Error sincronizando estados de mensajes:", error)
+      }
+    }
+
+    const interval = window.setInterval(() => {
+      void syncMessageStatuses()
+    }, 2500)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [chat?.id])
+
   useEffect(() => {
     if (searchOpen && searchQuery.trim()) return
     if (!messagesEndRef.current) return
@@ -865,6 +953,26 @@ export default function ChatMain({
     }))
     saveLocationToHistory(nextLocation)
     setLocationSubmitted(false)
+  }
+
+  const messageStatusRank = (status?: Message["status"]) => {
+    switch (String(status ?? "").toLowerCase()) {
+      case "failed":
+        return 0
+      case "sent":
+        return 1
+      case "delivered":
+        return 2
+      case "read":
+        return 3
+      default:
+        return -1
+    }
+  }
+
+  const pickNewestMessageStatus = (current?: Message["status"], incoming?: Message["status"]) => {
+    if (String(incoming ?? "").toLowerCase() === "failed") return incoming
+    return messageStatusRank(incoming) >= messageStatusRank(current) ? incoming : current
   }
 
   useEffect(() => {
@@ -1592,6 +1700,40 @@ export default function ChatMain({
     return format(date, "HH:mm", { locale: es })
   }
 
+  const MessageDeliveryStatus = ({ status }: { status?: Message["status"] }) => {
+    const normalized = String(status ?? "sent").toLowerCase()
+
+    if (normalized === "read") {
+      return (
+        <span title="Visto" className="inline-flex items-center text-sky-300">
+          <CheckCheck className="h-3.5 w-3.5" />
+        </span>
+      )
+    }
+
+    if (normalized === "delivered") {
+      return (
+        <span title="Entregado" className="inline-flex items-center text-white/75">
+          <CheckCheck className="h-3.5 w-3.5" />
+        </span>
+      )
+    }
+
+    if (normalized === "failed") {
+      return (
+        <span title="No enviado" className="inline-flex items-center text-red-200">
+          <X className="h-3.5 w-3.5" />
+        </span>
+      )
+    }
+
+    return (
+      <span title="Enviado" className="inline-flex items-center text-white/75">
+        <Check className="h-3.5 w-3.5" />
+      </span>
+    )
+  }
+
   function formatDateSeparator(timestamp: string) {
     const date = parseISO(timestamp)
     if (isNaN(date.getTime())) return ""
@@ -2146,6 +2288,7 @@ export default function ChatMain({
         : `Este chat esta siendo atendido por ${readOnlyOperatorName ?? "otro operador"}.`
       : ""
   const hasInputStatus = Boolean(inputStatusMessage)
+  const showContactAvatar = Boolean(chat?.avatar && !contactAvatarFailed)
 
   return (
     <div className="flex flex-col h-full">
@@ -2154,8 +2297,17 @@ export default function ChatMain({
         <div className="flex h-[72px] items-center justify-between px-4">
           <div className="flex items-center gap-3">
             <div className="relative">
-              <Avatar className="h-10 w-10 flex items-center justify-center bg-[#2b5f90] text-white">
-                <User className="h-4 w-4" />
+              <Avatar className="h-10 w-10 overflow-hidden flex items-center justify-center bg-[#2b5f90] text-white">
+                {showContactAvatar ? (
+                  <img
+                    src={chat.avatar ?? ""}
+                    alt={chat.name}
+                    className="h-full w-full object-cover"
+                    onError={() => setContactAvatarFailed(true)}
+                  />
+                ) : (
+                  <User className="h-4 w-4" />
+                )}
               </Avatar>
             </div>
             <div className="flex flex-col gap-1">
@@ -2293,8 +2445,17 @@ export default function ChatMain({
                     )}
                   >
                     {message.sender !== "user" && (
-                      <Avatar className="h-8 w-8 mt-1 bg-[#2b5f90] text-white flex items-center justify-center">
-                        <User className="h-4 w-4" />
+                      <Avatar className="h-8 w-8 mt-1 overflow-hidden bg-[#2b5f90] text-white flex items-center justify-center">
+                        {showContactAvatar ? (
+                          <img
+                            src={chat.avatar ?? ""}
+                            alt={chat.name}
+                            className="h-full w-full object-cover"
+                            onError={() => setContactAvatarFailed(true)}
+                          />
+                        ) : (
+                          <User className="h-4 w-4" />
+                        )}
                       </Avatar>
                     )}
 
@@ -2334,32 +2495,33 @@ export default function ChatMain({
 
                       <div
                         className={cn(
-                          "flex items-center justify-between gap-3",
+                          "flex items-center gap-3",
+                          message.sender === "user" && !(
+                            message.sender_subtype === "bot" && message.bot_node_type
+                          )
+                            ? "justify-end"
+                            : "justify-between",
                           isMediaCard ? "px-3 pb-2 pt-1" : "mt-1",
                         )}
                       >
-                        <p
+                        {message.sender === "user" && message.sender_subtype === "bot" && message.bot_node_type ? (
+                          <p className="text-[11px] font-semibold text-white/80">
+                            {getNodeTypeLabel(message.bot_node_type)}
+                          </p>
+                        ) : null}
+                        <div
                           className={cn(
-                            "text-xs font-medium",
+                            "flex items-center gap-1 text-xs font-medium",
                             message.sender === "user"
                               ? "text-white/70"
                               : "text-white/70",
                           )}
                         >
-                          {formatMessageTime(message.timestamp)}
-                        </p>
-                        <p
-                          className={cn(
-                            "text-[11px] font-semibold",
-                            message.sender === "user" && message.sender_subtype === "bot" && message.bot_node_type
-                              ? "text-white/80"
-                              : "opacity-0",
-                          )}
-                        >
-                          {message.sender === "user" && message.sender_subtype === "bot" && message.bot_node_type
-                            ? getNodeTypeLabel(message.bot_node_type)
-                            : "-"}
-                        </p>
+                          <span>{formatMessageTime(message.timestamp)}</span>
+                          {message.sender === "user" ? (
+                            <MessageDeliveryStatus status={message.status} />
+                          ) : null}
+                        </div>
                       </div>
                     </div>
 

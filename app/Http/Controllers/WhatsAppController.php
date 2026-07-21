@@ -7,6 +7,7 @@ use App\Models\BotNode;
 use App\Models\Chat;
 use App\Models\Contact;
 use App\Models\Message;
+use App\Models\MessageStatus;
 use App\Models\SystemSetting;
 use App\Services\AuditService;
 use App\Services\BotInactivityService;
@@ -50,6 +51,79 @@ class WhatsAppController extends Controller
         return response('Bad Request', 400);
     }
 
+    private function processMessageStatuses(array $statuses): void
+    {
+        $priority = [
+            'failed' => 0,
+            'sent' => 1,
+            'delivered' => 2,
+            'read' => 3,
+        ];
+
+        foreach ($statuses as $statusData) {
+            $whatsappMessageId = $statusData['id'] ?? null;
+            $status = $statusData['status'] ?? null;
+
+            if (!$whatsappMessageId || !isset($priority[$status])) {
+                continue;
+            }
+
+            $message = Message::where('whatsapp_message_id', $whatsappMessageId)->first();
+            if (!$message) {
+                Log::warning('Status recibido para mensaje no encontrado', [
+                    'whatsapp_message_id' => $whatsappMessageId,
+                    'status' => $status,
+                ]);
+                continue;
+            }
+
+            $currentPriority = $priority[$message->status] ?? -1;
+            $nextPriority = $priority[$status];
+
+            if ($status === 'failed' || $nextPriority >= $currentPriority) {
+                $message->status = $status;
+                $message->save();
+            }
+
+            MessageStatus::create([
+                'message_id' => $message->id,
+                'status' => $status,
+                'changed_at' => isset($statusData['timestamp'])
+                    ? now()->setTimestamp((int) $statusData['timestamp'])
+                    : now(),
+            ]);
+
+            $this->publishMessageStatus($message, $status);
+        }
+    }
+
+    private function publishMessageStatus(Message $message, string $status): void
+    {
+        $host = env('MQTT_HOST') ?: env('VITE_MOSQUITTO_HOST');
+        if (!$host) {
+            Log::warning('MQTT host not configured for message status publish.', [
+                'chat_id' => $message->chat_id,
+                'message_id' => $message->id,
+                'status' => $status,
+            ]);
+            return;
+        }
+
+        try {
+            $mqtt = new MqttClient((string) $host, 1883, 'laravel_msg_status_' . uniqid());
+            $mqtt->connect();
+            $mqtt->publish("chat/{$message->chat_id}/status", json_encode([
+                'chat_id' => (int) $message->chat_id,
+                'message_id' => (int) $message->id,
+                'whatsapp_message_id' => $message->whatsapp_message_id,
+                'status' => $status,
+            ]), 0);
+            $mqtt->disconnect();
+        } catch (\Throwable $e) {
+            Log::error('MQTT Error (message status): ' . $e->getMessage());
+        }
+    }
+
     /**
      * Webhook de recepciÃƒÂ³n de mensajes desde WhatsApp.
      */
@@ -58,6 +132,11 @@ class WhatsAppController extends Controller
         $data = $request->all();
 
         Log::info('Recibido mensaje de WhatsApp: ' . json_encode($data));
+
+        if (isset($data['entry'][0]['changes'][0]['value']['statuses'][0])) {
+            $this->processMessageStatuses($data['entry'][0]['changes'][0]['value']['statuses']);
+            return response('EVENT_RECEIVED', 200);
+        }
 
         // 1) Verificamos si hay un mensaje
         if (!isset($data['entry'][0]['changes'][0]['value']['messages'][0])) {
@@ -361,6 +440,7 @@ class WhatsAppController extends Controller
             $mqtt->publish('sidebar/chat', json_encode([
                 'chat_id' => $chat->id,
                 'name' => $contact->name ?? 'Desconocido',
+                'avatar' => $contact->profile_pic,
                 'lastMessage' => $previewText,
                 'timestamp' => now()->utc()->toIso8601String(),
             ]), 0);
@@ -802,6 +882,7 @@ class WhatsAppController extends Controller
                 $mqtt->publish('sidebar/chat', json_encode([
                     'chat_id' => $chat->id,
                     'name' => $contact->name ?? 'Desconocido',
+                    'avatar' => $contact->profile_pic,
                     'lastMessage' => $previewText,
                     'timestamp' => $message->created_at->toIso8601String(),
                 ]), 0);
@@ -961,6 +1042,7 @@ class WhatsAppController extends Controller
             $mqtt->publish('sidebar/chat', json_encode([
                 'chat_id' => $chat->id,
                 'name' => $contact->name ?? 'Desconocido',
+                'avatar' => $contact->profile_pic,
                 'lastMessage' => $body,
                 'timestamp' => $message->created_at->toIso8601String(),
             ]), 0);
@@ -1093,6 +1175,7 @@ class WhatsAppController extends Controller
             $mqtt->publish('sidebar/chat', json_encode([
                 'chat_id' => $chat->id,
                 'name' => $contact->name ?? 'Desconocido',
+                'avatar' => $contact->profile_pic,
                 'lastMessage' => $previewText,
                 'timestamp' => $message->created_at->toIso8601String(),
             ]), 0);
@@ -1259,6 +1342,7 @@ class WhatsAppController extends Controller
             $mqtt->publish('sidebar/chat', json_encode([
                 'chat_id' => $chat->id,
                 'name' => $contact->name ?? 'Desconocido',
+                'avatar' => $contact->profile_pic,
                 'lastMessage' => $messageBody,
                 'timestamp' => $message->created_at->toIso8601String(),
             ]), 0);
@@ -1276,6 +1360,7 @@ class WhatsAppController extends Controller
                 'message_type' => $message->message_type,
                 'media_url' => null,
                 'media_name' => null,
+                'status' => $message->status,
                 'timestamp' => $message->created_at->toIso8601String(),
             ]), 0);
 
@@ -1316,6 +1401,7 @@ class WhatsAppController extends Controller
             $mqtt->publish('sidebar/chat', json_encode([
                 'chat_id' => $chat->id,
                 'name' => $contact->name ?? 'Desconocido',
+                'avatar' => $contact->profile_pic,
                 'lastMessage' => $body,
                 'timestamp' => $message->created_at->toIso8601String(),
             ]), 0);
@@ -1374,6 +1460,7 @@ class WhatsAppController extends Controller
             $mqtt->publish('sidebar/chat', json_encode([
                 'chat_id' => $chat->id,
                 'name' => $contact->name ?? 'Desconocido',
+                'avatar' => $contact->profile_pic,
                 'lastMessage' => $body,
                 'timestamp' => $message->created_at->toIso8601String(),
             ]), 0);
@@ -1963,6 +2050,7 @@ class WhatsAppController extends Controller
             $mqtt->publish('sidebar/chat', json_encode([
                 'chat_id' => $chat->id,
                 'name' => $contact->name ?? 'Desconocido',
+                'avatar' => $contact->profile_pic,
                 'lastMessage' => $body,
                 'timestamp' => $message->created_at->toIso8601String(),
             ]), 0);
@@ -2078,6 +2166,7 @@ class WhatsAppController extends Controller
             $mqtt->publish('sidebar/chat', json_encode([
                 'chat_id' => $chat->id,
                 'name' => $contact->name ?? 'Desconocido',
+                'avatar' => $contact->profile_pic,
                 'lastMessage' => $previewText,
                 'timestamp' => $message->created_at->toIso8601String(),
             ]), 0);

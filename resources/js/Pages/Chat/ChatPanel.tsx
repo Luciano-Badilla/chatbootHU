@@ -6,7 +6,7 @@ import ChatMain from "./ChatMain"
 import ChatInfo from "./ChatInfo"
 import mqtt from "mqtt"
 import { usePage } from "@inertiajs/react"
-import { AlertTriangle, Eye, WifiOff } from "lucide-react"
+import { AlertTriangle, Eye, WifiOff, X } from "lucide-react"
 
 export type Chat = {
   id: number | string
@@ -50,6 +50,7 @@ export type Message = {
   }> | null
   body: string | null
   timestamp: string
+  status?: "sent" | "delivered" | "read" | "failed" | "received" | string | null
   message_type?: "text" | "image" | "video" | "audio" | "document" | "template" | "contacts" | "location"
   media_url?: string | null
   media_name?: string | null
@@ -394,6 +395,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
                   ...c,
                   lastMessage: data.lastMessage,
                   timestamp: data.timestamp,
+                  avatar: data.avatar ?? c.avatar ?? null,
                   unread:
                     // si está abierto, siempre 0
                     chatId === selectedChatIdRef.current
@@ -415,7 +417,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
                 timestamp: data.timestamp,
                 unread: 1,
                 online: false,
-                avatar: null,
+                avatar: data.avatar ?? null,
                 bot_enabled: typeof data.bot_enabled === "boolean" ? data.bot_enabled : true,
                 operator_id: data.operator_id ?? null,
                 operator_name: data.operator_name ?? null,
@@ -681,10 +683,19 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
               <div className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-700">
                 <AlertTriangle className="h-5 w-5" />
               </div>
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <h3 className="text-base font-semibold text-slate-900">Finalizar atencion</h3>
                 <p className="mt-0.5 text-sm text-slate-600">El bot esta pausado en este chat.</p>
               </div>
+              <button
+                type="button"
+                onClick={() => setFinishAttentionPrompt(null)}
+                disabled={finishingAttention}
+                aria-label="Cerrar modal"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
             <div className="space-y-3 px-5 py-4 text-sm text-slate-700">
               <p>
