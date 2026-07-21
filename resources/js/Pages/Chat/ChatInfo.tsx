@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useEffect, useMemo, useRef, useState } from "react"
-import { AudioLines, Code, Contact, Database, Zap, User, Image as ImageIcon, FileText, Video, Bot, Clock3, MessageSquare, PowerOff, Power, Loader2, ChevronDown, ChevronRight, ExternalLink, X } from "lucide-react"
+import { AudioLines, Code, Contact, Database, Zap, User, Image as ImageIcon, FileText, Video, Bot, Clock3, MessageSquare, PowerOff, Power, Loader2, ChevronDown, ChevronRight, ExternalLink, MapPin, X } from "lucide-react"
 import { Avatar } from "shadcn/components/ui/avatar"
 import { Badge } from "shadcn/components/ui/badge"
 import { Button } from "shadcn/components/ui/button"
@@ -18,7 +18,7 @@ interface ChatInfoProps {
 }
 
 type VarType = "string" | "number" | "boolean" | "object" | "array" | "null" | "unknown"
-type MediaType = "image" | "video" | "audio" | "document" | "contacts"
+type MediaType = "image" | "video" | "audio" | "document" | "contacts" | "location"
 
 interface MediaItem {
   id: number
@@ -47,6 +47,13 @@ type PreviewMedia = {
     phone: string
     organization?: string
     title?: string
+  }
+  location?: {
+    latitude: number
+    longitude: number
+    name: string
+    address: string
+    isValid: boolean
   }
 }
 
@@ -318,7 +325,7 @@ export default function ChatInfo({
   }, [media, activeMediaType])
 
   const mediaCounts = useMemo(() => {
-    const c = { image: 0, video: 0, audio: 0, document: 0, contacts: 0 }
+    const c = { image: 0, video: 0, audio: 0, document: 0, contacts: 0, location: 0 }
     for (const m of media) c[m.message_type]++
     return c
   }, [media])
@@ -359,6 +366,37 @@ export default function ChatInfo({
       }
     }
   }
+
+  const getLocationCardData = (item: Pick<MediaItem, "body" | "media_name">) => {
+    const rawBody = String(item.body ?? "").trim()
+
+    try {
+      const parsed = JSON.parse(rawBody)
+      const latitude = Number(parsed?.latitude)
+      const longitude = Number(parsed?.longitude)
+      const name = String(parsed?.name ?? item.media_name ?? "").trim()
+      const address = String(parsed?.address ?? "").trim()
+
+      return {
+        latitude,
+        longitude,
+        name: name || address || "Ubicacion",
+        address,
+        isValid: Number.isFinite(latitude) && Number.isFinite(longitude),
+      }
+    } catch {
+      return {
+        latitude: Number.NaN,
+        longitude: Number.NaN,
+        name: item.media_name || rawBody.replace(/^\[?Ubicaci[oó]n\]?\s*/i, "").trim() || "Ubicacion",
+        address: "",
+        isValid: false,
+      }
+    }
+  }
+
+  const getLocationMapsUrl = (location: NonNullable<PreviewMedia["location"]>) =>
+    location.isValid ? `https://www.google.com/maps?q=${location.latitude},${location.longitude}` : ""
 
   const ContactPreviewCard = ({ contact }: { contact: NonNullable<PreviewMedia["contact"]> }) => (
     <div className="mx-auto max-w-xl rounded-2xl border border-slate-200 bg-slate-50 p-5">
@@ -488,11 +526,11 @@ export default function ChatInfo({
   // Cargar medios iniciales (REST)
   // ---------------------------
   useEffect(() => {
-    if (!chat?.id) return
-
     setMedia([])
     setVideoThumbs({}) // opcional: limpiar thumbs al cambiar chat
     setPreview(null)
+
+    if (!chat?.id) return
 
     fetch(`${API_BASE}/api/chats/${chat.id}/media?limit=80`)
       .then((r) => (r.ok ? r.json() : Promise.reject(r)))
@@ -505,6 +543,20 @@ export default function ChatInfo({
         setMedia([])
       })
   }, [chat?.id])
+
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || !preview) return
+
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      setPreview(null)
+    }
+
+    document.addEventListener("keydown", handleEscape, true)
+    return () => document.removeEventListener("keydown", handleEscape, true)
+  }, [preview])
 
   // ---------------------------
   // MQTT (vars + chat messages -> media)
@@ -629,8 +681,8 @@ export default function ChatInfo({
 
           const msgType = String(data.message_type || "")
           const mediaUrl = data.media_url ? String(data.media_url) : ""
-          if (!["image", "video", "audio", "document", "contacts"].includes(msgType)) return
-          if (msgType !== "contacts" && !mediaUrl) return
+          if (!["image", "video", "audio", "document", "contacts", "location"].includes(msgType)) return
+          if (!["contacts", "location"].includes(msgType) && !mediaUrl) return
 
           const item: MediaItem = {
             id: Number(data.message_id),
@@ -985,6 +1037,12 @@ export default function ChatInfo({
                 icon={<Contact className="h-4 w-4" />}
                 count={mediaCounts.contacts}
               />
+              <MediaTabBtn
+                label="Ubicaciones"
+                value="location"
+                icon={<MapPin className="h-4 w-4" />}
+                count={mediaCounts.location}
+              />
             </div>
 
             {mediaFiltered.length === 0 ? (
@@ -1024,6 +1082,40 @@ export default function ChatInfo({
                               {contactData.phone ? (
                                 <div className="w-full truncate text-[10px] text-muted-foreground">
                                   {contactData.phone}
+                                </div>
+                              ) : null}
+                            </div>
+                          </MediaCard>
+                        </button>
+                      )
+                    }
+
+                    if (m.message_type === "location") {
+                      const locationData = getLocationCardData(m)
+
+                      return (
+                        <button
+                          key={m.id}
+                          type="button"
+                          title={locationData.name}
+                          className="block text-left"
+                          onClick={() =>
+                            setPreview({
+                              type: "location",
+                              name: locationData.name,
+                              location: locationData,
+                            })
+                          }
+                        >
+                          <MediaCard name={locationData.name}>
+                            <div className="flex h-24 flex-col items-center justify-center gap-1 px-3 text-center">
+                              <MapPin className="h-6 w-6 shrink-0 text-[#013765]" />
+                              <div className="line-clamp-2 w-full break-words text-[11px] font-semibold leading-tight text-slate-700">
+                                {locationData.name}
+                              </div>
+                              {locationData.address ? (
+                                <div className="line-clamp-1 w-full text-[10px] text-muted-foreground">
+                                  {locationData.address}
                                 </div>
                               ) : null}
                             </div>
@@ -1142,6 +1234,8 @@ export default function ChatInfo({
                             <AudioLines className="h-5 w-5" />
                           ) : preview.type === "contacts" ? (
                             <Contact className="h-5 w-5" />
+                          ) : preview.type === "location" ? (
+                            <MapPin className="h-5 w-5" />
                           ) : (
                             <FileText className="h-5 w-5" />
                           )}
@@ -1156,6 +1250,8 @@ export default function ChatInfo({
                                   ? "Audio"
                                   : preview.type === "contacts"
                                     ? "Contacto"
+                                    : preview.type === "location"
+                                      ? "Ubicacion"
                                   : "Documento"}
                           </div>
                           <div className="truncate text-sm font-semibold text-slate-900">{preview.name}</div>
@@ -1163,15 +1259,15 @@ export default function ChatInfo({
                       </div>
 
                       <div className="flex items-center gap-2">
-                        {preview.url ? (
+                        {preview.url || (preview.type === "location" && preview.location?.isValid) ? (
                           <a
-                            href={preview.url}
+                            href={preview.type === "location" && preview.location ? getLocationMapsUrl(preview.location) : preview.url}
                             target="_blank"
                             rel="noreferrer"
                             className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-100"
                           >
                             <ExternalLink className="h-3.5 w-3.5" />
-                            Abrir
+                            {preview.type === "location" ? "Abrir en Google Maps" : "Abrir"}
                           </a>
                         ) : null}
 
@@ -1223,6 +1319,56 @@ export default function ChatInfo({
                           <ContactPreviewCard
                             contact={preview.contact ?? { name: preview.name, phone: "" }}
                           />
+                        </div>
+                      )}
+
+                      {preview.type === "location" && preview.location && (
+                        <div className="bg-white p-6">
+                          <div className="mx-auto max-w-3xl overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+                            {preview.location.isValid ? (
+                              <div className="relative h-[420px] w-full overflow-hidden bg-slate-100">
+                                <iframe
+                                  title={preview.location.name}
+                                  className="h-full w-full bg-slate-100"
+                                  src={`https://www.openstreetmap.org/export/embed.html?bbox=${preview.location.longitude - 0.01}%2C${preview.location.latitude - 0.01}%2C${preview.location.longitude + 0.01}%2C${preview.location.latitude + 0.01}&layer=mapnik`}
+                                />
+                                <span className="pointer-events-none absolute left-1/2 top-1/2 z-10 flex h-12 w-12 -translate-x-1/2 -translate-y-full items-center justify-center rounded-full bg-[#013765] text-white shadow-lg ring-4 ring-white">
+                                  <MapPin className="h-6 w-6 fill-current" />
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="flex h-64 items-center justify-center bg-slate-100 text-[#013765]">
+                                <MapPin className="h-10 w-10" />
+                              </div>
+                            )}
+                            <div className="flex items-start gap-3 p-4">
+                              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-[#013765] shadow-sm">
+                                <MapPin className="h-5 w-5" />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-semibold text-slate-900">{preview.location.name}</p>
+                                {preview.location.address ? (
+                                  <p className="mt-1 text-sm font-medium leading-relaxed text-slate-600">{preview.location.address}</p>
+                                ) : null}
+                                {preview.location.isValid ? (
+                                  <p className="mt-1 text-xs font-medium text-slate-500">
+                                    {preview.location.latitude.toFixed(6)}, {preview.location.longitude.toFixed(6)}
+                                  </p>
+                                ) : null}
+                              </div>
+                              {preview.location.isValid ? (
+                                <a
+                                  href={getLocationMapsUrl(preview.location)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-[#013765] px-3 text-xs font-semibold text-white transition-colors hover:bg-[#012e54]"
+                                >
+                                  <ExternalLink className="h-3.5 w-3.5" />
+                                  Abrir en Google Maps
+                                </a>
+                              ) : null}
+                            </div>
+                          </div>
                         </div>
                       )}
 

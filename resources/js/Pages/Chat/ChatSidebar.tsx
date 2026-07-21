@@ -26,8 +26,20 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
     const message = String(raw ?? "").trim()
     if (!message) return ""
 
+    const formatLocationPreview = (parsed: any) => {
+      if (!Number.isFinite(Number(parsed?.latitude)) || !Number.isFinite(Number(parsed?.longitude))) {
+        return null
+      }
+
+      const label = String(parsed?.name ?? parsed?.address ?? "").trim()
+      return label ? `Ubicacion: ${label}` : "Ubicacion"
+    }
+
     try {
       const parsed = JSON.parse(message)
+      const locationPreview = formatLocationPreview(parsed)
+      if (locationPreview) return locationPreview
+
       const contact = parsed?.contacts?.[0] ?? parsed
       const name = String(
         parsed?.display_name ??
@@ -47,6 +59,17 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
       }
     } catch {
       // no es JSON de contacto
+    }
+
+    const jsonStart = message.indexOf("{")
+    if (jsonStart >= 0) {
+      try {
+        const parsed = JSON.parse(message.slice(jsonStart))
+        const locationPreview = formatLocationPreview(parsed)
+        if (locationPreview) return locationPreview
+      } catch {
+        // no es JSON embebido de ubicacion
+      }
     }
 
     const lower = message.toLowerCase()

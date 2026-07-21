@@ -50,7 +50,7 @@ export type Message = {
   }> | null
   body: string | null
   timestamp: string
-  message_type?: "text" | "image" | "video" | "audio" | "document" | "template" | "contacts"
+  message_type?: "text" | "image" | "video" | "audio" | "document" | "template" | "contacts" | "location"
   media_url?: string | null
   media_name?: string | null
 }

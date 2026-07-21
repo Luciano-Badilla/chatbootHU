@@ -3,7 +3,7 @@
 import type React from "react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
-import { AudioLines, Bot, ChevronDown, ChevronUp, Clock3, Contact, ExternalLink, FileText, Headset, ImageIcon, MapPin, Mic, MessageSquare, Play, Plus, Search, Send, Square, User, Video, X } from "lucide-react"
+import { AudioLines, Bot, ChevronDown, ChevronUp, Contact, ExternalLink, FileText, Headset, ImageIcon, MapPin, Mic, Play, Plus, Search, Send, Square, User, Video, X } from "lucide-react"
 import { Button } from "shadcn/components/ui/button"
 import { Input } from "shadcn/components/ui/input"
 import { Avatar } from "shadcn/components/ui/avatar"
@@ -40,6 +40,26 @@ type PendingMedia = {
   previewUrl: string
 }
 
+type LocationDraft = {
+  latitude: string
+  longitude: string
+  name: string
+  address: string
+}
+
+type LocationSearchResult = {
+  place_id: number | string
+  display_name: string
+  lat: string
+  lon: string
+  name?: string
+}
+
+type LocationHistoryItem = LocationDraft & {
+  id: string
+  saved_at: string
+}
+
 type AgendaContact = {
   id?: number
   first_name?: string | null
@@ -58,6 +78,15 @@ const emptyAgendaContact: AgendaContact = {
   organization: "",
   title: "",
 }
+
+const emptyLocationDraft: LocationDraft = {
+  latitude: "",
+  longitude: "",
+  name: "",
+  address: "",
+}
+
+const LOCATION_HISTORY_KEY = "chat.locationHistory"
 
 const normalizeContactPhone = (phone: string) => phone.replace(/[^\d+]/g, "")
 
@@ -178,6 +207,15 @@ export default function ChatMain({
   const [lastSentContactDraft, setLastSentContactDraft] = useState<AgendaContact | null>(null)
   const [contactSubmitted, setContactSubmitted] = useState(false)
   const [contactTouchedFields, setContactTouchedFields] = useState<Record<string, boolean>>({})
+  const [locationModalOpen, setLocationModalOpen] = useState(false)
+  const [locationDraft, setLocationDraft] = useState<LocationDraft>(emptyLocationDraft)
+  const [locationSubmitted, setLocationSubmitted] = useState(false)
+  const [sendingLocation, setSendingLocation] = useState(false)
+  const [locationSearchQuery, setLocationSearchQuery] = useState("")
+  const [locationSearchResults, setLocationSearchResults] = useState<LocationSearchResult[]>([])
+  const [locationSearching, setLocationSearching] = useState(false)
+  const [locationDetecting, setLocationDetecting] = useState(false)
+  const [locationHistory, setLocationHistory] = useState<LocationHistoryItem[]>([])
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const messagesContainerRef = useRef<HTMLDivElement | null>(null)
@@ -191,6 +229,19 @@ export default function ChatMain({
   const pendingMediaRef = useRef<PendingMedia[]>([])
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const previousSearchQueryRef = useRef("")
+  const attachmentMenuRef = useRef<HTMLDivElement | null>(null)
+  const locationMapRef = useRef<HTMLDivElement | null>(null)
+  const leafletMapRef = useRef<any | null>(null)
+  const locationMarkerRef = useRef<any | null>(null)
+
+  const closeAllModals = () => {
+    setPreview(null)
+    setLocationModalOpen(false)
+    setContactModalOpen(false)
+    setSaveContactPromptOpen(false)
+    setLastSentContactDraft(null)
+    setAttachmentMenuOpen(false)
+  }
 
   const loadOpusMediaRecorder = async () => {
     const win = window as Window & {
@@ -541,6 +592,28 @@ export default function ChatMain({
   }, [chat?.id])
 
   useEffect(() => {
+    closeAllModals()
+    setLocationSubmitted(false)
+    setContactSubmitted(false)
+  }, [chat?.id])
+
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return
+      const hasOpenModal = Boolean(preview || locationModalOpen || contactModalOpen || saveContactPromptOpen)
+      if (!hasOpenModal) return
+
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      closeAllModals()
+    }
+
+    document.addEventListener("keydown", handleEscape, true)
+    return () => document.removeEventListener("keydown", handleEscape, true)
+  }, [preview, locationModalOpen, contactModalOpen, saveContactPromptOpen])
+
+  useEffect(() => {
     if (!searchOpen) return
     const timer = setTimeout(() => {
       searchInputRef.current?.focus()
@@ -640,11 +713,6 @@ export default function ChatMain({
     fileInputRef.current?.click()
   }
 
-  const handleUnavailableAttachment = (label: string) => {
-    setAttachmentMenuOpen(false)
-    setMediaError(`${label} todavia no esta disponible. Lo vamos a agregar en una proxima etapa.`)
-  }
-
   const openContactModal = () => {
     setAttachmentMenuOpen(false)
     setMediaError(null)
@@ -653,6 +721,263 @@ export default function ChatMain({
     setContactTouchedFields({})
     setContactModalOpen(true)
   }
+
+  const openLocationModal = () => {
+    setAttachmentMenuOpen(false)
+    setMediaError(null)
+    setLocationDraft(emptyLocationDraft)
+    setLocationSearchQuery("")
+    setLocationSearchResults([])
+    setLocationHistory(readLocationHistory())
+    setLocationSubmitted(false)
+    setLocationModalOpen(true)
+  }
+
+  const readLocationHistory = (): LocationHistoryItem[] => {
+    try {
+      const raw = localStorage.getItem(LOCATION_HISTORY_KEY)
+      const parsed = raw ? JSON.parse(raw) : []
+      return Array.isArray(parsed) ? parsed.slice(0, 8) : []
+    } catch {
+      return []
+    }
+  }
+
+  const saveLocationToHistory = (location: LocationDraft) => {
+    if (!location.latitude || !location.longitude) return
+
+    const item: LocationHistoryItem = {
+      ...location,
+      id: `${location.latitude},${location.longitude}`,
+      saved_at: new Date().toISOString(),
+    }
+
+    const next = [
+      item,
+      ...readLocationHistory().filter((saved) => saved.id !== item.id),
+    ].slice(0, 8)
+
+    localStorage.setItem(LOCATION_HISTORY_KEY, JSON.stringify(next))
+    setLocationHistory(next)
+  }
+
+  const ensureLeaflet = async () => {
+    const win = window as Window & { L?: any; __leafletLoading?: Promise<any> }
+    if (win.L) return win.L
+    if (win.__leafletLoading) return win.__leafletLoading
+
+    win.__leafletLoading = new Promise((resolve, reject) => {
+      if (!document.querySelector('link[data-leaflet="true"]')) {
+        const link = document.createElement("link")
+        link.rel = "stylesheet"
+        link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        link.dataset.leaflet = "true"
+        document.head.appendChild(link)
+      }
+
+      const script = document.createElement("script")
+      script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      script.async = true
+      script.onload = () => win.L ? resolve(win.L) : reject(new Error("Leaflet no disponible"))
+      script.onerror = () => reject(new Error("No se pudo cargar Leaflet"))
+      document.head.appendChild(script)
+    })
+
+    return win.__leafletLoading
+  }
+
+  const moveLocationMarker = (latitude: number, longitude: number, zoom = 16) => {
+    const map = leafletMapRef.current
+    const L = (window as Window & { L?: any }).L
+    if (!map || !L) return
+
+    if (!locationMarkerRef.current) {
+      locationMarkerRef.current = L.marker([latitude, longitude], { draggable: true }).addTo(map)
+      locationMarkerRef.current.on("dragend", async (event: any) => {
+        const position = event.target.getLatLng()
+        await selectLocation(position.lat, position.lng)
+      })
+    } else {
+      locationMarkerRef.current.setLatLng([latitude, longitude])
+    }
+
+    map.flyTo([latitude, longitude], Math.max(map.getZoom(), zoom), { duration: 0.35 })
+  }
+
+  const reverseLocation = async (latitude: number, longitude: number) => {
+    try {
+      const params = new URLSearchParams({
+        format: "jsonv2",
+        lat: String(latitude),
+        lon: String(longitude),
+      })
+      const response = await fetch(`https://nominatim.openstreetmap.org/reverse?${params.toString()}`)
+      if (!response.ok) return null
+      const data = await response.json()
+      return {
+        name: String(data?.name ?? "").trim(),
+        address: String(data?.display_name ?? "").trim(),
+      }
+    } catch (error) {
+      console.error("Error buscando direccion inversa:", error)
+      return null
+    }
+  }
+
+  const selectLocation = async (
+    latitude: number,
+    longitude: number,
+    name?: string,
+    address?: string,
+    shouldReverse = true,
+  ) => {
+    const roundedLatitude = Number(latitude.toFixed(6))
+    const roundedLongitude = Number(longitude.toFixed(6))
+    let nextName = name?.trim() ?? ""
+    let nextAddress = address?.trim() ?? ""
+
+    moveLocationMarker(roundedLatitude, roundedLongitude)
+
+    if (shouldReverse && (!nextName || !nextAddress)) {
+      const reversed = await reverseLocation(roundedLatitude, roundedLongitude)
+      nextName = nextName || reversed?.name || ""
+      nextAddress = nextAddress || reversed?.address || ""
+    }
+
+    const nextLocation = {
+      latitude: String(roundedLatitude),
+      longitude: String(roundedLongitude),
+      name: nextName,
+      address: nextAddress,
+    }
+
+    setLocationDraft((current) => ({
+      ...current,
+      ...nextLocation,
+    }))
+    saveLocationToHistory(nextLocation)
+    setLocationSubmitted(false)
+  }
+
+  useEffect(() => {
+    if (!locationModalOpen) return
+
+    let cancelled = false
+
+    ensureLeaflet()
+      .then((L) => {
+        if (cancelled || !locationMapRef.current || leafletMapRef.current) return
+
+        const initialLatitudeRaw = locationDraft.latitude.trim()
+        const initialLongitudeRaw = locationDraft.longitude.trim()
+        const initialLatitude = Number(initialLatitudeRaw)
+        const initialLongitude = Number(initialLongitudeRaw)
+        const hasInitialPoint =
+          initialLatitudeRaw.length > 0 &&
+          initialLongitudeRaw.length > 0 &&
+          Number.isFinite(initialLatitude) &&
+          Number.isFinite(initialLongitude)
+        const center = hasInitialPoint ? [initialLatitude, initialLongitude] : [-32.889459, -68.845839]
+
+        const map = L.map(locationMapRef.current, { zoomControl: false }).setView(center, hasInitialPoint ? 16 : 12)
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        }).addTo(map)
+        L.control.zoom({ position: "bottomright" }).addTo(map)
+
+        map.on("click", async (event: any) => {
+          await selectLocation(event.latlng.lat, event.latlng.lng)
+        })
+
+        leafletMapRef.current = map
+        if (hasInitialPoint) {
+          moveLocationMarker(initialLatitude, initialLongitude)
+        }
+
+        setTimeout(() => map.invalidateSize(), 100)
+      })
+      .catch((error) => {
+        console.error("Error inicializando mapa:", error)
+        toast.error("No se pudo cargar el mapa")
+      })
+
+    return () => {
+      cancelled = true
+      if (leafletMapRef.current) {
+        leafletMapRef.current.remove()
+        leafletMapRef.current = null
+        locationMarkerRef.current = null
+      }
+    }
+  }, [locationModalOpen])
+
+  const searchLocationAddress = async () => {
+    const query = locationSearchQuery.trim()
+    if (query.length < 3) {
+      setLocationSearchResults([])
+      toast.error("Escribi al menos 3 caracteres para buscar")
+      return
+    }
+
+    setLocationSearching(true)
+    try {
+      const params = new URLSearchParams({
+        format: "jsonv2",
+        limit: "6",
+        addressdetails: "1",
+        q: query,
+      })
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`)
+      if (!response.ok) {
+        toast.error("No se pudo buscar la direccion")
+        return
+      }
+
+      const results = await response.json()
+      setLocationSearchResults(Array.isArray(results) ? results : [])
+      if (!Array.isArray(results) || results.length === 0) {
+        toast.error("No encontramos resultados para esa direccion")
+      }
+    } catch (error) {
+      console.error("Error buscando direccion:", error)
+      toast.error("No se pudo buscar la direccion")
+    } finally {
+      setLocationSearching(false)
+    }
+  }
+
+  const useCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      toast.error("El navegador no permite obtener la ubicacion actual")
+      return
+    }
+
+    setLocationDetecting(true)
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        void selectLocation(position.coords.latitude, position.coords.longitude)
+        setLocationDetecting(false)
+      },
+      () => {
+        toast.error("No se pudo obtener la ubicacion actual")
+        setLocationDetecting(false)
+      },
+      { enableHighAccuracy: true, timeout: 10000 },
+    )
+  }
+
+  useEffect(() => {
+    if (!attachmentMenuOpen) return
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!attachmentMenuRef.current?.contains(event.target as Node)) {
+        setAttachmentMenuOpen(false)
+      }
+    }
+
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => document.removeEventListener("mousedown", handleClickOutside)
+  }, [attachmentMenuOpen])
 
   const loadAgendaContacts = async () => {
     try {
@@ -755,6 +1080,67 @@ export default function ChatMain({
     }
   }
 
+  const validateLocationDraft = (draft: LocationDraft) => {
+    const latitude = Number(draft.latitude)
+    const longitude = Number(draft.longitude)
+
+    if (!draft.latitude.trim()) return "La latitud es obligatoria."
+    if (!Number.isFinite(latitude)) return "La latitud debe ser un numero valido."
+    if (latitude < -90 || latitude > 90) return "La latitud debe estar entre -90 y 90."
+    if (!draft.longitude.trim()) return "La longitud es obligatoria."
+    if (!Number.isFinite(longitude)) return "La longitud debe ser un numero valido."
+    if (longitude < -180 || longitude > 180) return "La longitud debe estar entre -180 y 180."
+
+    return ""
+  }
+
+  const sendLocationFromModal = async () => {
+    if (!chat || sendingLocation || readOnly) return
+    setLocationSubmitted(true)
+
+    const validationError = validateLocationDraft(locationDraft)
+    if (validationError) {
+      toast.error(validationError)
+      return
+    }
+
+    setSendingLocation(true)
+    try {
+      const res = await fetch(`${import.meta.env.VITE_APP_URL}/api/message/send-location`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chat.id,
+          latitude: Number(locationDraft.latitude),
+          longitude: Number(locationDraft.longitude),
+          name: locationDraft.name.trim(),
+          address: locationDraft.address.trim(),
+        }),
+      })
+
+      if (!res.ok) {
+        const raw = await res.text()
+        toast.error(raw || "No se pudo enviar la ubicacion")
+        return
+      }
+
+      saveLocationToHistory({
+        latitude: locationDraft.latitude,
+        longitude: locationDraft.longitude,
+        name: locationDraft.name.trim(),
+        address: locationDraft.address.trim(),
+      })
+      setLocationModalOpen(false)
+      setLocationDraft(emptyLocationDraft)
+      setLocationSubmitted(false)
+    } catch (error) {
+      console.error("Error enviando ubicacion:", error)
+      toast.error("No se pudo enviar la ubicacion")
+    } finally {
+      setSendingLocation(false)
+    }
+  }
+
   const contactDraftDisplayName = contactDraft.formatted_name?.trim() || [contactDraft.first_name, contactDraft.last_name].filter(Boolean).join(" ").trim()
   const contactDraftPhone = normalizeContactPhone(contactDraft.phone ?? "")
   const contactDraftIsFromAgenda = Boolean(contactDraft.id)
@@ -773,6 +1159,7 @@ export default function ChatMain({
         : shouldShowContactPhoneError && contactDraftPhoneDigits.length > 15
           ? "El teléfono no puede superar los 15 dígitos."
       : ""
+  const locationDraftError = locationSubmitted ? validateLocationDraft(locationDraft) : ""
 
   const mediaRules: Record<PendingMedia["type"], { extensions: string[]; mimes: string[]; maxBytes: number; hint: string }> = {
     image: {
@@ -1096,6 +1483,54 @@ export default function ChatMain({
     return target.includes(".pdf")
   }
 
+  const ChatMessagesLoader = () => (
+    <div className="flex h-full min-h-[360px] flex-col justify-end gap-5 px-2 py-4">
+      <div className="mx-auto mb-auto mt-2 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-500 shadow-sm">
+        <span className="relative flex h-2 w-2">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#013765]/50" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-[#013765]" />
+        </span>
+        Cargando conversacion
+      </div>
+
+      {[
+        { side: "left", width: "w-[260px]", lines: ["w-44", "w-28"] },
+        { side: "right", width: "w-[330px]", lines: ["w-56", "w-36"] },
+        { side: "left", width: "w-[300px]", lines: ["w-52", "w-40", "w-24"] },
+        { side: "right", width: "w-[220px]", lines: ["w-32", "w-20"] },
+      ].map((item, index) => (
+        <div
+          key={`${item.side}-${index}`}
+          className={cn("flex items-start gap-3", item.side === "right" ? "justify-end" : "justify-start")}
+        >
+          {item.side === "left" && (
+            <div className="h-8 w-8 shrink-0 animate-pulse rounded-full bg-[#2b5f90]/25" />
+          )}
+          <div
+            className={cn(
+              "rounded-2xl border p-3 shadow-sm",
+              item.width,
+              item.side === "right" ? "border-[#5f86aa]/40 bg-[#013765]/10" : "border-[#8eb0cf]/40 bg-[#2b5f90]/10",
+            )}
+          >
+            <div className="space-y-2">
+              {item.lines.map((line, lineIndex) => (
+                <div
+                  key={`${line}-${lineIndex}`}
+                  className={cn("h-3 animate-pulse rounded-full bg-slate-300/80", line)}
+                />
+              ))}
+            </div>
+            <div className="mt-3 h-2 w-12 animate-pulse rounded-full bg-slate-300/60" />
+          </div>
+          {item.side === "right" && (
+            <div className="h-8 w-8 shrink-0 animate-pulse rounded-full bg-[#013765]/25" />
+          )}
+        </div>
+      ))}
+    </div>
+  )
+
   const formatSeconds = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
     const secs = seconds % 60
@@ -1181,6 +1616,8 @@ export default function ChatMain({
         return "Nodo: Audio"
       case "contact":
         return "Nodo: Contacto"
+      case "location":
+        return "Nodo: Ubicación"
       case "handoff":
         return "Nodo: Handoff"
       default:
@@ -1251,6 +1688,80 @@ export default function ChatMain({
         title: "",
       }
     }
+  }
+
+  const getLocationCardData = (message: Message) => {
+    const rawBody = (message.body || "").trim()
+
+    try {
+      const parsed = JSON.parse(rawBody)
+      const latitude = Number(parsed?.latitude)
+      const longitude = Number(parsed?.longitude)
+
+      return {
+        latitude,
+        longitude,
+        name: String(parsed?.name ?? "").trim(),
+        address: String(parsed?.address ?? "").trim(),
+        isValid: Number.isFinite(latitude) && Number.isFinite(longitude),
+      }
+    } catch {
+      return {
+        latitude: Number.NaN,
+        longitude: Number.NaN,
+        name: rawBody.replace(/^\[?Ubicaci[oó]n\]?\s*/i, "").trim(),
+        address: "",
+        isValid: false,
+      }
+    }
+  }
+
+  const LocationMessageMap = ({ latitude, longitude }: { latitude: number; longitude: number }) => {
+    const mapRef = useRef<HTMLDivElement | null>(null)
+
+    useEffect(() => {
+      if (!mapRef.current) return
+
+      let cancelled = false
+      let map: any = null
+
+      ensureLeaflet()
+        .then((L) => {
+          if (cancelled || !mapRef.current) return
+
+          map = L.map(mapRef.current, {
+            attributionControl: false,
+            zoomControl: false,
+            dragging: false,
+            scrollWheelZoom: false,
+            doubleClickZoom: false,
+            boxZoom: false,
+            keyboard: false,
+            touchZoom: false,
+          }).setView([latitude, longitude], 15)
+
+          L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map)
+          setTimeout(() => map?.invalidateSize?.(), 80)
+        })
+        .catch((error) => {
+          console.error("Error cargando mini mapa:", error)
+        })
+
+      return () => {
+        cancelled = true
+        map?.remove?.()
+      }
+    }, [latitude, longitude])
+
+    return (
+      <div className="relative isolate h-40 w-full overflow-hidden bg-slate-200">
+        <div ref={mapRef} className="pointer-events-none h-full w-full" />
+        <span className="pointer-events-none absolute inset-0 z-[900] bg-gradient-to-b from-transparent via-transparent to-black/10" />
+        <span className="pointer-events-none absolute left-1/2 top-1/2 z-[910] flex h-10 w-10 -translate-x-1/2 -translate-y-full items-center justify-center rounded-full bg-[#013765] text-white shadow-lg ring-4 ring-white">
+          <MapPin className="h-5 w-5 fill-current" />
+        </span>
+      </div>
+    )
   }
 
   const ContactPreviewCard = ({ contact }: { contact: NonNullable<PreviewMedia["contact"]> }) => (
@@ -1477,6 +1988,64 @@ export default function ChatMain({
       )
     }
 
+    if (type === "location") {
+      const locationData = getLocationCardData(message)
+      const label = locationData.name || locationData.address || "Ubicacion"
+      const mapsUrl = locationData.isValid
+        ? `https://www.google.com/maps?q=${locationData.latitude},${locationData.longitude}`
+        : null
+
+  return (
+        <div className="w-full overflow-hidden bg-slate-100 text-left">
+          {locationData.isValid ? (
+            <a
+              href={mapsUrl ?? undefined}
+              target="_blank"
+              rel="noreferrer"
+              className="group block w-full overflow-hidden bg-slate-200"
+              onClick={(event) => event.stopPropagation()}
+              title="Abrir ubicacion"
+            >
+              <LocationMessageMap latitude={locationData.latitude} longitude={locationData.longitude} />
+            </a>
+          ) : (
+            <div className="flex h-28 items-center justify-center bg-slate-200 text-[#013765]">
+              <MapPin className="h-8 w-8" />
+            </div>
+          )}
+
+          <div className="flex items-start gap-3 px-3 py-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-[#013765] shadow-sm">
+              <MapPin className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="line-clamp-1 text-sm font-semibold text-slate-900">{label}</p>
+              {locationData.address && locationData.address !== label ? (
+                <p className="mt-0.5 line-clamp-2 text-xs font-medium leading-relaxed text-slate-600">{locationData.address}</p>
+              ) : null}
+              {locationData.isValid ? (
+                <p className="mt-1 truncate text-[11px] font-medium text-slate-500">
+                  {locationData.latitude.toFixed(6)}, {locationData.longitude.toFixed(6)}
+                </p>
+              ) : null}
+            </div>
+            {mapsUrl ? (
+              <a
+                href={mapsUrl}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(event) => event.stopPropagation()}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-[#013765] shadow-sm transition-colors hover:bg-slate-50"
+                title="Abrir en Maps"
+              >
+                <ExternalLink className="h-4 w-4" />
+              </a>
+            ) : null}
+          </div>
+        </div>
+      )
+    }
+
     // Texto por defecto
 
   return (
@@ -1586,9 +2155,7 @@ export default function ChatMain({
       <div className="relative flex-1 min-h-0">
         <div ref={messagesContainerRef} className="h-full overflow-y-auto custom-scrollbar p-4">
         {loading ? (
-          <p className="text-sm text-muted-foreground text-center">
-            Cargando mensajes...
-          </p>
+          <ChatMessagesLoader />
         ) : (
           <div className="space-y-4">
             {messages.map((message, index) => {
@@ -1605,7 +2172,8 @@ export default function ChatMain({
               const isAudio = message.message_type === "audio"
               const isDocument = message.message_type === "document"
               const isContactCard = message.message_type === "contacts" || message.bot_node_type === "contact"
-              const isMediaCard = isVisualMedia || isAudio || isDocument || isContactCard
+              const isLocationCard = message.message_type === "location"
+              const isMediaCard = isVisualMedia || isAudio || isDocument || isContactCard || isLocationCard
               const isBotMessage = message.sender === "user" && message.sender_subtype === "bot"
               const isOperatorMessage = message.sender === "user" && !isBotMessage
               const operatorTooltip = isOperatorMessage
@@ -1651,11 +2219,16 @@ export default function ChatMain({
                       className={cn(
                         "min-w-0 overflow-hidden",
                         isMediaCard
-                          ? "inline-flex w-[min(420px,70vw)] flex-col rounded-xl shadow-sm"
+                          ? "inline-flex w-[min(420px,70vw)] flex-col rounded-xl border shadow-sm"
                           : "max-w-[70%] rounded-lg px-4 py-2",
                         message.sender === "user"
                           ? (isBotMessage ? "text-white bg-slate-600" : "text-white bg-[#013765]")
                           : "text-white bg-[#2b5f90]",
+                        isMediaCard && (
+                          message.sender === "user"
+                            ? (isBotMessage ? "border-slate-300/70" : "border-[#5f86aa]/70")
+                            : "border-[#8eb0cf]/70"
+                        ),
                       )}
                     >
                       {renderMessageContent(message)}
@@ -1757,7 +2330,7 @@ export default function ChatMain({
             onChange={handleFileSelected}
           />
 
-          <div className="relative">
+          <div ref={attachmentMenuRef} className="relative">
             <Button
               type="button"
               variant="outline"
@@ -1773,7 +2346,7 @@ export default function ChatMain({
             </Button>
 
             {attachmentMenuOpen && !readOnly && chat && (
-              <div className="absolute bottom-14 left-0 z-30 w-56 overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+              <div className="absolute bottom-14 left-0 z-[9997] w-56 overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
                 <button
                   type="button"
                   onClick={() => handlePickFile("image/jpeg,image/png,image/webp,video/mp4,video/3gpp,.jpg,.jpeg,.png,.webp,.mp4,.3gp")}
@@ -1796,14 +2369,13 @@ export default function ChatMain({
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleUnavailableAttachment("Ubicacion")}
-                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-400 transition-colors hover:bg-slate-50"
+                  onClick={openLocationModal}
+                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100"
                 >
                   <span className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
                     <MapPin className="h-4 w-4" />
                   </span>
                   <span className="flex-1">Ubicacion</span>
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Luego</span>
                 </button>
                 <button
                   type="button"
@@ -1814,28 +2386,6 @@ export default function ChatMain({
                     <User className="h-4 w-4" />
                   </span>
                   <span className="flex-1">Contacto</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleUnavailableAttachment("Encuesta")}
-                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-400 transition-colors hover:bg-slate-50"
-                >
-                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-amber-100 text-amber-700">
-                    <MessageSquare className="h-4 w-4" />
-                  </span>
-                  <span className="flex-1">Encuesta</span>
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Luego</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleUnavailableAttachment("Evento")}
-                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-400 transition-colors hover:bg-slate-50"
-                >
-                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-rose-100 text-rose-700">
-                    <Clock3 className="h-4 w-4" />
-                  </span>
-                  <span className="flex-1">Evento</span>
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Luego</span>
                 </button>
                 <div className="mt-1 border-t border-slate-100 px-3 pt-2 text-[10px] leading-4 text-slate-500">
                   WhatsApp acepta imagen hasta 5 MB, video/audio hasta 16 MB y documentos hasta 100 MB.
@@ -1982,6 +2532,220 @@ export default function ChatMain({
           </Button>
         </div>
       </div>
+
+      {locationModalOpen && (
+        <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-5xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">Enviar ubicacion</h3>
+                <p className="text-xs text-slate-500">Buscá una dirección o marcá el punto directamente en el mapa.</p>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 rounded-xl border border-gray-300 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                onClick={() => setLocationModalOpen(false)}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="grid max-h-[75vh] gap-0 overflow-y-auto md:grid-cols-[360px_1fr]">
+              <div className="border-b border-slate-200 bg-slate-50 p-5 md:border-b-0 md:border-r">
+                <div>
+                  <label className="text-xs font-semibold text-slate-600">Buscar direccion</label>
+                  <div className="mt-1 flex gap-2">
+                    <div className="relative min-w-0 flex-1">
+                      <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                      <Input
+                        value={locationSearchQuery}
+                        onChange={(event) => setLocationSearchQuery(event.target.value)}
+                        autoComplete="off"
+                        name="location_search_query"
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault()
+                            void searchLocationAddress()
+                          }
+                        }}
+                        placeholder="Ej: Plaza Independencia, Mendoza"
+                        className="pl-9"
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      onClick={() => void searchLocationAddress()}
+                      disabled={locationSearching}
+                      className="bg-[#013765] text-white hover:bg-[#012e54]"
+                    >
+                      {locationSearching ? "Buscando..." : "Buscar"}
+                    </Button>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={useCurrentLocation}
+                    disabled={locationDetecting}
+                    className="mt-2 w-full border-slate-300 bg-white text-[#013765] hover:bg-slate-100"
+                  >
+                    <MapPin className="mr-2 h-4 w-4" />
+                    {locationDetecting ? "Obteniendo ubicacion..." : "Usar mi ubicacion actual"}
+                  </Button>
+                </div>
+
+                {locationSearchResults.length > 0 && (
+                  <div className="mt-3 max-h-[440px] space-y-1 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+                    {locationSearchResults.map((result) => (
+                      <button
+                        key={result.place_id}
+                        type="button"
+                        onClick={() => {
+                          const latitude = Number(result.lat)
+                          const longitude = Number(result.lon)
+                          if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return
+                          void selectLocation(
+                            latitude,
+                            longitude,
+                            result.name || result.display_name.split(",")[0],
+                            result.display_name,
+                            false,
+                          )
+                        }}
+                        className="flex w-full items-start gap-2 rounded-xl px-3 py-2 text-left transition-colors hover:bg-slate-100"
+                      >
+                        <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-[#013765]" />
+                        <span className="line-clamp-2 text-xs font-medium text-slate-700">{result.display_name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {locationHistory.length > 0 && (
+                  <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+                    <div className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Ubicaciones recientes
+                    </div>
+                    <div className="max-h-[220px] space-y-1 overflow-y-auto">
+                      {locationHistory.map((item) => (
+                        <button
+                          key={`${item.id}-${item.saved_at}`}
+                          type="button"
+                          onClick={() => {
+                            const latitude = Number(item.latitude)
+                            const longitude = Number(item.longitude)
+                            if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return
+                            void selectLocation(latitude, longitude, item.name, item.address, false)
+                          }}
+                          className="flex w-full items-start gap-2 rounded-xl px-3 py-2 text-left transition-colors hover:bg-slate-100"
+                        >
+                          <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-[#013765]" />
+                          <span className="min-w-0">
+                            <span className="block truncate text-xs font-semibold text-slate-800">
+                              {item.name || "Ubicacion"}
+                            </span>
+                            <span className="line-clamp-2 text-[11px] font-medium leading-relaxed text-slate-500">
+                              {item.address || `${item.latitude}, ${item.longitude}`}
+                            </span>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-4 p-5">
+                <div className="relative h-[380px] overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-inner xl:h-[430px]">
+                  <div ref={locationMapRef} className="h-full w-full" />
+                  <div className="pointer-events-none absolute left-3 top-3 rounded-xl bg-white/95 px-3 py-2 text-xs font-medium text-slate-600 shadow-sm">
+                    Click en el mapa para seleccionar la ubicacion
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-[#013765] shadow-sm">
+                      <MapPin className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-900">
+                        {locationDraft.name.trim() || "Nombre del lugar"}
+                      </p>
+                      <p className="line-clamp-2 text-xs font-medium leading-relaxed text-slate-500">
+                        {locationDraft.address.trim() || "Direccion opcional"}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-slate-600">Nombre del lugar</label>
+                  <Input
+                    value={locationDraft.name}
+                    onChange={(event) => setLocationDraft((current) => ({ ...current, name: event.target.value }))}
+                    placeholder="Ej: Oficina central"
+                    className="mt-1"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-slate-600">Direccion</label>
+                  <textarea
+                    value={locationDraft.address}
+                    onChange={(event) => setLocationDraft((current) => ({ ...current, address: event.target.value }))}
+                    autoComplete="off"
+                    name="location_address"
+                    placeholder="Ej: Av. Siempre Viva 742"
+                    rows={2}
+                    className="mt-1 w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
+                  />
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600">Latitud</label>
+                    <Input
+                      value={locationDraft.latitude}
+                      readOnly
+                      placeholder="Seleccioná en el mapa"
+                      className="mt-1 bg-slate-50"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600">Longitud</label>
+                    <Input
+                      value={locationDraft.longitude}
+                      readOnly
+                      placeholder="Seleccioná en el mapa"
+                      className="mt-1 bg-slate-50"
+                    />
+                  </div>
+                </div>
+
+                {locationDraftError ? (
+                  <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
+                    {locationDraftError}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              <Button variant="outline" onClick={() => setLocationModalOpen(false)}>
+                Cancelar
+              </Button>
+              <Button
+                onClick={sendLocationFromModal}
+                disabled={sendingLocation}
+                className="bg-[#013765] text-white hover:bg-[#012e54]"
+              >
+                {sendingLocation ? "Enviando..." : "Enviar ubicacion"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {contactModalOpen && (
         <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">

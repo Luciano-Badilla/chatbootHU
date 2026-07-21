@@ -39,6 +39,7 @@ Route::middleware($sessionAuthenticated)->group(function () {
     Route::post('/message/send', [WhatsAppController::class, 'sendMessage']);
     Route::post('/message/send-media', [WhatsAppController::class, 'sendMedia']);
     Route::post('/message/send-contact', [WhatsAppController::class, 'sendContact']);
+    Route::post('/message/send-location', [WhatsAppController::class, 'sendLocation']);
     Route::post('/chats/{chat}/bot', [WhatsAppController::class, 'updateBotStatus'])->middleware('permission:can_toggle_bot');
     Route::post('/chats/{chat}/operator', [ChatController::class, 'updateOperator'])->middleware('permission:can_assign_chats');
     Route::get('/chats/{chat}/media', [ChatMediaController::class, 'index']);

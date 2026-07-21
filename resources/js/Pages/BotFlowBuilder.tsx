@@ -4,7 +4,7 @@ import { createPortal } from "react-dom"
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { usePage } from "@inertiajs/react"
 import { toast } from "sonner"
-import { Plus, RefreshCcw, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp, ArrowLeft, PanelLeft, Settings2, X, ArrowDown, InfoIcon, FileText, AudioLines, ImageIcon, Video, Contact } from "lucide-react"
+import { Plus, RefreshCcw, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp, ArrowLeft, PanelLeft, Settings2, X, ArrowDown, InfoIcon, FileText, AudioLines, ImageIcon, Video, Contact, MapPin } from "lucide-react"
 import {
   applyNodeChanges,
   ReactFlow,
@@ -44,7 +44,7 @@ import {
 import { cn } from "shadcn/lib/utils"
 import { Badge } from "shadcn/components/ui/badge"
 
-type NodeType = "text" | "buttons" | "list" | "input" | "handoff" | "person_lookup" | "image" | "document" | "video" | "audio" | "contact"
+type NodeType = "text" | "buttons" | "list" | "input" | "handoff" | "person_lookup" | "image" | "document" | "video" | "audio" | "contact" | "location"
 
 interface BotFlow {
   id: number
@@ -100,6 +100,8 @@ interface CanvasNodeData extends Record<string, unknown> {
   audioPreviewUrl?: string | null
   documentPreviewUrl?: string | null
   mediaDisplayName?: string | null
+  locationLatitude?: number | null
+  locationLongitude?: number | null
   type: NodeType
   typeLabel: string
   isStart: boolean
@@ -120,6 +122,78 @@ interface CanvasNodeData extends Record<string, unknown> {
   onToggleAutoAdvance: () => void
   onRemoveConnection: (handleId: string) => void
   deleting: boolean
+}
+
+function NodeLocationPreviewMap({ latitude, longitude }: { latitude: number; longitude: number }) {
+  const mapRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!mapRef.current) return
+
+    let cancelled = false
+    let map: any = null
+
+    const win = window as Window & { L?: any; __leafletLoading?: Promise<any> }
+    const loadLeaflet = () => {
+      if (win.L) return Promise.resolve(win.L)
+      if (win.__leafletLoading) return win.__leafletLoading
+
+      win.__leafletLoading = new Promise((resolve, reject) => {
+        if (!document.querySelector('link[data-leaflet="true"]')) {
+          const link = document.createElement("link")
+          link.rel = "stylesheet"
+          link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          link.dataset.leaflet = "true"
+          document.head.appendChild(link)
+        }
+
+        const script = document.createElement("script")
+        script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        script.async = true
+        script.onload = () => win.L ? resolve(win.L) : reject(new Error("Leaflet no disponible"))
+        script.onerror = () => reject(new Error("No se pudo cargar Leaflet"))
+        document.head.appendChild(script)
+      })
+
+      return win.__leafletLoading
+    }
+
+    loadLeaflet()
+      .then((L) => {
+        if (cancelled || !mapRef.current) return
+
+        map = L.map(mapRef.current, {
+          attributionControl: false,
+          zoomControl: false,
+          dragging: false,
+          scrollWheelZoom: false,
+          doubleClickZoom: false,
+          boxZoom: false,
+          keyboard: false,
+          touchZoom: false,
+        }).setView([latitude, longitude], 15)
+
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map)
+        setTimeout(() => map?.invalidateSize?.(), 80)
+      })
+      .catch((error) => {
+        console.error("Error cargando preview de ubicación:", error)
+      })
+
+    return () => {
+      cancelled = true
+      map?.remove?.()
+    }
+  }, [latitude, longitude])
+
+  return (
+    <div className="relative isolate h-28 w-full overflow-hidden bg-slate-100">
+      <div ref={mapRef} className="pointer-events-none h-full w-full" />
+      <span className="pointer-events-none absolute left-1/2 top-1/2 z-[910] flex h-9 w-9 -translate-x-1/2 -translate-y-full items-center justify-center rounded-full bg-[#013765] text-white shadow-lg ring-4 ring-white">
+        <MapPin className="h-4 w-4 fill-current" />
+      </span>
+    </div>
+  )
 }
 
 const branchToneCycle = ["info", "success", "warning", "danger"] as const
@@ -468,6 +542,25 @@ const CanvasBotNode = memo(function CanvasBotNode({ data }: NodeProps<FlowNode<C
               </div>
             </div>
           </div>
+        ) : data.type === "location" ? (
+          <div className="mt-3 overflow-hidden rounded-xl bg-slate-50 text-[11px] leading-relaxed text-slate-600">
+            {Number.isFinite(data.locationLatitude) && Number.isFinite(data.locationLongitude) ? (
+              <NodeLocationPreviewMap latitude={Number(data.locationLatitude)} longitude={Number(data.locationLongitude)} />
+            ) : null}
+            <div className="flex items-center gap-3 bg-slate-100 px-3 py-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-[#013765] shadow-sm">
+                <MapPin className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="truncate text-xs font-semibold text-slate-800">
+                  {data.preview || "Ubicación sin configurar"}
+                </p>
+                <p className="mt-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                  Ubicación
+                </p>
+              </div>
+            </div>
+          </div>
         ) : (
           <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-600">
             {data.preview || "Sin mensaje configurado."}
@@ -641,6 +734,14 @@ const validateContactSettings = (settings: any) => {
   }
 }
 
+interface LocationSearchResult {
+  place_id: number | string
+  display_name: string
+  lat: string
+  lon: string
+  name?: string
+}
+
 const getNodeBodyMaxLength = (type: NodeType) =>
   type === "buttons" || type === "list" || type === "image" || type === "video" || type === "document"
     ? INTERACTIVE_MESSAGE_MAX
@@ -668,6 +769,8 @@ const getNodeTypeLabel = (type: NodeType) => {
       return "Audio"
     case "contact":
       return "Contacto"
+    case "location":
+      return "Ubicación"
     case "handoff":
       return "Desactivar bot y pasar a operador"
     default:
@@ -682,6 +785,7 @@ const nodeTypeOptions: NodeType[] = [
   "video",
   "audio",
   "contact",
+  "location",
   "buttons",
   "list",
   "input",
@@ -716,6 +820,29 @@ const isMediaNodeType = (type: NodeType) => {
 
 const isContactNodeType = (type: NodeType) => {
   return type === "contact"
+}
+
+const isLocationNodeType = (type: NodeType) => {
+  return type === "location"
+}
+
+const validateLocationSettings = (settings: any) => {
+  const latitudeRaw = String(settings?.latitude ?? "").trim()
+  const longitudeRaw = String(settings?.longitude ?? "").trim()
+  const latitude = Number(settings?.latitude)
+  const longitude = Number(settings?.longitude)
+  const hasLatitude = latitudeRaw.length > 0
+  const hasLongitude = longitudeRaw.length > 0
+
+  return {
+    latitude,
+    longitude,
+    hasLatitude,
+    hasLongitude,
+    hasValidLatitude: hasLatitude && Number.isFinite(latitude) && latitude >= -90 && latitude <= 90,
+    hasValidLongitude: hasLongitude && Number.isFinite(longitude) && longitude >= -180 && longitude <= 180,
+    isValid: hasLatitude && hasLongitude && Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 && Number.isFinite(longitude) && longitude >= -180 && longitude <= 180,
+  }
 }
 
 const serializeNodeSnapshot = (node: BotNode | null) => {
@@ -760,6 +887,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const [agendaContactSelectOpen, setAgendaContactSelectOpen] = useState(false)
   const [contactNodeSubmitted, setContactNodeSubmitted] = useState(false)
   const [contactNodeTouchedFields, setContactNodeTouchedFields] = useState<Record<string, boolean>>({})
+  const [locationSearchQuery, setLocationSearchQuery] = useState("")
+  const [locationSearchResults, setLocationSearchResults] = useState<LocationSearchResult[]>([])
+  const [locationSearching, setLocationSearching] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<
     | { type: "flow"; id: number; name: string }
     | { type: "node"; id: number; name: string }
@@ -791,6 +921,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const lastSavedNodeSnapshotRef = useRef("")
   const messageTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const mediaFileInputRef = useRef<HTMLInputElement | null>(null)
+  const locationNodeMapRef = useRef<HTMLDivElement | null>(null)
+  const locationNodeLeafletMapRef = useRef<any | null>(null)
+  const locationNodeMarkerRef = useRef<any | null>(null)
   const templateVariableOptionRefs = useRef<Array<HTMLButtonElement | null>>([])
 
   // Flow seleccionado
@@ -934,6 +1067,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     }
     if (editNode.type === "contact") {
       return validateContactSettings(editNode.settings ?? {}).isValid
+    }
+    if (editNode.type === "location") {
+      return validateLocationSettings(editNode.settings ?? {}).isValid
     }
 
     return true
@@ -1542,6 +1678,146 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     } as T
   }
 
+  const ensureLeaflet = async () => {
+    const win = window as Window & { L?: any; __leafletLoading?: Promise<any> }
+    if (win.L) return win.L
+    if (win.__leafletLoading) return win.__leafletLoading
+
+    win.__leafletLoading = new Promise((resolve, reject) => {
+      if (!document.querySelector('link[data-leaflet="true"]')) {
+        const link = document.createElement("link")
+        link.rel = "stylesheet"
+        link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        link.dataset.leaflet = "true"
+        document.head.appendChild(link)
+      }
+
+      const script = document.createElement("script")
+      script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      script.async = true
+      script.onload = () => win.L ? resolve(win.L) : reject(new Error("Leaflet no disponible"))
+      script.onerror = () => reject(new Error("No se pudo cargar Leaflet"))
+      document.head.appendChild(script)
+    })
+
+    return win.__leafletLoading
+  }
+
+  const updateLocationNodeSettings = (patch: Partial<{ name: string; address: string; latitude: string; longitude: string }>) => {
+    setEditNode((prev) =>
+      prev
+        ? {
+          ...prev,
+          settings: {
+            ...(prev.settings ?? {}),
+            ...patch,
+          },
+        }
+        : prev,
+    )
+  }
+
+  const moveLocationNodeMarker = (latitude: number, longitude: number, zoom = 16) => {
+    const map = locationNodeLeafletMapRef.current
+    const L = (window as Window & { L?: any }).L
+    if (!map || !L) return
+
+    if (!locationNodeMarkerRef.current) {
+      locationNodeMarkerRef.current = L.marker([latitude, longitude], { draggable: true }).addTo(map)
+      locationNodeMarkerRef.current.on("dragend", async (event: any) => {
+        const position = event.target.getLatLng()
+        await selectLocationForNode(position.lat, position.lng)
+      })
+    } else {
+      locationNodeMarkerRef.current.setLatLng([latitude, longitude])
+    }
+
+    map.flyTo([latitude, longitude], Math.max(map.getZoom(), zoom), { duration: 0.35 })
+  }
+
+  const reverseLocationForNode = async (latitude: number, longitude: number) => {
+    try {
+      const params = new URLSearchParams({
+        format: "jsonv2",
+        lat: String(latitude),
+        lon: String(longitude),
+      })
+      const response = await fetch(`https://nominatim.openstreetmap.org/reverse?${params.toString()}`)
+      if (!response.ok) return null
+      const data = await response.json()
+      return {
+        name: String(data?.name ?? "").trim(),
+        address: String(data?.display_name ?? "").trim(),
+      }
+    } catch (error) {
+      console.error("Error buscando direccion inversa:", error)
+      return null
+    }
+  }
+
+  const selectLocationForNode = async (
+    latitude: number,
+    longitude: number,
+    name?: string,
+    address?: string,
+    shouldReverse = true,
+  ) => {
+    const roundedLatitude = Number(latitude.toFixed(6))
+    const roundedLongitude = Number(longitude.toFixed(6))
+    let nextName = name?.trim() ?? ""
+    let nextAddress = address?.trim() ?? ""
+
+    moveLocationNodeMarker(roundedLatitude, roundedLongitude)
+
+    if (shouldReverse && (!nextName || !nextAddress)) {
+      const reversed = await reverseLocationForNode(roundedLatitude, roundedLongitude)
+      nextName = nextName || reversed?.name || ""
+      nextAddress = nextAddress || reversed?.address || ""
+    }
+
+    updateLocationNodeSettings({
+      latitude: String(roundedLatitude),
+      longitude: String(roundedLongitude),
+      name: nextName,
+      address: nextAddress,
+    })
+  }
+
+  const searchLocationForNode = async () => {
+    const query = locationSearchQuery.trim()
+    if (query.length < 3) {
+      setLocationSearchResults([])
+      toast.error("Escribí al menos 3 caracteres para buscar")
+      return
+    }
+
+    setLocationSearching(true)
+    try {
+      const params = new URLSearchParams({
+        format: "jsonv2",
+        limit: "6",
+        addressdetails: "1",
+        q: query,
+      })
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`)
+      if (!response.ok) {
+        toast.error("No se pudo buscar la dirección")
+        return
+      }
+
+      const results = await response.json()
+      setLocationSearchResults(Array.isArray(results) ? results : [])
+      if (!Array.isArray(results) || results.length === 0) {
+        toast.error("No encontramos resultados para esa dirección")
+      }
+    } catch (error) {
+      console.error("Error buscando direccion:", error)
+      toast.error("No se pudo buscar la dirección")
+    } finally {
+      setLocationSearching(false)
+    }
+  }
+
   const nextNodeOptions = useMemo(() => {
     return nodes
       .filter((n) => n.id !== editNode?.id)
@@ -1554,6 +1830,76 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const nodesById = useMemo(() => {
     return new Map(nodes.map((n) => [n.id, n]))
   }, [nodes])
+
+  useEffect(() => {
+    if (editNode?.type !== "location") {
+      if (locationNodeLeafletMapRef.current) {
+        locationNodeLeafletMapRef.current.remove()
+        locationNodeLeafletMapRef.current = null
+        locationNodeMarkerRef.current = null
+      }
+      setLocationSearchResults([])
+      setLocationSearchQuery("")
+      return
+    }
+
+    let cancelled = false
+
+    ensureLeaflet()
+      .then((L) => {
+        if (cancelled || !locationNodeMapRef.current || locationNodeLeafletMapRef.current) return
+
+        const latitudeRaw = String(editNode.settings?.latitude ?? "").trim()
+        const longitudeRaw = String(editNode.settings?.longitude ?? "").trim()
+        const latitude = Number(latitudeRaw)
+        const longitude = Number(longitudeRaw)
+        const hasPoint =
+          latitudeRaw.length > 0 &&
+          longitudeRaw.length > 0 &&
+          Number.isFinite(latitude) &&
+          Number.isFinite(longitude)
+        const center = hasPoint ? [latitude, longitude] : [-32.889459, -68.845839]
+
+        const map = L.map(locationNodeMapRef.current, { zoomControl: false }).setView(center, hasPoint ? 16 : 12)
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        }).addTo(map)
+        L.control.zoom({ position: "bottomright" }).addTo(map)
+        map.on("click", async (event: any) => {
+          await selectLocationForNode(event.latlng.lat, event.latlng.lng)
+        })
+
+        locationNodeLeafletMapRef.current = map
+        if (hasPoint) {
+          moveLocationNodeMarker(latitude, longitude)
+        }
+        setTimeout(() => map.invalidateSize(), 120)
+      })
+      .catch((error) => {
+        console.error("Error inicializando mapa de ubicación:", error)
+        toast.error("No se pudo cargar el mapa")
+      })
+
+    return () => {
+      cancelled = true
+      if (locationNodeLeafletMapRef.current) {
+        locationNodeLeafletMapRef.current.remove()
+        locationNodeLeafletMapRef.current = null
+        locationNodeMarkerRef.current = null
+      }
+    }
+  }, [editNode?.id, editNode?.type])
+
+  useEffect(() => {
+    if (editNode?.type !== "location") return
+    const latitudeRaw = String(editNode.settings?.latitude ?? "").trim()
+    const longitudeRaw = String(editNode.settings?.longitude ?? "").trim()
+    if (!latitudeRaw || !longitudeRaw) return
+    const latitude = Number(latitudeRaw)
+    const longitude = Number(longitudeRaw)
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return
+    moveLocationNodeMarker(latitude, longitude)
+  }, [editNode?.settings?.latitude, editNode?.settings?.longitude, editNode?.type])
 
   const getNodeLabel = (nodeId: number | null | undefined) => {
     if (!nodeId) return null
@@ -1586,6 +1932,15 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       const phone = String(settings.phone ?? "").trim()
       const name = formattedName || [firstName, lastName].filter(Boolean).join(" ")
       return [name || "Contacto sin configurar", phone].filter(Boolean).join(" · ").slice(0, 90)
+    }
+
+    if (node.type === "location") {
+      const settings = node.settings ?? {}
+      const name = String(settings.name ?? "").trim()
+      const address = String(settings.address ?? "").trim()
+      const latitude = String(settings.latitude ?? "").trim()
+      const longitude = String(settings.longitude ?? "").trim()
+      return [name || address || "Ubicación sin configurar", latitude && longitude ? `${latitude}, ${longitude}` : ""].filter(Boolean).join(" · ").slice(0, 90)
     }
 
     if (node.type === "audio") {
@@ -1674,7 +2029,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         targetLabel: getNodeLabel(errorTargetId),
         tone: "danger",
       })
-    } else if (node.type === "text" || isMediaNodeType(node.type) || isContactNodeType(node.type) || (node.type === "input" && settings.response_mode !== "buttons" && settings.response_mode !== "list")) {
+    } else if (node.type === "text" || isMediaNodeType(node.type) || isContactNodeType(node.type) || isLocationNodeType(node.type) || (node.type === "input" && settings.response_mode !== "buttons" && settings.response_mode !== "list")) {
       const targetId = node.next_node_id ? Number(node.next_node_id) : null
       branches.push({
         id: `next-${node.id}`,
@@ -1758,7 +2113,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const handleToggleCanvasAutoAdvance = (nodeId: number) => {
     const node = nodesById.get(nodeId)
     if (!node) return
-    if (node.type !== "text" && !isMediaNodeType(node.type) && !isContactNodeType(node.type)) return
+    if (node.type !== "text" && !isMediaNodeType(node.type) && !isContactNodeType(node.type) && !isLocationNodeType(node.type)) return
 
     const nextValue = !Boolean(node.settings?.auto_advance)
     const nextSettings = {
@@ -1811,6 +2166,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           audioPreviewUrl: node.type === "audio" ? getMediaPreviewUrl(node) : null,
           documentPreviewUrl: node.type === "document" ? getMediaPreviewUrl(node) : null,
           mediaDisplayName: isMediaNodeType(node.type) ? getMediaDisplayName(node) : null,
+          locationLatitude: node.type === "location" && Number.isFinite(Number(node.settings?.latitude)) ? Number(node.settings?.latitude) : null,
+          locationLongitude: node.type === "location" && Number.isFinite(Number(node.settings?.longitude)) ? Number(node.settings?.longitude) : null,
           type: node.type,
           typeLabel: getNodeTypeLabel(node.type),
           isStart: selectedFlow?.start_node_id === node.id,
@@ -1821,11 +2178,12 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             node.type === "text" ||
             isMediaNodeType(node.type) ||
             isContactNodeType(node.type) ||
+            isLocationNodeType(node.type) ||
             node.type === "input" ||
             node.type === "person_lookup" ||
             node.type === "buttons" ||
             node.type === "list",
-          canToggleAutoAdvance: !isReadOnly && (node.type === "text" || isMediaNodeType(node.type) || isContactNodeType(node.type)),
+          canToggleAutoAdvance: !isReadOnly && (node.type === "text" || isMediaNodeType(node.type) || isContactNodeType(node.type) || isLocationNodeType(node.type)),
           autoAdvanceEnabled: Boolean(node.settings?.auto_advance),
           sourceHandles:
             node.type === "person_lookup"
@@ -1863,7 +2221,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     tone: branch.tone ?? "default",
                     hasConnection: Boolean(branch.targetId),
                   }))
-                  : node.type === "text" || isMediaNodeType(node.type) || isContactNodeType(node.type) || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
+                  : node.type === "text" || isMediaNodeType(node.type) || isContactNodeType(node.type) || isLocationNodeType(node.type) || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
                     ? [{ id: "next", label: "Siguiente", tone: "default" as const, hasConnection: Boolean(node.next_node_id) }]
                     : [],
           deleting: deletingNodeId === node.id,
@@ -1913,7 +2271,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     : branch.tone === "danger"
                       ? "error"
                       : undefined
-                : node.type === "text" || isMediaNodeType(node.type) || isContactNodeType(node.type) || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
+                : node.type === "text" || isMediaNodeType(node.type) || isContactNodeType(node.type) || isLocationNodeType(node.type) || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
                   ? "next"
                   : undefined,
           label: branch.label === "Siguiente" ? undefined : branch.label,
@@ -1998,6 +2356,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       sourceNode.type === "text" ||
       isMediaNodeType(sourceNode.type) ||
       isContactNodeType(sourceNode.type) ||
+      isLocationNodeType(sourceNode.type) ||
       sourceNode.type === "input" ||
       sourceNode.type === "person_lookup" ||
       sourceNode.type === "buttons" ||
@@ -3554,6 +3913,171 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       )
     }
 
+    if (t === "location") {
+      const settings = ensureSettings<{
+        name: string
+        address: string
+        latitude: string
+        longitude: string
+      }>({
+        name: "",
+        address: "",
+        latitude: "",
+        longitude: "",
+      })
+
+      const update = (field: keyof typeof settings, value: string) => {
+        setEditNode((prev) =>
+          prev
+            ? {
+              ...prev,
+              settings: {
+                ...settings,
+                [field]: value,
+              },
+            }
+            : prev,
+        )
+      }
+
+      const validation = validateLocationSettings(settings)
+
+      return (
+        <div className="space-y-3">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+            Este nodo envía una ubicación de WhatsApp. La latitud debe estar entre -90 y 90, y la longitud entre -180 y 180.
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">
+              Buscar dirección
+            </label>
+            <div className="flex gap-2">
+              <Input
+                value={locationSearchQuery}
+                onChange={(e) => setLocationSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault()
+                    void searchLocationForNode()
+                  }
+                }}
+                autoComplete="off"
+                name="bot_node_location_search"
+                placeholder="Ej: Plaza Independencia, Mendoza"
+                className="text-xs"
+              />
+              <Button
+                type="button"
+                size="sm"
+                disabled={locationSearching}
+                onClick={() => void searchLocationForNode()}
+                className="bg-[#013765] text-xs text-white hover:bg-[#012e54]"
+              >
+                {locationSearching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Buscar"}
+              </Button>
+            </div>
+            {locationSearchResults.length > 0 ? (
+              <div className="mt-2 max-h-36 space-y-1 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
+                {locationSearchResults.map((result) => (
+                  <button
+                    key={result.place_id}
+                    type="button"
+                    onClick={() => {
+                      const latitude = Number(result.lat)
+                      const longitude = Number(result.lon)
+                      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return
+                      void selectLocationForNode(
+                        latitude,
+                        longitude,
+                        result.name || result.display_name.split(",")[0],
+                        result.display_name,
+                        false,
+                      )
+                    }}
+                    className="flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-slate-100"
+                  >
+                    <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#013765]" />
+                    <span className="line-clamp-2 text-slate-700">{result.display_name}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="relative h-56 overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
+            <div ref={locationNodeMapRef} className="h-full w-full" />
+            <div className="pointer-events-none absolute left-2 top-2 rounded-lg bg-white/95 px-2 py-1 text-[10px] font-medium text-slate-600 shadow-sm">
+              Click en el mapa para seleccionar
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">
+              Nombre del lugar
+            </label>
+            <Input
+              value={settings.name ?? ""}
+              onChange={(e) => update("name", e.target.value.slice(0, 1000))}
+              placeholder="Ej: Oficina central"
+              maxLength={1000}
+              className="text-xs"
+            />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">
+              Dirección
+            </label>
+            <Textarea
+              value={settings.address ?? ""}
+              onChange={(e) => update("address", e.target.value.slice(0, 1000))}
+              placeholder="Ej: Av. Siempre Viva 742"
+              maxLength={1000}
+              className="min-h-[72px] text-xs"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">
+                Latitud
+              </label>
+              <Input
+                value={settings.latitude ?? ""}
+                onChange={(e) => update("latitude", e.target.value.replace(",", ".").slice(0, 32))}
+                placeholder="-32.889459"
+                inputMode="decimal"
+                className="text-xs"
+              />
+              {settings.latitude && !validation.hasValidLatitude ? (
+                <p className="mt-1 text-[10px] font-medium text-red-600">
+                  La latitud debe estar entre -90 y 90.
+                </p>
+              ) : null}
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">
+                Longitud
+              </label>
+              <Input
+                value={settings.longitude ?? ""}
+                onChange={(e) => update("longitude", e.target.value.replace(",", ".").slice(0, 32))}
+                placeholder="-68.845839"
+                inputMode="decimal"
+                className="text-xs"
+              />
+              {settings.longitude && !validation.hasValidLongitude ? (
+                <p className="mt-1 text-[10px] font-medium text-red-600">
+                  La longitud debe estar entre -180 y 180.
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )
+    }
+
     if (isMediaNodeType(t)) {
       const settings = ensureSettings<{
         source_kind: "url" | "id"
@@ -3761,7 +4285,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     return null
   }
 
-  const isLinearType = (t: NodeType) => t === "text" || t === "input" || t === "person_lookup" || isMediaNodeType(t) || isContactNodeType(t)
+  const isLinearType = (t: NodeType) => t === "text" || t === "input" || t === "person_lookup" || isMediaNodeType(t) || isContactNodeType(t) || isLocationNodeType(t)
 
   const getBranchToneClass = (tone?: BranchTone) => {
     switch (tone) {
@@ -4439,8 +4963,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                     setEditNode((prev) => {
                                       if (!prev) return prev
 
-                                      const linear = val === "text" || val === "input" || val === "person_lookup" || isMediaNodeType(val) || isContactNodeType(val)
-                                      const supportsAutoAdvance = val === "text" || isMediaNodeType(val) || isContactNodeType(val)
+                                      const linear = val === "text" || val === "input" || val === "person_lookup" || isMediaNodeType(val) || isContactNodeType(val) || isLocationNodeType(val)
+                                      const supportsAutoAdvance = val === "text" || isMediaNodeType(val) || isContactNodeType(val) || isLocationNodeType(val)
 
                                       const cleanedSettings = (() => {
                                         const s = { ...(prev.settings ?? {}) }
@@ -4482,10 +5006,30 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                           }
                                         }
 
+                                        if (isLocationNodeType(val)) {
+                                          const keepExistingLocation = prev.type === val
+                                          return {
+                                            ...(s.canvas_position ? { canvas_position: s.canvas_position } : {}),
+                                            ...(s.auto_advance ? { auto_advance: s.auto_advance } : {}),
+                                            ...(s.auto_advance_delay_ms ? { auto_advance_delay_ms: s.auto_advance_delay_ms } : {}),
+                                            ...(s.auto_advance_max_hops ? { auto_advance_max_hops: s.auto_advance_max_hops } : {}),
+                                            name: keepExistingLocation ? (s.name ?? "") : "",
+                                            address: keepExistingLocation ? (s.address ?? "") : "",
+                                            latitude: keepExistingLocation ? (s.latitude ?? "") : "",
+                                            longitude: keepExistingLocation ? (s.longitude ?? "") : "",
+                                          }
+                                        }
+
                                         if (isMediaNodeType(prev.type)) {
                                           delete s.source_kind
                                           delete s.source
                                           delete s.filename
+                                        }
+                                        if (isLocationNodeType(prev.type)) {
+                                          delete s.name
+                                          delete s.address
+                                          delete s.latitude
+                                          delete s.longitude
                                         }
 
                                         return s
@@ -4521,7 +5065,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                             </div>
 
                             {/* Texto principal */}
-                            {!["audio", "contact"].includes(editNode.type) ? (
+                            {!["audio", "contact", "location"].includes(editNode.type) ? (
                             <div className="relative">
                               <div className="mb-1 flex items-center gap-2">
                                 <label className="text-xs block text-muted-foreground">
@@ -4704,7 +5248,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                               )}
 
                             {/* Auto-disparo */}
-                            {(editNode.type === "text" || isMediaNodeType(editNode.type) || isContactNodeType(editNode.type)) && (
+                            {(editNode.type === "text" || isMediaNodeType(editNode.type) || isContactNodeType(editNode.type) || isLocationNodeType(editNode.type)) && (
                               <div className="border rounded-lg p-3 bg-muted/20 space-y-2">
                                 <div className="flex items-center gap-2">
                                   <Checkbox

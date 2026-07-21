@@ -22,7 +22,8 @@ class ChatMediaController extends Controller
                             ->whereNotNull('media_url')
                             ->whereIn('message_type', ['image', 'video', 'audio', 'document']);
                     })
-                    ->orWhere('message_type', 'contacts');
+                    ->orWhere('message_type', 'contacts')
+                    ->orWhere('message_type', 'location');
             })
             ->orderByDesc('id')
             ->limit($limit)

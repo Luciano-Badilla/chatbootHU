@@ -173,6 +173,18 @@ class WhatsAppController extends Controller
                 $mediaName = $displayName;
                 break;
 
+            case 'location':
+                $messageType = 'location';
+                $location = is_array($messageData['location'] ?? null) ? $messageData['location'] : [];
+                $body = json_encode([
+                    'latitude' => isset($location['latitude']) ? (float) $location['latitude'] : null,
+                    'longitude' => isset($location['longitude']) ? (float) $location['longitude'] : null,
+                    'name' => $location['name'] ?? null,
+                    'address' => $location['address'] ?? null,
+                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                $mediaName = (string) ($location['name'] ?? $location['address'] ?? 'Ubicacion');
+                break;
+
             default:
                 $messageType = 'text';
                 $body = $body ?? ('[Mensaje tipo ' . $type . ']');
@@ -977,6 +989,138 @@ class WhatsAppController extends Controller
         return response()->json(['ok' => true, 'message' => $message]);
     }
 
+    public function sendLocation(Request $request)
+    {
+        $validated = $request->validate([
+            'chat_id' => 'required|integer|exists:chats,id',
+            'latitude' => 'required|numeric|between:-90,90',
+            'longitude' => 'required|numeric|between:-180,180',
+            'name' => 'nullable|string|max:1000',
+            'address' => 'nullable|string|max:1000',
+        ]);
+
+        $chat = Chat::with('contact')->findOrFail($validated['chat_id']);
+        $contact = $chat->contact;
+        $actor = $request->user();
+
+        if (!$contact || !$contact->whatsapp_id) {
+            return response()->json(['error' => 'Contacto sin whatsapp_id'], 422);
+        }
+
+        $location = [
+            'latitude' => (float) $validated['latitude'],
+            'longitude' => (float) $validated['longitude'],
+        ];
+        $name = trim((string) ($validated['name'] ?? ''));
+        $address = trim((string) ($validated['address'] ?? ''));
+
+        if ($name !== '') {
+            $location['name'] = mb_substr($name, 0, 1000);
+        }
+        if ($address !== '') {
+            $location['address'] = mb_substr($address, 0, 1000);
+        }
+
+        $payload = [
+            'messaging_product' => 'whatsapp',
+            'recipient_type' => 'individual',
+            'to' => $this->formatPhoneNumber($contact->whatsapp_id),
+            'type' => 'location',
+            'location' => $location,
+        ];
+
+        $url = 'https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages';
+        $response = Http::withToken($this->whatsappAccessToken())->post($url, $payload);
+
+        if ($response->failed()) {
+            Log::error('API Error (sendLocation): ' . $response->body(), [
+                'chat_id' => $chat->id,
+                'payload' => $payload,
+            ]);
+
+            $this->auditService->recordMessageAction(
+                'location_send_failed',
+                'Fallo al enviar ubicacion al chat',
+                $chat,
+                $actor,
+                null,
+                [
+                    'meta' => [
+                        'location' => $location,
+                        'error' => 'Error enviando ubicacion a WhatsApp',
+                    ],
+                ],
+            );
+
+            return response()->json(['error' => 'Error enviando ubicacion a WhatsApp'], 500);
+        }
+
+        $body = json_encode($location, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        $message = Message::create([
+            'chat_id' => $chat->id,
+            'sender' => 'user',
+            'sender_subtype' => 'operator',
+            'operator_name' => $actor?->name,
+            'bot_node_type' => null,
+            'interactive_options' => null,
+            'message_type' => 'location',
+            'body' => $body,
+            'status' => 'sent',
+            'whatsapp_message_id' => $response->json('messages.0.id'),
+        ]);
+
+        $this->auditService->recordMessageAction(
+            'location_sent',
+            'Envio ubicacion manual',
+            $chat,
+            $actor,
+            $message,
+            [
+                'meta' => [
+                    'location' => $location,
+                    'message_id' => $message->id,
+                ],
+            ],
+        );
+
+        $previewText = '[Ubicacion] ' . ($name !== '' ? $name : ($address !== '' ? $address : "{$location['latitude']}, {$location['longitude']}"));
+
+        try {
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_location_' . uniqid());
+            $mqtt->connect();
+
+            $mqtt->publish('sidebar/chat', json_encode([
+                'chat_id' => $chat->id,
+                'name' => $contact->name ?? 'Desconocido',
+                'lastMessage' => $previewText,
+                'timestamp' => $message->created_at->toIso8601String(),
+            ]), 0);
+
+            $mqtt->publish("chat/{$chat->id}", json_encode([
+                'chat_id' => $chat->id,
+                'message_id' => $message->id,
+                'sender' => $message->sender,
+                'sender_subtype' => $message->sender_subtype,
+                'operator_name' => $message->operator_name,
+                'bot_node_type' => $message->bot_node_type,
+                'interactive_options' => $message->interactive_options,
+                'body' => $message->body,
+                'message_type' => $message->message_type,
+                'media_url' => null,
+                'media_name' => null,
+                'status' => $message->status,
+                'timestamp' => $message->created_at?->toIso8601String(),
+            ]), 0);
+
+            $mqtt->disconnect();
+        } catch (MqttClientException $e) {
+            Log::error('MQTT Error (sendLocation): ' . $e->getMessage());
+        }
+
+        return response()->json(['ok' => true, 'message' => $message]);
+    }
+
     private function formatPhoneNumber($number)
     {
         if (strpos($number, '549') === 0) {
@@ -1435,6 +1579,7 @@ class WhatsAppController extends Controller
             case 'document':
             case 'video':
             case 'audio':
+            case 'location':
             case 'text':
                 if (in_array(mb_strtolower($text), ['menÃƒÂº', 'menu'], true)) {
                     $menuNode = BotNode::where('flow_id', $currentNode->flow_id)
@@ -1585,6 +1730,11 @@ class WhatsAppController extends Controller
 
         if ($node->type === 'contact') {
             $this->sendBotContactNode($chat, $node);
+            return;
+        }
+
+        if ($node->type === 'location') {
+            $this->sendBotLocationNode($chat, $node);
             return;
         }
 
@@ -1835,6 +1985,122 @@ class WhatsAppController extends Controller
             $mqtt->disconnect();
         } catch (MqttClientException $e) {
             Log::error('MQTT Error (sendBotContactNode): ' . $e->getMessage());
+        }
+    }
+
+    private function sendBotLocationNode(Chat $chat, BotNode $node): void
+    {
+        $contact = $chat->contact;
+        if (!$contact || !$contact->whatsapp_id) {
+            return;
+        }
+
+        $settings = $this->nodeSettings($node);
+        $latitudeRaw = trim($this->renderTemplate((string) ($settings['latitude'] ?? ''), $chat, $node));
+        $longitudeRaw = trim($this->renderTemplate((string) ($settings['longitude'] ?? ''), $chat, $node));
+        $latitudeNormalized = str_replace(',', '.', $latitudeRaw);
+        $longitudeNormalized = str_replace(',', '.', $longitudeRaw);
+        $latitude = (float) $latitudeNormalized;
+        $longitude = (float) $longitudeNormalized;
+        $name = trim($this->renderTemplate((string) ($settings['name'] ?? ''), $chat, $node));
+        $address = trim($this->renderTemplate((string) ($settings['address'] ?? ''), $chat, $node));
+
+        if (
+            $latitudeRaw === ''
+            || $longitudeRaw === ''
+            || !is_numeric($latitudeNormalized)
+            || !is_numeric($longitudeNormalized)
+            || $latitude < -90
+            || $latitude > 90
+            || $longitude < -180
+            || $longitude > 180
+        ) {
+            Log::warning('sendBotLocationNode: ubicacion invalida', [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'latitude' => $latitudeRaw,
+                'longitude' => $longitudeRaw,
+            ]);
+            return;
+        }
+
+        $locationPayload = [
+            'latitude' => $latitude,
+            'longitude' => $longitude,
+        ];
+
+        if ($name !== '') {
+            $locationPayload['name'] = mb_substr($name, 0, 1000);
+        }
+        if ($address !== '') {
+            $locationPayload['address'] = mb_substr($address, 0, 1000);
+        }
+
+        $payload = [
+            'messaging_product' => 'whatsapp',
+            'recipient_type' => 'individual',
+            'to' => $this->formatPhoneNumber($contact->whatsapp_id),
+            'type' => 'location',
+            'location' => $locationPayload,
+        ];
+
+        $url = 'https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages';
+        $response = Http::withToken($this->whatsappAccessToken())->post($url, $payload);
+
+        if ($response->failed()) {
+            Log::error('API Error (sendBotLocationNode): ' . $response->body(), [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'payload' => $payload,
+            ]);
+            throw new \RuntimeException("Error enviando ubicacion del nodo {$node->id} a WhatsApp");
+        }
+
+        $body = json_encode($locationPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $message = Message::create([
+            'chat_id' => $chat->id,
+            'sender' => 'user',
+            'sender_subtype' => 'bot',
+            'bot_node_type' => 'location',
+            'interactive_options' => [],
+            'message_type' => 'location',
+            'body' => $body,
+            'status' => 'sent',
+            'whatsapp_message_id' => $response->json('messages.0.id'),
+        ]);
+
+        $previewText = '[Ubicacion] ' . ($name !== '' ? $name : ($address !== '' ? $address : "{$latitude}, {$longitude}"));
+
+        try {
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_location_bot_' . uniqid());
+            $mqtt->connect();
+
+            $mqtt->publish('sidebar/chat', json_encode([
+                'chat_id' => $chat->id,
+                'name' => $contact->name ?? 'Desconocido',
+                'lastMessage' => $previewText,
+                'timestamp' => $message->created_at->toIso8601String(),
+            ]), 0);
+
+            $mqtt->publish("chat/{$chat->id}", json_encode([
+                'chat_id' => $chat->id,
+                'message_id' => $message->id,
+                'sender' => $message->sender,
+                'sender_subtype' => $message->sender_subtype,
+                'operator_name' => $message->operator_name,
+                'bot_node_type' => $message->bot_node_type,
+                'interactive_options' => $message->interactive_options,
+                'body' => $message->body,
+                'message_type' => $message->message_type,
+                'media_url' => $message->media_url,
+                'media_name' => $message->media_name,
+                'status' => $message->status,
+                'timestamp' => $message->created_at?->toIso8601String(),
+            ]), 0);
+
+            $mqtt->disconnect();
+        } catch (MqttClientException $e) {
+            Log::error('MQTT Error (sendBotLocationNode): ' . $e->getMessage());
         }
     }
 
@@ -2474,7 +2740,7 @@ class WhatsAppController extends Controller
             return false;
 
         // Ã¢Å“â€¦ text y person_lookup pueden ser terminales automÃƒÂ¡ticos
-        if (in_array($sentNode->type, ['text', 'person_lookup', 'image', 'document', 'video', 'audio'], true) && empty($sentNode->next_node_id)) {
+        if (in_array($sentNode->type, ['text', 'person_lookup', 'image', 'document', 'video', 'audio', 'location'], true) && empty($sentNode->next_node_id)) {
             $this->resetChatToStartFromFlow($chat, $flow, 'terminal_text');
             return true;
         }
