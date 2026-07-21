@@ -102,6 +102,7 @@ interface CanvasNodeData extends Record<string, unknown> {
   mediaDisplayName?: string | null
   locationLatitude?: number | null
   locationLongitude?: number | null
+  inputVariableName?: string | null
   type: NodeType
   typeLabel: string
   isStart: boolean
@@ -183,7 +184,7 @@ function NodeLocationPreviewMap({ latitude, longitude }: { latitude: number; lon
         }, 80)
       })
       .catch((error) => {
-        console.error("Error cargando preview de ubicaciÃ³n:", error)
+        console.error("Error cargando preview de ubicación:", error)
       })
 
     return () => {
@@ -561,13 +562,34 @@ const CanvasBotNode = memo(function CanvasBotNode({ data }: NodeProps<FlowNode<C
               </div>
               <div className="min-w-0">
                 <p className="truncate text-xs font-semibold text-slate-800">
-                  {data.preview || "UbicaciÃ³n sin configurar"}
+                  {data.preview || "Ubicación sin configurar"}
                 </p>
                 <p className="mt-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
-                  UbicaciÃ³n
+                  Ubicación
                 </p>
               </div>
             </div>
+          </div>
+        ) : data.type === "input" ? (
+          <div className="mt-3 overflow-hidden rounded-xl bg-slate-50 text-[11px] leading-relaxed text-slate-600">
+            <div className="flex items-center gap-3 bg-slate-100 px-3 py-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-[#013765] shadow-sm">
+                <CircleDot className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="truncate text-xs font-semibold text-slate-800">
+                  {data.inputVariableName ? `{{ ${data.inputVariableName} }}` : "Variable sin configurar"}
+                </p>
+                <p className="mt-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                  Variable capturada
+                </p>
+              </div>
+            </div>
+            {data.preview ? (
+              <div className="border-t border-slate-200 bg-slate-100 px-3 py-2 text-slate-700">
+                {data.preview}
+              </div>
+            ) : null}
           </div>
         ) : (
           <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-600">
@@ -778,7 +800,7 @@ const getNodeTypeLabel = (type: NodeType) => {
     case "contact":
       return "Contacto"
     case "location":
-      return "UbicaciÃ³n"
+      return "Ubicación"
     case "handoff":
       return "Desactivar bot y pasar a operador"
     default:
@@ -1679,7 +1701,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     setSelectedNodeId(nextNavigation.id)
   }
 
-  // Helpers para settings segÃºn tipo
+  // Helpers para settings según tipo
   const ensureSettings = <T,>(defaults: T): T => {
     return {
       ...defaults,
@@ -1797,7 +1819,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     const query = locationSearchQuery.trim()
     if (query.length < 3) {
       setLocationSearchResults([])
-      toast.error("EscribÃ­ al menos 3 caracteres para buscar")
+      toast.error("Escribí al menos 3 caracteres para buscar")
       return
     }
 
@@ -1818,11 +1840,11 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       const results = payload?.data ?? payload
       setLocationSearchResults(Array.isArray(results) ? results : [])
       if (!Array.isArray(results) || results.length === 0) {
-        toast.error("No encontramos resultados para esa direcciÃ³n")
+        toast.error("No encontramos resultados para esa dirección")
       }
     } catch (error) {
       console.error("Error buscando direccion:", error)
-      toast.error("No se pudo buscar la direcciÃ³n")
+      toast.error("No se pudo buscar la dirección")
     } finally {
       setLocationSearching(false)
     }
@@ -1900,7 +1922,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         setTimeout(() => map.invalidateSize(), 120)
       })
       .catch((error) => {
-        console.error("Error inicializando mapa de ubicaciÃ³n:", error)
+        console.error("Error inicializando mapa de ubicación:", error)
         toast.error("No se pudo cargar el mapa")
       })
 
@@ -1955,7 +1977,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       const formattedName = String(settings.formatted_name ?? "").trim()
       const phone = String(settings.phone ?? "").trim()
       const name = formattedName || [firstName, lastName].filter(Boolean).join(" ")
-      return [name || "Contacto sin configurar", phone].filter(Boolean).join(" Â· ").slice(0, 90)
+      return [name || "Contacto sin configurar", phone].filter(Boolean).join(" · ").slice(0, 90)
     }
 
     if (node.type === "location") {
@@ -1964,7 +1986,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       const address = String(settings.address ?? "").trim()
       const latitude = String(settings.latitude ?? "").trim()
       const longitude = String(settings.longitude ?? "").trim()
-      return [name || address || "UbicaciÃ³n sin configurar", latitude && longitude ? `${latitude}, ${longitude}` : ""].filter(Boolean).join(" Â· ").slice(0, 90)
+      return [name || address || "Ubicación sin configurar", latitude && longitude ? `${latitude}, ${longitude}` : ""].filter(Boolean).join(" · ").slice(0, 90)
     }
 
     if (node.type === "audio") {
@@ -1979,7 +2001,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       const source = String(node.settings?.source ?? "").trim()
       const filename = String(node.settings?.filename ?? "").trim()
       const caption = String(node.body ?? "").replace(/\s+/g, " ").trim()
-      return [filename || source || "Media sin configurar", caption].filter(Boolean).join(" Â· ").slice(0, 90)
+      return [filename || source || "Media sin configurar", caption].filter(Boolean).join(" · ").slice(0, 90)
     }
 
     return (node.body ?? "")
@@ -2006,7 +2028,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         const targetId = button?.next_node_id ? Number(button.next_node_id) : null
         branches.push({
           id: `button-${node.id}-${index}`,
-          label: button?.title?.trim() || `BotÃ³n ${index + 1}`,
+          label: button?.title?.trim() || `Botón ${index + 1}`,
           targetId,
           targetLabel: getNodeLabel(targetId),
           tone: getIndexedBranchTone(index),
@@ -2020,7 +2042,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         const targetId = row?.next_node_id ? Number(row.next_node_id) : null
         branches.push({
           id: `row-${node.id}-${index}`,
-          label: row?.title?.trim() || `OpciÃ³n ${index + 1}`,
+          label: row?.title?.trim() || `Opción ${index + 1}`,
           targetId,
           targetLabel: getNodeLabel(targetId),
           tone: getIndexedBranchTone(index),
@@ -2192,6 +2214,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           mediaDisplayName: isMediaNodeType(node.type) ? getMediaDisplayName(node) : null,
           locationLatitude: node.type === "location" && Number.isFinite(Number(node.settings?.latitude)) ? Number(node.settings?.latitude) : null,
           locationLongitude: node.type === "location" && Number.isFinite(Number(node.settings?.longitude)) ? Number(node.settings?.longitude) : null,
+          inputVariableName: node.type === "input" ? String(node.settings?.variable ?? "").trim() : null,
           type: node.type,
           typeLabel: getNodeTypeLabel(node.type),
           isStart: selectedFlow?.start_node_id === node.id,
@@ -2810,7 +2833,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     return nextSettings
   }
 
-  // Inputs de settings especÃ­ficos
+  // Inputs de settings específicos
   const renderSettingsFields = () => {
     if (!editNode) return null
 
@@ -2841,7 +2864,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
         const newButtons = [
           ...buttons,
-          { id: `opcion_${buttons.length + 1}`, title: "OpciÃ³n", next_node_id: null },
+          { id: `opcion_${buttons.length + 1}`, title: "Opción", next_node_id: null },
         ]
 
         setEditNode((prev) =>
@@ -2872,12 +2895,12 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               disabled={buttons.length >= MAX_BUTTONS}
             >
               <Plus className="mr-2 h-3.5 w-3.5" />
-              Agregar botÃ³n
+              Agregar botón
             </Button>
 
             {buttons.length >= MAX_BUTTONS && (
               <p className="text-[11px] text-muted-foreground">
-                LÃ­mite alcanzado: mÃ¡ximo {MAX_BUTTONS} botones.
+                Límite alcanzado: máximo {MAX_BUTTONS} botones.
               </p>
             )}
           </div>
@@ -2893,7 +2916,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     ID
                   </label>
                   <label className="flex-1 text-[11px] font-medium text-slate-600">
-                    Texto de la opciÃ³n
+                    Texto de la opción
                   </label>
                 </div>
                 <div className="flex gap-2">
@@ -2908,13 +2931,13 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     value={btn.title ?? ""}
                     onChange={(e) => updateButton(index, "title", e.target.value.slice(0, BUTTON_TITLE_MAX))}
                     maxLength={BUTTON_TITLE_MAX}
-                    placeholder="Texto del botÃ³n"
+                    placeholder="Texto del botón"
                     className="text-xs"
                   />
                 </div>
                 <div className="flex justify-between gap-2 text-[10px] text-muted-foreground">
                   <span>ID {(btn.id ?? "").length}/{BUTTON_ID_MAX}</span>
-                  <span>TÃ­tulo {(btn.title ?? "").length}/{BUTTON_TITLE_MAX}</span>
+                  <span>Título {(btn.title ?? "").length}/{BUTTON_TITLE_MAX}</span>
                 </div>
 
                 <label className="block text-[11px] font-medium text-slate-600">
@@ -2944,7 +2967,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     type="button"
                     className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 bg-red-50 text-red-600 transition-colors hover:bg-red-100 hover:text-red-700"
                     onClick={() => removeButton(index)}
-                    title="Eliminar botÃ³n"
+                    title="Eliminar botón"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
@@ -2954,7 +2977,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
             {buttons.length === 0 && (
               <p className="text-xs text-muted-foreground">
-                No hay botones configurados. AgregÃ¡ uno para empezar.
+                No hay botones configurados. Agreg? uno para empezar.
               </p>
             )}
           </div>
@@ -2990,7 +3013,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           ...rows,
           {
             id: `row_${rows.length + 1}`,
-            title: "OpciÃ³n lista",
+            title: "Opción lista",
             description: "",
             next_node_id: null,
           },
@@ -3013,7 +3036,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="text-xs mb-1 block text-muted-foreground">
-                Texto del botÃ³n
+                Texto del botón
               </label>
               <Input
                 value={settings.button_text ?? ""}
@@ -3037,7 +3060,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
             <div>
               <label className="text-xs mb-1 block text-muted-foreground">
-                TÃ­tulo de la secciÃ³n
+                Título de la sección
               </label>
               <Input
                 value={settings.section_title ?? ""}
@@ -3074,12 +3097,12 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               disabled={rows.length >= MAX_LIST_ROWS}
             >
               <Plus className="mr-2 h-3.5 w-3.5" />
-              Agregar opciÃ³n
+              Agregar opción
             </Button>
 
             {rows.length >= MAX_LIST_ROWS && (
               <p className="text-[11px] text-muted-foreground">
-                LÃ­mite alcanzado: mÃ¡ximo {MAX_LIST_ROWS} opciones en una lista.
+                Límite alcanzado: máximo {MAX_LIST_ROWS} opciones en una lista.
               </p>
             )}
           </div>
@@ -3095,7 +3118,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     ID
                   </label>
                   <label className="flex-1 text-[11px] font-medium text-slate-600">
-                    Texto de la opciÃ³n
+                    Texto de la opción
                   </label>
                 </div>
                 <div className="flex gap-2">
@@ -3110,19 +3133,19 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     value={row.title ?? ""}
                     onChange={(e) => updateRow(index, "title", e.target.value.slice(0, LIST_ROW_TITLE_MAX))}
                     maxLength={LIST_ROW_TITLE_MAX}
-                    placeholder="TÃ­tulo visible"
+                    placeholder="Título visible"
                     className="text-xs"
                   />
                 </div>
                 <div className="flex justify-between gap-2 text-[10px] text-muted-foreground">
                   <span>ID {(row.id ?? "").length}/{LIST_ROW_ID_MAX}</span>
-                  <span>TÃ­tulo {(row.title ?? "").length}/{LIST_ROW_TITLE_MAX}</span>
+                  <span>Título {(row.title ?? "").length}/{LIST_ROW_TITLE_MAX}</span>
                 </div>
 
                 <Input
                   value={row.description ?? ""}
                   onChange={(e) => updateRow(index, "description", e.target.value.slice(0, LIST_ROW_DESCRIPTION_MAX))}
-                  placeholder="DescripciÃ³n (opcional)"
+                  placeholder="Descripción (opcional)"
                   maxLength={LIST_ROW_DESCRIPTION_MAX}
                   className="text-xs mt-1"
                 />
@@ -3157,7 +3180,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     type="button"
                     className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 bg-red-50 text-red-600 transition-colors hover:bg-red-100 hover:text-red-700"
                     onClick={() => removeRow(index)}
-                    title="Eliminar opciÃ³n"
+                    title="Eliminar opción"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
@@ -3167,7 +3190,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
             {rows.length === 0 && (
               <p className="text-xs text-muted-foreground">
-                No hay opciones configuradas. AgregÃ¡ una para empezar.
+                No hay opciones configuradas. Agreg? una para empezar.
               </p>
             )}
           </div>
@@ -3194,7 +3217,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         button_text: "Ver opciones",
         section_title: "Opciones",
         rows: [],
-        error_message: "Valor invÃ¡lido, por favor revisÃ¡ el formato e intentÃ¡ de nuevo.",
+        error_message: "Valor inválido, por favor revisá el formato e intentá de nuevo.",
       })
 
       const update = (field: keyof typeof settings, value: string | any[]) => {
@@ -3476,7 +3499,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
           <div>
             <div className="mb-1 flex items-center gap-2"><label className="text-xs block text-muted-foreground">
-              Regex de validaciÃ³n (opcional)
+              Regex de validación (opcional)
             </label>
               <button
                 type="button"
@@ -3565,7 +3588,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               disabled={availableFlowVariables.length === 0}
             >
               <SelectTrigger className="h-9 text-xs">
-                <SelectValue placeholder="SeleccionÃ¡ una variable" />
+                <SelectValue placeholder="Seleccioná una variable" />
               </SelectTrigger>
               <SelectContent>
                 {availableFlowVariables.map((option) => (
@@ -3577,8 +3600,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             </Select>
             <p className="mt-1 text-[10px] text-muted-foreground">
               {availableFlowVariables.length > 0
-                ? "UsÃ¡ una variable capturada previamente en este flujo."
-                : "Primero necesitÃ¡s un nodo de captura de dato que guarde el DNI en una variable."}
+                ? "Usá una variable capturada previamente en este flujo."
+                : "Primero necesitás un nodo de captura de dato que guarde el DNI en una variable."}
             </p>
           </div>
 
@@ -3710,7 +3733,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
       const selectedAgendaContact = agendaContacts.find((contact) => contact.id === Number(settings.agenda_contact_id ?? 0))
       const selectedAgendaContactLabel = selectedAgendaContact
-        ? `${selectedAgendaContact.formatted_name} Â· ${selectedAgendaContact.phone}`
+        ? `${selectedAgendaContact.formatted_name} · ${selectedAgendaContact.phone}`
         : "Completar manualmente"
       const contactFieldsReadOnly = Boolean(selectedAgendaContact)
       const contactValidation = validateContactSettings(settings)
@@ -3766,7 +3789,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       return (
         <div className="space-y-3">
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-            Este nodo envÃ­a una tarjeta de contacto de WhatsApp. El telÃ©fono debe incluir cÃ³digo de paÃ­s, sin espacios ni signos. Ej "+5492610000000"
+            Este nodo envía una tarjeta de contacto de WhatsApp. El teléfono debe incluir código de país, sin espacios ni signos. Ej "+5492610000000"
           </div>
 
           <div>
@@ -3845,7 +3868,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                 value={settings.last_name ?? ""}
                 onChange={(e) => update("last_name", e.target.value.slice(0, 80))}
                 readOnly={contactFieldsReadOnly}
-                placeholder="Ej: PÃ©rez"
+                placeholder="Ej: Pérez"
                 maxLength={80}
                 className={cn("text-xs", contactFieldsReadOnly ? "cursor-default bg-slate-50 text-slate-600" : "")}
               />
@@ -3860,23 +3883,23 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               value={settings.formatted_name ?? ""}
               onChange={(e) => update("formatted_name", e.target.value.slice(0, 160))}
               readOnly={contactFieldsReadOnly}
-              placeholder="Ej: Juan PÃ©rez"
+              placeholder="Ej: Juan Pérez"
               maxLength={160}
               className={cn("text-xs", contactFieldsReadOnly ? "cursor-default bg-slate-50 text-slate-600" : "")}
             />
             <p className="mt-1 text-[10px] text-muted-foreground">
-              Si lo dejÃ¡s vacÃ­o, se arma con nombre y apellido.
+              Si lo dejás vacío, se arma con nombre y apellido.
             </p>
             {shouldShowContactNameError && !contactValidation.hasName ? (
               <p className="mt-1 text-[10px] font-medium text-red-600">
-                IndicÃ¡ un nombre a mostrar o completÃ¡ nombre/apellido.
+                Indicá un nombre a mostrar o completá nombre/apellido.
               </p>
             ) : null}
           </div>
 
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">
-              TelÃ©fono WhatsApp
+              Teléfono WhatsApp
             </label>
             <Input
               value={settings.phone ?? ""}
@@ -3888,19 +3911,19 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             />
             {shouldShowContactPhoneError && !contactValidation.hasPhone ? (
               <p className="mt-1 text-[10px] font-medium text-red-600">
-                El telÃ©fono es obligatorio.
+                El teléfono es obligatorio.
               </p>
             ) : shouldShowContactPhoneError && !contactValidation.hasOnlyValidPhoneChars ? (
               <p className="mt-1 text-[10px] font-medium text-red-600">
-                El telÃ©fono solo puede incluir nÃºmeros y un + inicial.
+                El teléfono solo puede incluir números y un + inicial.
               </p>
             ) : shouldShowContactPhoneError && contactValidation.isPhoneTooShort ? (
               <p className="mt-1 text-[10px] font-medium text-red-600">
-                El telÃ©fono debe tener al menos 7 dÃ­gitos.
+                El teléfono debe tener al menos 7 dígitos.
               </p>
             ) : shouldShowContactPhoneError && contactValidation.isPhoneTooLong ? (
               <p className="mt-1 text-[10px] font-medium text-red-600">
-                El telÃ©fono no puede superar los 15 dÃ­gitos.
+                El teléfono no puede superar los 15 dígitos.
               </p>
             ) : null}
           </div>
@@ -3969,12 +3992,12 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       return (
         <div className="space-y-3">
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-            Este nodo envÃ­a una ubicaciÃ³n de WhatsApp. La latitud debe estar entre -90 y 90, y la longitud entre -180 y 180.
+            Este nodo envía una ubicación de WhatsApp. La latitud debe estar entre -90 y 90, y la longitud entre -180 y 180.
           </div>
 
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">
-              Buscar direcciÃ³n
+              Buscar dirección
             </label>
             <div className="flex gap-2">
               <Input
@@ -4057,7 +4080,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">
-              DirecciÃ³n
+              Dirección
             </label>
             <Textarea
               value={settings.address ?? ""}
@@ -4129,12 +4152,12 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               : ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,application/pdf,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation"
       const mediaFormatHint =
         t === "image"
-          ? "Formatos aceptados por WhatsApp: JPG, PNG o WEBP. TamaÃ±o mÃ¡ximo: 5 MB."
+          ? "Formatos aceptados por WhatsApp: JPG, PNG o WEBP. Tamaño máximo: 5 MB."
           : t === "video"
-            ? "Formatos aceptados por WhatsApp: MP4 o 3GP. TamaÃ±o mÃ¡ximo: 16 MB."
+            ? "Formatos aceptados por WhatsApp: MP4 o 3GP. Tamaño máximo: 16 MB."
             : t === "audio"
-              ? "Formatos aceptados por WhatsApp: AAC, M4A, MP3, AMR, OGG u OPUS. TamaÃ±o mÃ¡ximo: 16 MB."
-              : "Formatos aceptados por WhatsApp: PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX o TXT. TamaÃ±o mÃ¡ximo: 100 MB."
+              ? "Formatos aceptados por WhatsApp: AAC, M4A, MP3, AMR, OGG u OPUS. Tamaño máximo: 16 MB."
+              : "Formatos aceptados por WhatsApp: PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX o TXT. Tamaño máximo: 100 MB."
       const maxMediaBytes =
         t === "image"
           ? 5 * 1024 * 1024
@@ -4151,7 +4174,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       const uploadLocalMedia = async (file: File | null) => {
         if (!file) return
         if (file.size > maxMediaBytes) {
-          toast.error(`El archivo supera el limite de WhatsApp para este tipo. MÃ¡ximo: ${maxMediaLabel}.`)
+          toast.error(`El archivo supera el limite de WhatsApp para este tipo. Máximo: ${maxMediaLabel}.`)
           return
         }
         setUploadingMedia(true)
@@ -4622,7 +4645,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               {loadingFlows ? (
                 <p className="text-xs text-muted-foreground">Cargando flujos...</p>
               ) : flows.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No hay flujos creados aÃºn.</p>
+                <p className="text-xs text-muted-foreground">No hay flujos creados aún.</p>
               ) : (
                 flows.map((flow) => (
                   <div
@@ -4718,7 +4741,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     )}>
                       <span className="truncate">
                         {selectedFlowId === flow.id
-                          ? `${nodes.length} nodos Â· Inicio: ${startNodeLabel}`
+                          ? `${nodes.length} nodos · Inicio: ${startNodeLabel}`
                           : `ID #${flow.id}`}
                       </span>
                       {selectedFlowId === flow.id ? (
@@ -4738,13 +4761,13 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         {/* Main: Nodes y editor */}
         <div className="flex-1 min-h-0 flex flex-col gap-4 overflow-hidden">
           <div className="flex gap-4 flex-1 min-h-0 overflow-hidden">
-            {/* Ãrbol interactivo */}
+            {/* Árbol interactivo */}
             <div className="flex-1 min-h-0 border rounded-xl bg-white p-3 flex flex-col shadow-sm overflow-hidden">
               <div className="flex items-center justify-between mb-2">
                 <div>
-                  <h3 className="font-medium text-sm text-[#013765]">Ãrbol del flujo</h3>
+                  <h3 className="font-medium text-sm text-[#013765]">Árbol del flujo</h3>
                   <p className="mt-1 text-[10px] text-slate-500">
-                    TocÃ¡ un nodo o una rama para editarla y recorrer el flujo.
+                    Tocá un nodo o una rama para editarla y recorrer el flujo.
                   </p>
                 </div>
                 <div className="flex items-center gap-1">
@@ -4817,7 +4840,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               </div>
             </div>
 
-            {/* Panel de ediciÃ³n */}
+            {/* Panel de edición */}
             <div className="contents">
               {flowConfigOpen && (
                 <div className="fixed inset-0 z-[70] flex items-start justify-center bg-slate-950/35 p-4">
@@ -4844,7 +4867,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     <CardContent className="bg-white pt-4">
                       {!selectedFlow ? (
                         <p className="text-xs text-muted-foreground">
-                          SeleccionÃ¡ un flujo en la lista de la izquierda para editar su configuraciÃ³n.
+                          Seleccioná un flujo en la lista de la izquierda para editar su configuración.
                         </p>
                       ) : (
                         <fieldset disabled={isReadOnly} className="space-y-4">
@@ -4872,7 +4895,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                   disabled={savingFlow || nodes.length === 0}
                                 >
                                   <SelectTrigger className="h-8 text-xs pr-8">
-                                    <SelectValue placeholder="ElegÃ­ nodo..." />
+                                    <SelectValue placeholder="Elegí nodo..." />
                                   </SelectTrigger>
                                   <SelectContent>
                                     <SelectItem value="none">Sin nodo inicial</SelectItem>
@@ -4962,7 +4985,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                             </div>
                           ) : null}
                           <fieldset disabled={isReadOnly} className="flex-1 min-h-0 space-y-4 overflow-y-auto pr-1">
-                            {/* Datos bÃ¡sicos */}
+                            {/* Datos básicos */}
                             <div className="grid grid-cols-2 gap-3">
                               <div>
                                 <label className="text-xs mb-1 block text-muted-foreground">
@@ -5006,7 +5029,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                           delete s.auto_advance_max_hops
                                         }
 
-                                        // opcional: si querÃ©s, al pasar a buttons/list/handoff tambiÃ©n podÃ©s limpiar otras cosas
+                                        // opcional: si querés, al pasar a buttons/list/handoff también podés limpiar otras cosas
                                         if (isMediaNodeType(val)) {
                                           const keepExistingMedia = prev.type === val
                                           return {
@@ -5176,7 +5199,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                 rows={4}
                                 maxLength={getNodeBodyMaxLength(editNode.type)}
                                 className="text-xs"
-                                placeholder="Texto que verÃ¡ el paciente/usuario en este paso..."
+                                placeholder="Texto que verá el paciente/usuario en este paso..."
                               />
                               {templateVariableOpen && filteredTemplateVariableOptions.length > 0 && (
                                 <div
@@ -5233,7 +5256,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                             </div>
                             ) : null}
 
-                            {/* Settings especÃ­ficos segÃºn tipo */}
+                            {/* Settings específicos según tipo */}
                             {renderSettingsFields()}
 
                             {/* Siguiente nodo lineal (solo para text + input) */}
@@ -5272,7 +5295,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                   </Select>
 
                                   <p className="text-[10px] text-muted-foreground mt-1">
-                                    Para avanzar al prÃ³ximo nodo (lineal).
+                                    Para avanzar al próximo nodo (lineal).
                                   </p>
                                 </div>
                               )}
@@ -5302,7 +5325,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                       Auto-disparar siguiente mensaje
                                     </p>
                                     <p className="text-[10px] text-muted-foreground">
-                                      Si estÃ¡ activo, el bot enviarÃ¡ el prÃ³ximo nodo automÃ¡ticamente (sin esperar respuesta).
+                                      Si está activo, el bot enviará el próximo nodo automáticamente (sin esperar respuesta).
                                     </p>
                                   </div>
                                 </div>
@@ -5335,7 +5358,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
                             <div>
                               <label className="text-xs mb-1 block text-muted-foreground">
-                                MÃ¡x saltos (anti-loop)
+                                Máx saltos (anti-loop)
                               </label>
                               <Input
                                 value={String((editNode.settings ?? {}).auto_advance_max_hops ?? 5)}
@@ -5363,7 +5386,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
                           </fieldset>
 
-                          {/* BotÃ³n guardar */}
+                          {/* Botón guardar */}
                           <div className="mt-4 flex shrink-0 flex-col items-center gap-2 border-t border-slate-200 bg-white pt-4">
                             <Button
                               size="sm"
@@ -5408,8 +5431,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               <h3 className="text-base font-semibold text-slate-900">Enviar a papelera</h3>
               <p className="mt-1 text-sm text-slate-600">
                 {confirmDelete.type === "flow"
-                  ? `El flujo "${confirmDelete.name}" y sus nodos se moverÃ¡n a la papelera para poder restaurarlos mÃ¡s tarde.`
-                  : `El nodo "${confirmDelete?.name}" se moverÃ¡ a la papelera y podrÃ¡ restaurarse desde allÃ­.`}
+                  ? `El flujo "${confirmDelete.name}" y sus nodos se moverán a la papelera para poder restaurarlos más tarde.`
+                  : `El nodo "${confirmDelete?.name}" se moverá a la papelera y podrá restaurarse desde allí.`}
               </p>
             </div>
 
@@ -5457,8 +5480,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               </h3>
               <p className="mt-1 text-sm text-slate-600">
                 {createModal === "flow"
-                  ? "IngresÃ¡ el nombre del flujo que querÃ©s agregar al bot."
-                  : "IngresÃ¡ la key del nuevo nodo para este flujo."}
+                  ? "Ingresá el nombre del flujo que querés agregar al bot."
+                  : "Ingresá la key del nuevo nodo para este flujo."}
               </p>
             </div>
 
@@ -5502,7 +5525,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               ) : null}
               {createModal === "node" && !selectedFlowId ? (
                 <p className="mt-2 text-xs text-amber-600">
-                  SeleccionÃ¡ un flujo antes de crear nodos.
+                  Seleccioná un flujo antes de crear nodos.
                 </p>
               ) : null}
             </div>
@@ -5591,15 +5614,15 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             <div className="border-b border-slate-200 bg-slate-50 px-5 py-4">
               <h3 className="text-base font-semibold text-slate-900">Ayuda sobre variables en mensajes</h3>
               <p className="mt-1 text-sm text-slate-600">
-                PodÃ©s mostrar datos guardados del chat dentro del texto del nodo.
+                Podés mostrar datos guardados del chat dentro del texto del nodo.
               </p>
             </div>
 
             <div className="space-y-4 px-5 py-4 text-sm text-slate-700">
               <div>
-                <p className="font-medium text-slate-900">CÃ³mo se usan</p>
+                <p className="font-medium text-slate-900">Cómo se usan</p>
                 <p className="mt-1">
-                  EscribÃ­ la variable entre dobles llaves. Ejemplo: <code>{'{{ nombre }}'}</code>
+                  Escribí la variable entre dobles llaves. Ejemplo: <code>{'{{ nombre }}'}</code>
                 </p>
               </div>
 
@@ -5608,14 +5631,14 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                 <div className="mt-2 space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-[13px]">
                   <p><code>Hola {'{{ nombre }}'}</code></p>
                   <p><code>Tu DNI es {'{{ dni }}'}</code></p>
-                  <p><code>Hola {'{{ nombre|paciente }}'}</code> usa <span className="font-medium">paciente</span> si la variable estÃ¡ vacÃ­a.</p>
+                  <p><code>Hola {'{{ nombre|paciente }}'}</code> usa <span className="font-medium">paciente</span> si la variable está vacía.</p>
                 </div>
               </div>
 
               <div>
                 <p className="font-medium text-slate-900">Variables disponibles</p>
                 <p className="mt-1">
-                  PodÃ©s usar variables guardadas por nodos de captura de datos y tambiÃ©n algunas variables del sistema, como <code>{'{{ contact.name }}'}</code> o <code>{'{{ chat.id }}'}</code>.
+                  Podés usar variables guardadas por nodos de captura de datos y también algunas variables del sistema, como <code>{'{{ contact.name }}'}</code> o <code>{'{{ chat.id }}'}</code>.
                 </p>
               </div>
             </div>
@@ -5675,7 +5698,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               <div className="min-w-0">
                 <h3 className="text-base font-semibold text-slate-900">Papelera de flujos</h3>
                 <p className="mt-0.5 text-sm text-slate-600">
-                  RestaurÃ¡ flujos completos o nodos individuales. Los nodos sÃ³lo se pueden restaurar si su flujo ya estÃ¡ activo.
+                  Restaurá flujos completos o nodos individuales. Los nodos sólo se pueden restaurar si su flujo ya está activo.
                 </p>
               </div>
               <button
@@ -5683,7 +5706,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                 onClick={() => setTrashOpen(false)}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
               >
-                Ã—
+                ×
               </button>
             </div>
 
@@ -5707,13 +5730,13 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                   <div>
                     <h3 className="text-sm font-semibold text-[#013765]">Flujos eliminados</h3>
                     <p className="text-xs text-slate-500">
-                      Al restaurar un flujo tambiÃ©n se recuperan sus nodos eliminados con Ã©l.
+                      Al restaurar un flujo también se recuperan sus nodos eliminados con él.
                     </p>
                   </div>
 
                   {filteredTrashedFlows.length === 0 ? (
                     <p className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-xs text-slate-500">
-                      {trashSearchNormalized ? "No hay flujos que coincidan con la bÃºsqueda." : "No hay flujos en la papelera."}
+                      {trashSearchNormalized ? "No hay flujos que coincidan con la búsqueda." : "No hay flujos en la papelera."}
                     </p>
                   ) : (
                     filteredTrashedFlows.map((flow) => (
@@ -5751,13 +5774,13 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                   <div>
                     <h3 className="text-sm font-semibold text-[#013765]">Nodos eliminados</h3>
                     <p className="text-xs text-slate-500">
-                      Si el flujo del nodo tambiÃ©n estÃ¡ en papelera, restauralo primero.
+                      Si el flujo del nodo también está en papelera, restauralo primero.
                     </p>
                   </div>
 
                   {filteredTrashedNodes.length === 0 ? (
                     <p className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-xs text-slate-500">
-                      {trashSearchNormalized ? "No hay nodos que coincidan con la bÃºsqueda." : "No hay nodos en la papelera."}
+                      {trashSearchNormalized ? "No hay nodos que coincidan con la búsqueda." : "No hay nodos en la papelera."}
                     </p>
                   ) : (
                     filteredTrashedNodes.map((node) => {
@@ -5773,7 +5796,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                               {node.key || `node_${node.id}`}
                             </p>
                             <p className="text-[11px] text-slate-500">
-                              Flujo: {node.flow_name || `#${node.flow_id}`} Â· Tipo: {node.type}
+                              Flujo: {node.flow_name || `#${node.flow_id}`} · Tipo: {node.type}
                             </p>
                           </div>
 
