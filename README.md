@@ -1,66 +1,410 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Chatbot WhatsApp HU
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Sistema Laravel + React/Inertia para gestionar conversaciones de WhatsApp, flujos automatizados de bot, agenda de contactos, medios, ubicaciones, auditoria y configuraciones operativas.
 
-## About Laravel
+## Requisitos
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+- PHP `8.1` o superior.
+- Composer.
+- Node.js `18+` recomendado y npm.
+- MySQL o MariaDB.
+- Servidor web apuntando a `public/`.
+  - Desarrollo: Laragon, XAMPP, Apache, Nginx o virtual host local.
+  - Produccion: Apache o Nginx con document root en `public/`.
+- Mosquitto MQTT:
+  - TCP `1883` para Laravel.
+  - WebSocket `9001` para el frontend.
+- Cuenta de Meta/WhatsApp Cloud API:
+  - Access token.
+  - Phone number ID.
+  - Verify token del webhook.
+- Scheduler de Laravel activo para ejecutar el job de inactividad:
+  - Desarrollo: `php artisan schedule:work`.
+  - Produccion Linux: cron ejecutando `php artisan schedule:run` cada minuto.
+  - Produccion Windows: tarea programada ejecutando `php artisan schedule:run` cada minuto.
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Scheduler e inactividad del bot
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+La verificacion de inactividad es necesaria para que el sistema reactive el bot cuando una conversacion queda abandonada o pausada por atencion de operador.
 
-## Learning Laravel
+Configuracion actual en `app/Console/Kernel.php`:
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+```php
+$schedule->command('bot:expire-inactive-chats')
+    ->everyMinute()
+    ->withoutOverlapping();
+```
 
-You may also try the [Laravel Bootcamp](https://bootcamp.laravel.com), where you will be guided through building a modern Laravel application from scratch.
+Comando manual:
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+```bash
+php artisan bot:expire-inactive-chats
+```
 
-## Laravel Sponsors
+Dry-run para ver cuantos chats vencerian sin procesarlos:
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+```bash
+php artisan bot:expire-inactive-chats --dry-run
+```
 
-### Premium Partners
+### Como funciona
 
-- **[Vehikl](https://vehikl.com/)**
-- **[Tighten Co.](https://tighten.co)**
-- **[WebReinvent](https://webreinvent.com/)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel/)**
-- **[Cyber-Duck](https://cyber-duck.co.uk)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Jump24](https://jump24.co.uk)**
-- **[Redberry](https://redberry.international/laravel/)**
-- **[Active Logic](https://activelogic.com)**
-- **[byte5](https://byte5.de)**
-- **[OP.GG](https://op.gg)**
+- Lee `bot.inactivity_timeout_minutes` desde configuracion.
+- El valor esta en minutos.
+- El minimo permitido es `1`.
+- El maximo permitido es `10080` minutos, equivalente a 7 dias.
+- El default es `1440` minutos, equivalente a 24 horas.
+- Busca chats con `last_user_message_at` vencido, flujo activo y progreso pendiente.
+- Si corresponde, envia el mensaje de inactividad, reinicia el chat al nodo inicial del flujo activo/default y reactiva el bot.
 
-## Contributing
+Logica principal:
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+```text
+app/Services/BotInactivityService.php
+app/Console/Commands/ExpireInactiveBotChats.php
+```
 
-## Code of Conduct
+### Desarrollo
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+Para probar el scheduler en desarrollo:
 
-## Security Vulnerabilities
+Linux/macOS:
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+```bash
+php artisan schedule:work
+```
 
-## License
+Windows CMD:
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+```cmd
+php artisan schedule:work
+```
+
+Dejar ese proceso corriendo en una terminal aparte mientras se prueba la inactividad.
+
+### Produccion
+
+En Linux, agregar un cron cada minuto:
+
+```cron
+* * * * * cd /ruta/al/proyecto && php artisan schedule:run >> /dev/null 2>&1
+```
+
+En Windows Server, usar el Programador de tareas ejecutando cada minuto desde la carpeta del proyecto:
+
+```cmd
+php artisan schedule:run
+```
+
+## Instalacion en desarrollo
+
+### Linux/macOS
+
+```bash
+composer install
+npm install
+cp .env.example .env
+php artisan key:generate
+php artisan migrate
+php artisan storage:link
+npm run dev
+```
+
+### Windows CMD
+
+```cmd
+composer install
+npm install
+copy .env.example .env
+php artisan key:generate
+php artisan migrate
+php artisan storage:link
+npm run dev
+```
+
+La aplicacion debe servirse desde Apache/Nginx/Laragon apuntando a la carpeta `public/`.
+
+Ejemplo local con subcarpeta:
+
+```env
+APP_URL=http://localhost/chatbot/public
+VITE_APP_URL=http://localhost/chatbot/public
+VITE_API_BASE_URL=/chatbot/public
+VITE_DEV_SERVER=http://localhost:5173
+```
+
+Actualmente no hay seeders obligatorios. Si se agregan datos iniciales en el futuro:
+
+```bash
+php artisan db:seed
+```
+
+## Instalacion en produccion
+
+1. Subir el codigo al servidor.
+2. Instalar dependencias PHP optimizadas:
+
+```bash
+composer install --no-dev --optimize-autoloader
+```
+
+3. Compilar assets:
+
+```bash
+npm ci
+npm run build
+```
+
+Si el servidor de produccion no tiene Node.js, compilar en otro entorno y desplegar tambien `public/build`.
+
+4. Crear y configurar `.env`.
+
+Linux/macOS:
+
+```bash
+cp .env.example .env
+php artisan key:generate
+```
+
+Windows CMD:
+
+```cmd
+copy .env.example .env
+php artisan key:generate
+```
+
+5. Configurar el servidor web para que el document root apunte a:
+
+```text
+/ruta/al/proyecto/public
+```
+
+6. Dar permisos de escritura a:
+
+```text
+storage/
+bootstrap/cache/
+```
+
+7. Ejecutar migraciones:
+
+```bash
+php artisan migrate --force
+php artisan storage:link
+```
+
+8. Optimizar Laravel:
+
+```bash
+php artisan optimize:clear
+php artisan config:cache
+php artisan route:cache
+php artisan view:cache
+```
+
+9. Confirmar que el scheduler de Laravel quede activo como se indica en la seccion `Scheduler e inactividad del bot`.
+
+## Plantilla .env
+
+Copia de referencia sin valores sensibles:
+
+```env
+APP_NAME="chatbot"
+APP_ENV=
+APP_KEY=
+APP_DEBUG=
+APP_URL=
+
+LOG_CHANNEL=stack
+LOG_DEPRECATIONS_CHANNEL=null
+LOG_LEVEL=debug
+
+DB_CONNECTION=mysql
+DB_HOST=
+DB_PORT=3306
+DB_DATABASE=
+DB_USERNAME=
+DB_PASSWORD=
+
+CACHE_DRIVER=file
+FILESYSTEM_DISK=local
+QUEUE_CONNECTION=sync
+SESSION_DRIVER=file
+SESSION_LIFETIME=120
+
+MEMCACHED_HOST=
+
+REDIS_HOST=
+REDIS_PASSWORD=
+REDIS_PORT=6379
+
+MAIL_MAILER=smtp
+MAIL_HOST=
+MAIL_PORT=
+MAIL_USERNAME=
+MAIL_PASSWORD=
+MAIL_ENCRYPTION=
+MAIL_FROM_ADDRESS=
+MAIL_FROM_NAME="${APP_NAME}"
+
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_DEFAULT_REGION=us-east-1
+AWS_BUCKET=
+AWS_USE_PATH_STYLE_ENDPOINT=false
+
+BROADCAST_DRIVER=pusher
+PUSHER_APP_ID=
+PUSHER_APP_KEY=
+PUSHER_APP_SECRET=
+PUSHER_HOST=
+PUSHER_PORT=
+PUSHER_SCHEME=
+PUSHER_APP_CLUSTER=mt1
+
+VITE_APP_NAME="${APP_NAME}"
+VITE_PUSHER_APP_KEY="${PUSHER_APP_KEY}"
+VITE_PUSHER_HOST="${PUSHER_HOST}"
+VITE_PUSHER_PORT="${PUSHER_PORT}"
+VITE_PUSHER_SCHEME="${PUSHER_SCHEME}"
+VITE_PUSHER_APP_CLUSTER="${PUSHER_APP_CLUSTER}"
+VITE_DEV_SERVER=
+VITE_API_BASE_URL=
+VITE_APP_URL=
+
+MQTT_HOST=
+VITE_MOSQUITTO_HOST=
+
+WHATSAPP_API_URL=
+WHATSAPP_VERIFY_TOKEN=
+WHATSAPP_ACCESS_TOKEN=
+WHATSAPP_PHONE_ID=
+```
+
+Notas:
+
+- `APP_KEY` se genera con `php artisan key:generate`.
+- En produccion usar `APP_ENV=production` y `APP_DEBUG=false`.
+- `APP_URL`, `VITE_APP_URL` y `VITE_API_BASE_URL` deben coincidir con la URL real.
+- Los datos de WhatsApp tambien pueden configurarse desde el panel de configuracion; el sistema prioriza `system_settings` y usa `.env` como fallback.
+
+## MQTT / Mosquitto
+
+El chat usa MQTT para actualizar mensajes, estado del bot, operador y estados de entrega en tiempo real.
+
+Configuracion minima sugerida de Mosquitto:
+
+```conf
+listener 1883
+protocol mqtt
+
+listener 9001
+protocol websockets
+```
+
+Variables relacionadas:
+
+```env
+MQTT_HOST=
+VITE_MOSQUITTO_HOST=
+```
+
+Despues de cambiar variables de entorno:
+
+Linux/macOS:
+
+```bash
+php artisan config:clear
+php artisan cache:clear
+```
+
+Windows CMD:
+
+```cmd
+php artisan config:clear
+php artisan cache:clear
+```
+
+## WhatsApp Cloud API
+
+Webhook del proyecto:
+
+```text
+GET/POST {APP_URL}/api/webhook
+```
+
+En Meta configurar:
+
+- Callback URL: `{APP_URL}/api/webhook`.
+- Verify token: el mismo valor de `WHATSAPP_VERIFY_TOKEN` o el guardado en configuracion.
+- Suscripcion al campo `messages`.
+
+Variables/env o configuracion equivalente:
+
+```env
+WHATSAPP_ACCESS_TOKEN=
+WHATSAPP_PHONE_ID=
+WHATSAPP_VERIFY_TOKEN=
+```
+
+## Queues / jobs
+
+El proyecto incluye tablas de jobs, pero por defecto usa:
+
+```env
+QUEUE_CONNECTION=sync
+```
+
+Con `sync` no hace falta correr workers. Si se cambia a `database`, `redis` u otro driver, levantar un worker:
+
+Linux/macOS:
+
+```bash
+php artisan queue:work
+```
+
+Windows CMD:
+
+```cmd
+php artisan queue:work
+```
+
+En produccion conviene administrar el worker con Supervisor, systemd, PM2, NSSM o una herramienta equivalente.
+
+## Comandos utiles
+
+### Linux/macOS
+
+```bash
+php artisan optimize:clear
+php artisan route:list
+php artisan test
+npm run build
+```
+
+### Windows CMD
+
+```cmd
+php artisan optimize:clear
+php artisan route:list
+php artisan test
+npm run build
+```
+
+## Estructura principal
+
+- `resources/js/Pages/Chat`: panel de conversaciones.
+- `resources/js/Pages/BotFlowBuilder.tsx`: constructor visual de flujos.
+- `resources/js/Pages/AgendaPanel.tsx`: agenda interna de contactos.
+- `resources/js/Pages/SettingsPanel.tsx`: configuraciones generales, WhatsApp, Alephoo e inactividad.
+- `resources/js/Pages/AuditPanel.tsx`: auditoria.
+- `app/Http/Controllers/WhatsAppController.php`: webhook y envios de WhatsApp.
+- `app/Services/BotInactivityService.php`: reinicio por inactividad.
+- `app/Console/Commands/ExpireInactiveBotChats.php`: comando del scheduler.
+
+## Notas de operacion
+
+- Si los mensajes llegan a Meta pero no al sistema, revisar que el webhook configurado en Meta apunte a este proyecto.
+- Si el chat no actualiza en vivo, revisar Mosquitto, `MQTT_HOST`, `VITE_MOSQUITTO_HOST` y limpiar cache de configuracion.
+- Si los medios no abren, confirmar `php artisan storage:link` y permisos de `storage/`.
+- Si se usa una URL con subcarpeta como `/chatbot/public`, mantener consistentes `APP_URL`, `VITE_APP_URL` y `VITE_API_BASE_URL`.
