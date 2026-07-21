@@ -94,6 +94,12 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     operatorId?: number | null
     operatorName?: string | null
   } | null>(null)
+  const [finishAttentionPrompt, setFinishAttentionPrompt] = useState<{
+    chatId: string
+    chatName?: string | null
+    nextChatId: string
+  } | null>(null)
+  const [finishingAttention, setFinishingAttention] = useState(false)
 
 
   // Obtenemos el objeto del chat seleccionado a partir del estado.
@@ -113,6 +119,87 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     selectedChat?.operator_id &&
     Number(selectedChat.operator_id) === Number(authUser?.id ?? 0),
   )
+
+  const shouldAskFinishAttention = (chat?: Chat | null) =>
+    Boolean(
+      chat &&
+      !chat.bot_enabled &&
+      chat.operator_id &&
+      Number(chat.operator_id) === Number(authUser?.id ?? 0),
+    )
+
+  const requestChatSelection = (nextChatId: string) => {
+    const currentChatId = String(selectedChatId || "")
+    const normalizedNextChatId = String(nextChatId || "")
+
+    if (currentChatId === normalizedNextChatId) return
+
+    const currentChat = chats.find((chat) => String(chat.id) === currentChatId)
+    if (shouldAskFinishAttention(currentChat)) {
+      setFinishAttentionPrompt({
+        chatId: currentChatId,
+        chatName: currentChat?.name ?? null,
+        nextChatId: normalizedNextChatId,
+      })
+      return
+    }
+
+    setSelectedChatId(normalizedNextChatId)
+  }
+
+  const continueAfterFinishPrompt = (nextChatId: string) => {
+    setFinishAttentionPrompt(null)
+    setSelectedChatId(nextChatId)
+  }
+
+  const leaveChatWithoutFinishing = async () => {
+    if (!finishAttentionPrompt) return
+    const { chatId, nextChatId } = finishAttentionPrompt
+    setFinishingAttention(true)
+    try {
+      await updateOperatorPresence(chatId, false)
+      continueAfterFinishPrompt(nextChatId)
+    } finally {
+      setFinishingAttention(false)
+    }
+  }
+
+  const finishAttentionAndReactivateBot = async () => {
+    if (!finishAttentionPrompt) return
+    const { chatId, nextChatId } = finishAttentionPrompt
+    setFinishingAttention(true)
+
+    try {
+      const res = await fetch(`${import.meta.env.VITE_APP_URL}/api/chats/${chatId}/finish-operator-attention`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      })
+
+      if (!res.ok) {
+        console.error("Error finalizando atencion del operador:", await res.text())
+        return
+      }
+
+      lastOperatorStateRef.current[chatId] = false
+      setChats((prevChats) =>
+        prevChats.map((chat) =>
+          String(chat.id) === chatId
+            ? {
+              ...chat,
+              bot_enabled: true,
+              operator_id: null,
+              operator_name: null,
+            }
+            : chat,
+        ),
+      )
+      continueAfterFinishPrompt(nextChatId)
+    } catch (error) {
+      console.error("Error finalizando atencion del operador:", error)
+    } finally {
+      setFinishingAttention(false)
+    }
+  }
 
   // NUEVO: marcar como leídos al abrir el chat
   useEffect(() => {
@@ -508,12 +595,12 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
       if (event.defaultPrevented) return
       if (event.key !== "Escape") return
       if (!selectedChatId) return
-      setSelectedChatId("")
+      requestChatSelection("")
     }
 
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [selectedChatId])
+  }, [selectedChatId, chats, authUser?.id])
 
   return (
     // Antes: <div className="flex flex-1">
@@ -523,7 +610,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
         <ChatSidebar
           chats={chats}
           selectedChatId={selectedChatId}
-          onSelectChat={setSelectedChatId}
+          onSelectChat={requestChatSelection}
         />
       </div>
 
@@ -581,6 +668,52 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
                 className="inline-flex items-center rounded-lg bg-[#013765] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#012e54]"
               >
                 Entendido
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {finishAttentionPrompt && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]">
+          <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start gap-3 border-b border-slate-200 bg-slate-50 px-5 py-4">
+              <div className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-700">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-base font-semibold text-slate-900">Finalizar atencion</h3>
+                <p className="mt-0.5 text-sm text-slate-600">El bot esta pausado en este chat.</p>
+              </div>
+            </div>
+            <div className="space-y-3 px-5 py-4 text-sm text-slate-700">
+              <p>
+                Terminaste de atender a{" "}
+                <span className="font-semibold text-slate-900">
+                  {finishAttentionPrompt.chatName ?? "este paciente"}
+                </span>
+                ?
+              </p>
+              <p className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-[#013765]">
+                Si confirmas, el flujo del bot vuelve al inicio y queda activo para la proxima respuesta del paciente.
+              </p>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              <button
+                type="button"
+                disabled={finishingAttention}
+                onClick={leaveChatWithoutFinishing}
+                className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                No, dejar pausado
+              </button>
+              <button
+                type="button"
+                disabled={finishingAttention}
+                onClick={finishAttentionAndReactivateBot}
+                className="inline-flex items-center rounded-lg bg-[#013765] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#012e54] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {finishingAttention ? "Finalizando..." : "Si, finalizar y activar bot"}
               </button>
             </div>
           </div>

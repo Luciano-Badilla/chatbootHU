@@ -59,6 +59,108 @@ type PreviewMedia = {
 
 const API_BASE = (import.meta.env.VITE_APP_URL || "").replace(/\/$/, "")
 
+const ensureLeaflet = async () => {
+  const win = window as any
+  if (win.L) return win.L
+
+  if (!document.querySelector("link[data-leaflet-css]")) {
+    const link = document.createElement("link")
+    link.rel = "stylesheet"
+    link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    link.dataset.leafletCss = "true"
+    document.head.appendChild(link)
+  }
+
+  return await new Promise<any>((resolve, reject) => {
+    const existingScript = document.querySelector("script[data-leaflet-js]")
+    if (existingScript) {
+      existingScript.addEventListener("load", () => win.L ? resolve(win.L) : reject(new Error("Leaflet no disponible")), { once: true })
+      existingScript.addEventListener("error", () => reject(new Error("No se pudo cargar Leaflet")), { once: true })
+      return
+    }
+
+    const script = document.createElement("script")
+    script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    script.dataset.leafletJs = "true"
+    script.onload = () => win.L ? resolve(win.L) : reject(new Error("Leaflet no disponible"))
+    script.onerror = () => reject(new Error("No se pudo cargar Leaflet"))
+    document.body.appendChild(script)
+  })
+}
+
+const LocationPreviewMap = ({ latitude, longitude }: { latitude: number; longitude: number }) => {
+  const mapRef = useRef<HTMLDivElement | null>(null)
+  const pinRef = useRef<HTMLSpanElement | null>(null)
+
+  useEffect(() => {
+    if (!mapRef.current) return
+
+    let cancelled = false
+    let map: any = null
+    let invalidateTimer: ReturnType<typeof setTimeout> | null = null
+    let LRef: any = null
+
+    const updatePinPosition = () => {
+      if (!map || !pinRef.current || !LRef) return
+      const point = map.latLngToContainerPoint(LRef.latLng(latitude, longitude))
+      pinRef.current.style.left = `${point.x}px`
+      pinRef.current.style.top = `${point.y}px`
+    }
+
+    ensureLeaflet()
+      .then((L) => {
+        if (cancelled || !mapRef.current) return
+        LRef = L
+
+        map = L.map(mapRef.current, {
+          zoomControl: true,
+          attributionControl: true,
+          scrollWheelZoom: true,
+          zoomAnimation: false,
+          markerZoomAnimation: false,
+          fadeAnimation: false,
+        }).setView([latitude, longitude], 15)
+
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        }).addTo(map)
+
+        map.on("move zoom resize viewreset", updatePinPosition)
+        updatePinPosition()
+
+        invalidateTimer = setTimeout(() => {
+          map?.invalidateSize?.()
+          updatePinPosition()
+        }, 80)
+      })
+      .catch((error) => {
+        console.error("Error cargando mapa de ubicacion:", error)
+      })
+
+    return () => {
+      cancelled = true
+      if (invalidateTimer) clearTimeout(invalidateTimer)
+      map?.off?.("move zoom resize viewreset", updatePinPosition)
+      map?.off?.()
+      map?.remove?.()
+      map = null
+      LRef = null
+    }
+  }, [latitude, longitude])
+
+  return (
+    <div className="relative h-full w-full bg-slate-100">
+      <div ref={mapRef} className="h-full w-full" />
+      <span
+        ref={pinRef}
+        className="pointer-events-none absolute z-[500] flex h-12 w-12 -translate-x-1/2 -translate-y-full items-center justify-center rounded-full bg-[#013765] text-white shadow-lg ring-4 ring-white"
+      >
+        <MapPin className="h-6 w-6 fill-current" />
+      </span>
+    </div>
+  )
+}
+
 export default function ChatInfo({
   chat,
   variables = [],
@@ -1259,18 +1361,6 @@ export default function ChatInfo({
                       </div>
 
                       <div className="flex items-center gap-2">
-                        {preview.url || (preview.type === "location" && preview.location?.isValid) ? (
-                          <a
-                            href={preview.type === "location" && preview.location ? getLocationMapsUrl(preview.location) : preview.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-100"
-                          >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                            {preview.type === "location" ? "Abrir en Google Maps" : "Abrir"}
-                          </a>
-                        ) : null}
-
                         <Button
                           type="button"
                           size="sm"
@@ -1327,14 +1417,10 @@ export default function ChatInfo({
                           <div className="mx-auto max-w-3xl overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
                             {preview.location.isValid ? (
                               <div className="relative h-[420px] w-full overflow-hidden bg-slate-100">
-                                <iframe
-                                  title={preview.location.name}
-                                  className="h-full w-full bg-slate-100"
-                                  src={`https://www.openstreetmap.org/export/embed.html?bbox=${preview.location.longitude - 0.01}%2C${preview.location.latitude - 0.01}%2C${preview.location.longitude + 0.01}%2C${preview.location.latitude + 0.01}&layer=mapnik`}
+                                <LocationPreviewMap
+                                  latitude={preview.location.latitude}
+                                  longitude={preview.location.longitude}
                                 />
-                                <span className="pointer-events-none absolute left-1/2 top-1/2 z-10 flex h-12 w-12 -translate-x-1/2 -translate-y-full items-center justify-center rounded-full bg-[#013765] text-white shadow-lg ring-4 ring-white">
-                                  <MapPin className="h-6 w-6 fill-current" />
-                                </span>
                               </div>
                             ) : (
                               <div className="flex h-64 items-center justify-center bg-slate-100 text-[#013765]">

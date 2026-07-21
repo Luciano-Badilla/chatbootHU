@@ -6,6 +6,7 @@ use App\Models\Chat;
 use App\Models\Contact;
 use App\Models\Message;
 use App\Services\AuditService;
+use App\Services\BotInactivityService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
@@ -13,7 +14,10 @@ use PhpMqtt\Client\MqttClient;
 
 class ChatController extends Controller
 {
-    public function __construct(private readonly AuditService $auditService)
+    public function __construct(
+        private readonly AuditService $auditService,
+        private readonly BotInactivityService $botInactivityService,
+    )
     {
     }
 
@@ -216,6 +220,75 @@ class ChatController extends Controller
         ]);
     }
 
+    public function finishOperatorAttention(Request $request, Chat $chat)
+    {
+        $actor = $request->user();
+        $actorId = (int) ($actor?->id ?? 0);
+
+        if (!$actorId || (int) ($chat->operator_id ?? 0) !== $actorId) {
+            return response()->json([
+                'ok' => false,
+                'message' => 'Solo el operador asignado puede finalizar la atencion.',
+            ], 403);
+        }
+
+        $chat->loadMissing('operator');
+        $before = [
+            'bot_enabled' => (bool) $chat->bot_enabled,
+            'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null,
+            'operator_name' => $chat->operator?->name,
+            'bot_node_id' => $chat->bot_node_id,
+        ];
+
+        $flow = $this->botInactivityService->getDefaultFlow();
+        if (!$flow || !$flow->start_node_id) {
+            return response()->json([
+                'ok' => false,
+                'message' => 'No hay un flujo activo para reiniciar el bot.',
+            ], 422);
+        }
+
+        $this->botInactivityService->resetChatToStartFromFlow($chat, $flow, 'operator_finished_attention');
+        $chat->operator_id = null;
+        $chat->save();
+        $chat->load('operator');
+
+        $after = [
+            'bot_enabled' => (bool) $chat->bot_enabled,
+            'operator_id' => null,
+            'operator_name' => null,
+            'bot_node_id' => $chat->bot_node_id,
+        ];
+
+        $this->auditService->recordChatAction(
+            'operator_finished_attention',
+            'Finalizo la atencion y reactivo el bot',
+            $chat,
+            $actor,
+            [
+                'before' => $before,
+                'after' => $after,
+            ],
+        );
+
+        $this->publishOperatorStatus((int) $chat->id, [
+            'chat_id' => (int) $chat->id,
+            'active' => false,
+            'operator_id' => null,
+            'operator_name' => null,
+        ]);
+
+        $this->publishBotStatus((int) $chat->id, true);
+
+        return response()->json([
+            'ok' => true,
+            'chat_id' => (int) $chat->id,
+            'bot_enabled' => true,
+            'operator_id' => null,
+            'operator_name' => null,
+        ]);
+    }
+
     public function getMessages($chatId)
     {
         $messages = Message::where('chat_id', $chatId)->get();
@@ -257,6 +330,27 @@ class ChatController extends Controller
             $mqtt->disconnect();
         } catch (\Throwable $e) {
             Log::error('MQTT Error (operator status): ' . $e->getMessage());
+        }
+    }
+
+    private function publishBotStatus(int $chatId, bool $enabled): void
+    {
+        $host = env('MQTT_HOST') ?: env('VITE_MOSQUITTO_HOST');
+        if (!$host) {
+            Log::warning('MQTT host not configured for bot status publish.');
+            return;
+        }
+
+        try {
+            $mqtt = new MqttClient((string) $host, 1883, 'laravel_status_bot_' . uniqid());
+            $mqtt->connect();
+            $mqtt->publish("status_bot/chat/{$chatId}", json_encode([
+                'chat_id' => $chatId,
+                'status' => $enabled ? 'enabled' : 'disabled',
+            ]), 0);
+            $mqtt->disconnect();
+        } catch (\Throwable $e) {
+            Log::error('MQTT Error (bot status): ' . $e->getMessage());
         }
     }
 }

@@ -25,12 +25,19 @@ interface ChatMainProps {
 type PreviewMedia = {
   url?: string
   name: string
-  type: "image" | "video" | "audio" | "document" | "contacts"
+  type: "image" | "video" | "audio" | "document" | "contacts" | "location"
   contact?: {
     name: string
     phone: string
     organization?: string
     title?: string
+  }
+  location?: {
+    latitude: number
+    longitude: number
+    name: string
+    address: string
+    isValid: boolean
   }
 }
 
@@ -232,7 +239,8 @@ export default function ChatMain({
   const attachmentMenuRef = useRef<HTMLDivElement | null>(null)
   const locationMapRef = useRef<HTMLDivElement | null>(null)
   const leafletMapRef = useRef<any | null>(null)
-  const locationMarkerRef = useRef<any | null>(null)
+  const locationPinRef = useRef<HTMLSpanElement | null>(null)
+  const locationPinPositionRef = useRef<{ latitude: number; longitude: number } | null>(null)
 
   const closeAllModals = () => {
     setPreview(null)
@@ -791,29 +799,29 @@ export default function ChatMain({
     const L = (window as Window & { L?: any }).L
     if (!map || !L) return
 
-    if (!locationMarkerRef.current) {
-      locationMarkerRef.current = L.marker([latitude, longitude], { draggable: true }).addTo(map)
-      locationMarkerRef.current.on("dragend", async (event: any) => {
-        const position = event.target.getLatLng()
-        await selectLocation(position.lat, position.lng)
-      })
-    } else {
-      locationMarkerRef.current.setLatLng([latitude, longitude])
+    const updatePinPosition = () => {
+      if (!locationPinRef.current) return
+      const point = map.latLngToContainerPoint(L.latLng(latitude, longitude))
+      locationPinRef.current.style.left = `${point.x}px`
+      locationPinRef.current.style.top = `${point.y}px`
+      locationPinRef.current.style.opacity = "1"
     }
 
+    locationPinPositionRef.current = { latitude, longitude }
     map.flyTo([latitude, longitude], Math.max(map.getZoom(), zoom), { duration: 0.35 })
+    updatePinPosition()
   }
 
   const reverseLocation = async (latitude: number, longitude: number) => {
     try {
       const params = new URLSearchParams({
-        format: "jsonv2",
         lat: String(latitude),
         lon: String(longitude),
       })
-      const response = await fetch(`https://nominatim.openstreetmap.org/reverse?${params.toString()}`)
+      const response = await fetch(`${import.meta.env.VITE_APP_URL}/api/location/reverse?${params.toString()}`)
       if (!response.ok) return null
-      const data = await response.json()
+      const payload = await response.json()
+      const data = payload?.data ?? payload
       return {
         name: String(data?.name ?? "").trim(),
         address: String(data?.display_name ?? "").trim(),
@@ -879,7 +887,12 @@ export default function ChatMain({
           Number.isFinite(initialLongitude)
         const center = hasInitialPoint ? [initialLatitude, initialLongitude] : [-32.889459, -68.845839]
 
-        const map = L.map(locationMapRef.current, { zoomControl: false }).setView(center, hasInitialPoint ? 16 : 12)
+        const map = L.map(locationMapRef.current, {
+          zoomControl: false,
+          zoomAnimation: false,
+          markerZoomAnimation: false,
+          fadeAnimation: false,
+        }).setView(center, hasInitialPoint ? 16 : 12)
         L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
           attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
         }).addTo(map)
@@ -887,6 +900,17 @@ export default function ChatMain({
 
         map.on("click", async (event: any) => {
           await selectLocation(event.latlng.lat, event.latlng.lng)
+        })
+        map.on("move zoom resize viewreset", () => {
+          const position = locationPinPositionRef.current
+          if (position) {
+            const point = map.latLngToContainerPoint(L.latLng(position.latitude, position.longitude))
+            if (locationPinRef.current) {
+              locationPinRef.current.style.left = `${point.x}px`
+              locationPinRef.current.style.top = `${point.y}px`
+              locationPinRef.current.style.opacity = "1"
+            }
+          }
         })
 
         leafletMapRef.current = map
@@ -903,15 +927,16 @@ export default function ChatMain({
 
     return () => {
       cancelled = true
-      if (leafletMapRef.current) {
-        leafletMapRef.current.remove()
-        leafletMapRef.current = null
-        locationMarkerRef.current = null
+        if (leafletMapRef.current) {
+          leafletMapRef.current.remove()
+          leafletMapRef.current = null
+          locationPinPositionRef.current = null
+        }
       }
-    }
   }, [locationModalOpen])
 
   const searchLocationAddress = async () => {
+    if (locationSearching) return
     const query = locationSearchQuery.trim()
     if (query.length < 3) {
       setLocationSearchResults([])
@@ -922,18 +947,18 @@ export default function ChatMain({
     setLocationSearching(true)
     try {
       const params = new URLSearchParams({
-        format: "jsonv2",
         limit: "6",
-        addressdetails: "1",
         q: query,
       })
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`)
+      const response = await fetch(`${import.meta.env.VITE_APP_URL}/api/location/search?${params.toString()}`)
       if (!response.ok) {
-        toast.error("No se pudo buscar la direccion")
+        const payload = await response.json().catch(() => null)
+        toast.error(payload?.message || "No se pudo buscar la direccion")
         return
       }
 
-      const results = await response.json()
+      const payload = await response.json()
+      const results = payload?.data ?? payload
       setLocationSearchResults(Array.isArray(results) ? results : [])
       if (!Array.isArray(results) || results.length === 0) {
         toast.error("No encontramos resultados para esa direccion")
@@ -1716,32 +1741,61 @@ export default function ChatMain({
     }
   }
 
-  const LocationMessageMap = ({ latitude, longitude }: { latitude: number; longitude: number }) => {
+  const LocationMessageMap = ({
+    latitude,
+    longitude,
+    className = "h-40",
+    interactive = false,
+  }: {
+    latitude: number
+    longitude: number
+    className?: string
+    interactive?: boolean
+  }) => {
     const mapRef = useRef<HTMLDivElement | null>(null)
+    const pinRef = useRef<HTMLSpanElement | null>(null)
 
     useEffect(() => {
       if (!mapRef.current) return
 
       let cancelled = false
       let map: any = null
+      let LRef: any = null
+      let invalidateTimer: ReturnType<typeof setTimeout> | null = null
+
+      const updatePinPosition = () => {
+        if (!map || !pinRef.current || !LRef) return
+        const point = map.latLngToContainerPoint(LRef.latLng(latitude, longitude))
+        pinRef.current.style.left = `${point.x}px`
+        pinRef.current.style.top = `${point.y}px`
+      }
 
       ensureLeaflet()
         .then((L) => {
           if (cancelled || !mapRef.current) return
+          LRef = L
 
           map = L.map(mapRef.current, {
-            attributionControl: false,
-            zoomControl: false,
-            dragging: false,
-            scrollWheelZoom: false,
-            doubleClickZoom: false,
-            boxZoom: false,
-            keyboard: false,
-            touchZoom: false,
+            attributionControl: interactive,
+            zoomControl: interactive,
+            dragging: interactive,
+            scrollWheelZoom: interactive,
+            doubleClickZoom: interactive,
+            boxZoom: interactive,
+            keyboard: interactive,
+            touchZoom: interactive,
+            zoomAnimation: false,
+            markerZoomAnimation: false,
+            fadeAnimation: false,
           }).setView([latitude, longitude], 15)
 
           L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map)
-          setTimeout(() => map?.invalidateSize?.(), 80)
+          map.on("move zoom resize viewreset", updatePinPosition)
+          updatePinPosition()
+          invalidateTimer = setTimeout(() => {
+            map?.invalidateSize?.()
+            updatePinPosition()
+          }, 80)
         })
         .catch((error) => {
           console.error("Error cargando mini mapa:", error)
@@ -1749,15 +1803,23 @@ export default function ChatMain({
 
       return () => {
         cancelled = true
+        if (invalidateTimer) clearTimeout(invalidateTimer)
+        map?.off?.("move zoom resize viewreset", updatePinPosition)
+        map?.off?.()
         map?.remove?.()
+        map = null
+        LRef = null
       }
     }, [latitude, longitude])
 
     return (
-      <div className="relative isolate h-40 w-full overflow-hidden bg-slate-200">
-        <div ref={mapRef} className="pointer-events-none h-full w-full" />
+      <div className={`relative isolate w-full overflow-hidden bg-slate-200 ${className}`}>
+        <div ref={mapRef} className={`${interactive ? "" : "pointer-events-none"} h-full w-full`} />
         <span className="pointer-events-none absolute inset-0 z-[900] bg-gradient-to-b from-transparent via-transparent to-black/10" />
-        <span className="pointer-events-none absolute left-1/2 top-1/2 z-[910] flex h-10 w-10 -translate-x-1/2 -translate-y-full items-center justify-center rounded-full bg-[#013765] text-white shadow-lg ring-4 ring-white">
+        <span
+          ref={pinRef}
+          className="pointer-events-none absolute z-[910] flex h-10 w-10 -translate-x-1/2 -translate-y-full items-center justify-center rounded-full bg-[#013765] text-white shadow-lg ring-4 ring-white"
+        >
           <MapPin className="h-5 w-5 fill-current" />
         </span>
       </div>
@@ -1995,19 +2057,40 @@ export default function ChatMain({
         ? `https://www.google.com/maps?q=${locationData.latitude},${locationData.longitude}`
         : null
 
-  return (
-        <div className="w-full overflow-hidden bg-slate-100 text-left">
+      const openLocationPreview = () => {
+        setPreview({
+          type: "location",
+          name: label,
+          location: {
+            latitude: locationData.latitude,
+            longitude: locationData.longitude,
+            name: label,
+            address: locationData.address,
+            isValid: locationData.isValid,
+          },
+        })
+      }
+
+      return (
+        <div
+          role="button"
+          tabIndex={0}
+          className="w-full overflow-hidden bg-slate-100 text-left"
+          onClick={openLocationPreview}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault()
+              openLocationPreview()
+            }
+          }}
+        >
           {locationData.isValid ? (
-            <a
-              href={mapsUrl ?? undefined}
-              target="_blank"
-              rel="noreferrer"
+            <div
               className="group block w-full overflow-hidden bg-slate-200"
-              onClick={(event) => event.stopPropagation()}
               title="Abrir ubicacion"
             >
               <LocationMessageMap latitude={locationData.latitude} longitude={locationData.longitude} />
-            </a>
+            </div>
           ) : (
             <div className="flex h-28 items-center justify-center bg-slate-200 text-[#013765]">
               <MapPin className="h-8 w-8" />
@@ -2658,6 +2741,12 @@ export default function ChatMain({
               <div className="space-y-4 p-5">
                 <div className="relative h-[380px] overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-inner xl:h-[430px]">
                   <div ref={locationMapRef} className="h-full w-full" />
+                  <span
+                    ref={locationPinRef}
+                    className="pointer-events-none absolute z-[910] flex h-12 w-12 -translate-x-1/2 -translate-y-full items-center justify-center rounded-full bg-[#013765] text-white opacity-0 shadow-lg ring-4 ring-white"
+                  >
+                    <MapPin className="h-6 w-6 fill-current" />
+                  </span>
                   <div className="pointer-events-none absolute left-3 top-3 rounded-xl bg-white/95 px-3 py-2 text-xs font-medium text-slate-600 shadow-sm">
                     Click en el mapa para seleccionar la ubicacion
                   </div>
@@ -2917,6 +3006,8 @@ export default function ChatMain({
                       <AudioLines className="h-5 w-5" />
                     ) : preview.type === "contacts" ? (
                       <Contact className="h-5 w-5" />
+                    ) : preview.type === "location" ? (
+                      <MapPin className="h-5 w-5" />
                     ) : (
                       <FileText className="h-5 w-5" />
                     )}
@@ -2931,6 +3022,8 @@ export default function ChatMain({
                             ? "Audio"
                             : preview.type === "contacts"
                               ? "Contacto"
+                              : preview.type === "location"
+                                ? "Ubicacion"
                             : "Documento"}
                     </div>
                     <div className="truncate text-sm font-semibold text-slate-900">{preview.name}</div>
@@ -2938,18 +3031,6 @@ export default function ChatMain({
                 </div>
 
                 <div className="flex items-center gap-2">
-                  {preview.url ? (
-                    <a
-                      href={preview.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-100"
-                    >
-                      <ExternalLink className="h-3.5 w-3.5" />
-                      Abrir
-                    </a>
-                  ) : null}
-
                   <Button
                     type="button"
                     size="sm"
@@ -2998,6 +3079,52 @@ export default function ChatMain({
                     <ContactPreviewCard
                       contact={preview.contact ?? { name: preview.name, phone: "" }}
                     />
+                  </div>
+                )}
+
+                {preview.type === "location" && preview.location && (
+                  <div className="bg-white p-6">
+                    <div className="mx-auto max-w-3xl overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+                      {preview.location.isValid ? (
+                        <LocationMessageMap
+                          latitude={preview.location.latitude}
+                          longitude={preview.location.longitude}
+                          className="h-[420px]"
+                          interactive
+                        />
+                      ) : (
+                        <div className="flex h-64 items-center justify-center bg-slate-100 text-[#013765]">
+                          <MapPin className="h-10 w-10" />
+                        </div>
+                      )}
+                      <div className="flex items-start gap-3 p-4">
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-[#013765] shadow-sm">
+                          <MapPin className="h-5 w-5" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-semibold text-slate-900">{preview.location.name}</p>
+                          {preview.location.address ? (
+                            <p className="mt-1 text-sm font-medium leading-relaxed text-slate-600">{preview.location.address}</p>
+                          ) : null}
+                          {preview.location.isValid ? (
+                            <p className="mt-1 text-xs font-medium text-slate-500">
+                              {preview.location.latitude.toFixed(6)}, {preview.location.longitude.toFixed(6)}
+                            </p>
+                          ) : null}
+                        </div>
+                        {preview.location.isValid ? (
+                          <a
+                            href={`https://www.google.com/maps?q=${preview.location.latitude},${preview.location.longitude}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-[#013765] px-3 text-xs font-semibold text-white transition-colors hover:bg-[#012e54]"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            Abrir en Google Maps
+                          </a>
+                        ) : null}
+                      </div>
+                    </div>
                   </div>
                 )}
 
