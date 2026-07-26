@@ -18,6 +18,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use PhpMqtt\Client\Exceptions\MqttClientException;
 use PhpMqtt\Client\MqttClient;
 
@@ -1541,6 +1542,9 @@ class WhatsAppController extends Controller
 
                 $value = $option['label'];
                 $pending['selected_next_node_id'] = $option['next_node_id'] ?? null;
+                if (is_array($option['vars'] ?? null)) {
+                    $this->setVars($chat, $option['vars']);
+                }
             }
 
             if ($value === '') {
@@ -1657,6 +1661,12 @@ class WhatsAppController extends Controller
 
             case 'input':
             case 'person_lookup':
+            case 'appointment_lookup':
+            case 'appointment_create':
+            case 'appointment_cancel':
+            case 'specialty_search':
+            case 'doctor_select':
+            case 'availability_select':
                 // devolvemos el mismo nodo (para que el bot lo envÃƒÂ­e)
                 // y sendBotNode va a setear pending_input
                 return $currentNode;
@@ -1840,6 +1850,26 @@ class WhatsAppController extends Controller
         // person lookup
         if ($node->type === 'person_lookup') {
             $this->sendPersonLookupNode($chat, $node);
+            return;
+        }
+
+        if ($node->type === 'appointment_lookup') {
+            $this->sendAppointmentLookupNode($chat, $node);
+            return;
+        }
+
+        if ($node->type === 'appointment_create') {
+            $this->sendAppointmentCreateNode($chat, $node);
+            return;
+        }
+
+        if ($node->type === 'appointment_cancel') {
+            $this->sendAppointmentCancelNode($chat, $node);
+            return;
+        }
+
+        if (in_array($node->type, ['specialty_search', 'doctor_select', 'availability_select'], true)) {
+            $this->sendAlephooSelectionNode($chat, $node);
             return;
         }
     }
@@ -2395,6 +2425,7 @@ class WhatsAppController extends Controller
 
         $targetNextNodeId = null;
         $messageToSend = null;
+        $appointmentsToSend = [];
 
 
         if ($dni === '') {
@@ -2502,6 +2533,812 @@ class WhatsAppController extends Controller
         }
 
         $node->next_node_id = $targetNextNodeId ? (int) $targetNextNodeId : null;
+    }
+
+    private function sendAppointmentLookupNode(Chat $chat, BotNode $node): void
+    {
+        $settings = $this->nodeSettings($node);
+        $vars = $this->getVars($chat);
+        $personVariable = trim((string) ($settings['person_variable'] ?? 'persona_id'));
+        $personId = preg_replace('/\D+/u', '', (string) ($vars[$personVariable] ?? ''));
+        $baseVars = $this->emptyAppointmentVars();
+        $targetNextNodeId = null;
+        $messageToSend = null;
+
+        if ($personId === '') {
+            $this->setVars($chat, array_merge($baseVars, ['turnos_lookup_status' => 'missing_person']));
+            $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus turnos porque falta identificar a la persona.');
+            $targetNextNodeId = $settings['error_next_node_id'] ?? null;
+        } elseif (!$this->isAlephooEndpointEnabled('/admision/turnos')) {
+            $this->setVars($chat, array_merge($baseVars, ['turnos_lookup_status' => 'endpoint_disabled']));
+            $messageToSend = (string) ($settings['error_message'] ?? 'La consulta de turnos no esta habilitada en este momento.');
+            $targetNextNodeId = $settings['error_next_node_id'] ?? null;
+        } else {
+            $baseUrl = rtrim((string) config('services.alephoo_v3.base_url'), '/');
+            $username = (string) config('services.alephoo_v3.username');
+            $password = (string) config('services.alephoo_v3.password');
+            $timeout = max(1, min(300, (int) config('services.alephoo_v3.timeout', 30)));
+
+            if ($baseUrl === '' || $username === '' || $password === '') {
+                $this->setVars($chat, array_merge($baseVars, ['turnos_lookup_status' => 'misconfigured']));
+                $messageToSend = (string) ($settings['error_message'] ?? 'La integracion con Alephoo no esta configurada correctamente.');
+                $targetNextNodeId = $settings['error_next_node_id'] ?? null;
+            } else {
+                try {
+                    $timezone = new \DateTimeZone((string) config('services.alephoo_v3.timezone', 'America/Argentina/Buenos_Aires'));
+                    $now = new \DateTimeImmutable('now', $timezone);
+                    $query = [
+                        'filter[persona]' => $personId,
+                        'filter[incluirAdHoc]' => !empty($settings['include_ad_hoc']) ? 'true' : 'false',
+                        'filter[nocancelado]' => 'true',
+                        'offset' => 0,
+                        // En Alephoo filter[fecha] es una igualdad, no un "desde".
+                        // Traemos los más recientes y aplicamos el rango desde hoy localmente.
+                        'sort' => '-fecha,-hora',
+                        'limit' => max(1, min(50, (int) ($settings['limit'] ?? 50))),
+                    ];
+
+                    $specialty = $this->appointmentSpecialtyFilter($settings, $vars);
+                    if ($specialty !== null) {
+                        $query['filter[especialidades]'] = $specialty;
+                    }
+
+                    $response = Http::timeout($timeout)
+                        ->accept('application/vnd.api+json')
+                        ->withBasicAuth($username, $password)
+                        ->get($baseUrl . '/admision/turnos', $query);
+
+                    Log::info('Alephoo active appointments response', [
+                        'chat_id' => $chat->id,
+                        'node_id' => $node->id,
+                        'person_id' => $personId,
+                        'status' => $response->status(),
+                        'ok' => $response->successful(),
+                    ]);
+
+                    if ($response->successful()) {
+                        $appointments = $this->normalizeActiveAppointments(
+                            is_array($response->json()) ? $response->json() : [],
+                            $now,
+                            !array_key_exists('exclude_elapsed_today', $settings) || !empty($settings['exclude_elapsed_today'])
+                        );
+
+                        if ($appointments !== []) {
+                            $first = $appointments[0];
+                            $this->setVars($chat, array_merge($baseVars, [
+                                'turnos_encontrados' => true,
+                                'turnos_lookup_status' => 'found',
+                                'turnos_cantidad' => count($appointments),
+                                'turnos' => $appointments,
+                                'turno_id' => $first['id'],
+                                'turno_fecha' => $first['fecha'],
+                                'turno_hora' => $first['hora'],
+                                'turno_estado_id' => $first['estado_id'],
+                                'turno_estado' => $first['estado'],
+                                'turno_agenda_id' => $first['agenda_id'],
+                                'turno_especialidad_id' => $first['especialidad_id'],
+                                'turno_especialidad' => $first['especialidad'],
+                                'turno_profesional_id' => $first['profesional_id'],
+                                'turno_profesional' => $first['profesional'],
+                                'turno_plan_id' => $first['plan_id'],
+                                'turno_sobreturno' => $first['sobreturno'],
+                                'turno_observacion' => $first['observacion'],
+                                'turno_arribo' => $first['arribo'],
+                            ]));
+                            $appointmentsToSend = $appointments;
+                            $targetNextNodeId = $node->next_node_id;
+                        } else {
+                            $this->setVars($chat, array_merge($baseVars, ['turnos_lookup_status' => 'not_found']));
+                            $messageToSend = (string) ($settings['not_found_message'] ?? 'No encontramos turnos pendientes próximos.');
+                            $targetNextNodeId = $settings['not_found_next_node_id'] ?? null;
+                        }
+                    } else {
+                        $this->setVars($chat, array_merge($baseVars, ['turnos_lookup_status' => 'error']));
+                        $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus turnos en este momento.');
+                        $targetNextNodeId = $settings['error_next_node_id'] ?? null;
+                        Log::warning('Alephoo active appointments error response', [
+                            'chat_id' => $chat->id,
+                            'node_id' => $node->id,
+                            'person_id' => $personId,
+                            'status' => $response->status(),
+                            'body' => $response->body(),
+                        ]);
+                    }
+                } catch (\Throwable $e) {
+                    $this->setVars($chat, array_merge($baseVars, ['turnos_lookup_status' => 'error']));
+                    $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus turnos en este momento.');
+                    $targetNextNodeId = $settings['error_next_node_id'] ?? null;
+                    Log::error('Alephoo active appointments lookup failed: ' . $e->getMessage(), [
+                        'chat_id' => $chat->id,
+                        'node_id' => $node->id,
+                        'person_id' => $personId,
+                    ]);
+                }
+            }
+        }
+
+        if ($appointmentsToSend !== []) {
+            $selectionMode = ($settings['result_mode'] ?? 'messages') === 'cancel_buttons';
+            $pendingOptions = [];
+
+            foreach ($appointmentsToSend as $appointment) {
+                $appointmentVars = $this->appointmentTemplateVars($appointment);
+                $this->setVars($chat, $appointmentVars);
+                $renderedMessage = $this->renderTemplate(trim((string) $node->body), $chat, $node);
+
+                if ($renderedMessage === '') {
+                    continue;
+                }
+
+                if ($selectionMode) {
+                    $replyId = 'cancel_appointment:' . (string) $appointment['id'];
+                    $buttonTitle = trim((string) ($settings['cancel_button_text'] ?? 'Cancelar'));
+                    $this->sendAppointmentCancelChoice(
+                        $chat,
+                        $node,
+                        $renderedMessage,
+                        $replyId,
+                        $buttonTitle
+                    );
+                    $pendingOptions[] = [
+                        'id' => $replyId,
+                        'label' => $buttonTitle,
+                        'next_node_id' => $node->next_node_id,
+                        'vars' => $appointmentVars,
+                    ];
+                } else {
+                    $this->sendWhatsAppText($chat, $renderedMessage, 'user', 'bot', 'appointment_lookup');
+                }
+            }
+
+            // Las variables turno_* conservan el próximo turno para mantener compatibilidad.
+            $this->setVars($chat, $this->appointmentTemplateVars($appointmentsToSend[0]));
+
+            if ($selectionMode && $pendingOptions !== []) {
+                $state = $this->getState($chat);
+                $state['pending_input'] = [
+                    'node_id' => $node->id,
+                    'variable' => '',
+                    'validation_regex' => '',
+                    'error_message' => (string) ($settings['invalid_message'] ?? 'Selecciona el botón Cancelar del turno que quieras cancelar.'),
+                    'next_node_id' => $node->next_node_id,
+                    'response_mode' => 'buttons',
+                    'options' => $pendingOptions,
+                ];
+                $this->setState($chat, $state);
+                $chat->bot_node_id = $node->id;
+                $chat->save();
+                $node->setAttribute('runtime_waiting_input', true);
+            }
+        } elseif (trim((string) $messageToSend) !== '') {
+            $renderedMessage = $this->renderTemplate(trim((string) $messageToSend), $chat, $node);
+            if ($renderedMessage !== '') {
+                $this->sendWhatsAppText($chat, $renderedMessage, 'user', 'bot', 'appointment_lookup');
+            }
+        }
+
+        $node->next_node_id = $targetNextNodeId ? (int) $targetNextNodeId : null;
+    }
+
+    private function appointmentTemplateVars(array $appointment): array
+    {
+        return [
+            'turno_id' => $appointment['id'] ?? null,
+            'turno_fecha' => $appointment['fecha'] ?? null,
+            'turno_hora' => $appointment['hora'] ?? null,
+            'turno_estado_id' => $appointment['estado_id'] ?? null,
+            'turno_estado' => $appointment['estado'] ?? null,
+            'turno_agenda_id' => $appointment['agenda_id'] ?? null,
+            'turno_especialidad_id' => $appointment['especialidad_id'] ?? null,
+            'turno_especialidad' => $appointment['especialidad'] ?? null,
+            'turno_profesional_id' => $appointment['profesional_id'] ?? null,
+            'turno_profesional' => $appointment['profesional'] ?? null,
+            'turno_plan_id' => $appointment['plan_id'] ?? null,
+            'turno_sobreturno' => $appointment['sobreturno'] ?? false,
+            'turno_observacion' => $appointment['observacion'] ?? null,
+            'turno_arribo' => $appointment['arribo'] ?? null,
+        ];
+    }
+
+    private function sendAppointmentCancelChoice(
+        Chat $chat,
+        BotNode $node,
+        string $body,
+        string $replyId,
+        string $buttonTitle
+    ): void {
+        $contact = $chat->contact;
+        if (!$contact || !$contact->whatsapp_id) {
+            return;
+        }
+
+        $body = mb_substr(trim((string) preg_replace('/\s+/u', ' ', $body)), 0, 1024);
+        $buttonTitle = mb_substr($buttonTitle !== '' ? $buttonTitle : 'Cancelar', 0, 20);
+        $payload = [
+            'messaging_product' => 'whatsapp',
+            'to' => $this->formatPhoneNumber($contact->whatsapp_id),
+            'type' => 'interactive',
+            'interactive' => [
+                'type' => 'button',
+                'body' => ['text' => $body],
+                'action' => ['buttons' => [[
+                    'type' => 'reply',
+                    'reply' => ['id' => $replyId, 'title' => $buttonTitle],
+                ]]],
+            ],
+        ];
+
+        $response = Http::withToken($this->whatsappAccessToken())
+            ->post('https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages', $payload);
+
+        if ($response->failed()) {
+            Log::error('API Error (sendAppointmentCancelChoice): ' . $response->body(), [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'reply_id' => $replyId,
+            ]);
+            return;
+        }
+
+        $this->persistAndPublishOutgoing($chat, $body, $response->json('messages.0.id'), 'appointment_lookup', [[
+            'id' => $replyId,
+            'label' => $buttonTitle,
+            'kind' => 'button',
+        ]]);
+    }
+
+    private function sendAlephooSelectionNode(Chat $chat, BotNode $node): void
+    {
+        $settings = $this->nodeSettings($node);
+        $vars = $this->getVars($chat);
+        $baseUrl = $this->alephooApiRootUrl();
+        $apiKey = $this->alephooApiKey();
+        $rows = [];
+        $failed = false;
+
+        try {
+            if ($baseUrl === '' || $apiKey === '') {
+                throw new \RuntimeException('La integracion con Alephoo no esta configurada.');
+            }
+
+            $client = Http::timeout($this->alephooTimeout())
+                ->acceptJson()
+                ->withHeaders(['X-API-KEY' => $apiKey]);
+
+            if ($node->type === 'specialty_search') {
+                if (!$this->isAlephooEndpointEnabled('/especialidades')) {
+                    throw new \RuntimeException('El endpoint de especialidades no esta habilitado.');
+                }
+                $queryVariable = trim((string) ($settings['query_variable'] ?? 'especialidad_busqueda'));
+                $query = trim((string) ($vars[$queryVariable] ?? ''));
+                if ($query === '') {
+                    throw new \RuntimeException('Falta el texto de busqueda de especialidad.');
+                }
+                $response = $client->get($baseUrl . '/especialidades');
+                if (!$response->successful()) {
+                    throw new \RuntimeException("Alephoo respondio {$response->status()} al consultar especialidades.");
+                }
+                $items = $response->successful() && is_array($response->json()) ? $response->json() : [];
+                $needle = mb_strtolower(Str::ascii($query));
+                $items = array_values(array_filter($items, fn($item) =>
+                    is_array($item)
+                    && str_contains(mb_strtolower(Str::ascii((string) ($item['nombre'] ?? ''))), $needle)
+                ));
+                usort($items, fn($a, $b) => strcasecmp((string) ($a['nombre'] ?? ''), (string) ($b['nombre'] ?? '')));
+                foreach (array_slice($items, 0, 10) as $item) {
+                    $id = (string) ($item['id'] ?? '');
+                    $name = trim((string) ($item['nombre'] ?? ''));
+                    if ($id !== '' && $name !== '') {
+                        $rows[] = [
+                            'id' => 'specialty:' . $id,
+                            'title' => Str::limit($name, 24, ''),
+                            'description' => '',
+                            'vars' => ['especialidad_id' => $id, 'especialidad_nombre' => $name],
+                        ];
+                    }
+                }
+            } elseif ($node->type === 'doctor_select') {
+                if (!$this->isAlephooEndpointEnabled('/profesionales/{especialidad}')) {
+                    throw new \RuntimeException('El endpoint de profesionales no esta habilitado.');
+                }
+                $specialtyVariable = trim((string) ($settings['specialty_variable'] ?? 'especialidad_id'));
+                $specialtyId = preg_replace('/\D+/u', '', (string) ($vars[$specialtyVariable] ?? ''));
+                if ($specialtyId === '') {
+                    throw new \RuntimeException('Falta el ID de especialidad.');
+                }
+                $response = $client->get($baseUrl . '/profesionales/' . $specialtyId);
+                if (!$response->successful()) {
+                    throw new \RuntimeException("Alephoo respondio {$response->status()} al consultar profesionales.");
+                }
+                $items = $response->successful() && is_array($response->json()) ? $response->json() : [];
+                usort($items, fn($a, $b) => strcasecmp(
+                    trim((string) ($a['apellidos'] ?? '') . ' ' . (string) ($a['nombres'] ?? '')),
+                    trim((string) ($b['apellidos'] ?? '') . ' ' . (string) ($b['nombres'] ?? ''))
+                ));
+                foreach (array_slice($items, 0, 10) as $item) {
+                    $id = (string) ($item['id'] ?? '');
+                    $name = trim((string) ($item['nombres'] ?? '') . ' ' . (string) ($item['apellidos'] ?? ''));
+                    if ($id !== '' && $name !== '') {
+                        $rows[] = [
+                            'id' => 'doctor:' . $id,
+                            'title' => Str::limit($name, 24, ''),
+                            'description' => '',
+                            'vars' => [
+                                'profesional_id' => $id,
+                                'profesional_nombre' => $name,
+                                'profesional_agenda_dias' => (int) ($item['agenda_days'] ?? $settings['days'] ?? 28),
+                            ],
+                        ];
+                    }
+                }
+            } else {
+                if (!$this->isAlephooEndpointEnabled('/turnos/{profesional}/{especialidad}/{dias}')) {
+                    throw new \RuntimeException('El endpoint de turnos disponibles no esta habilitado.');
+                }
+                $specialtyId = preg_replace('/\D+/u', '', (string) ($vars[trim((string) ($settings['specialty_variable'] ?? 'especialidad_id'))] ?? ''));
+                $doctorId = preg_replace('/\D+/u', '', (string) ($vars[trim((string) ($settings['doctor_variable'] ?? 'profesional_id'))] ?? ''));
+                $daysValue = $vars[trim((string) ($settings['days_variable'] ?? 'profesional_agenda_dias'))] ?? ($settings['days'] ?? 28);
+                $days = max(1, min(365, (int) $daysValue));
+                if ($specialtyId === '' || $doctorId === '') {
+                    throw new \RuntimeException('Falta especialidad o profesional.');
+                }
+                $response = $client->get($baseUrl . "/turnos/{$doctorId}/{$specialtyId}/{$days}");
+                if (!$response->successful()) {
+                    throw new \RuntimeException("Alephoo respondio {$response->status()} al consultar turnos.");
+                }
+                $items = $response->successful() && is_array($response->json()) ? $response->json() : [];
+                usort($items, fn($a, $b) => strcmp(
+                    (string) ($a['fecha'] ?? '') . ' ' . (string) ($a['hora'] ?? ''),
+                    (string) ($b['fecha'] ?? '') . ' ' . (string) ($b['hora'] ?? '')
+                ));
+                foreach (array_slice($items, 0, 10) as $index => $item) {
+                    $date = (string) ($item['fecha'] ?? '');
+                    $time = (string) ($item['hora'] ?? '');
+                    $agenda = (string) ($item['agenda'] ?? '');
+                    if ($date !== '' && $time !== '' && $agenda !== '') {
+                        $rows[] = [
+                            'id' => 'slot:' . $index . ':' . $agenda,
+                            'title' => Str::limit($date . ' ' . $time, 24, ''),
+                            'description' => '',
+                            'vars' => [
+                                'turno_fecha' => $date,
+                                'turno_hora' => $time,
+                                'turno_agenda_id' => $agenda,
+                                'turno_orden' => is_numeric($item['orden'] ?? null) ? (int) $item['orden'] : -1,
+                            ],
+                        ];
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            $failed = true;
+            Log::error('Hospital API selection node failed: ' . $e->getMessage(), [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'type' => $node->type,
+            ]);
+        }
+
+        if ($rows === []) {
+            $message = $failed
+                ? (string) ($settings['error_message'] ?? 'No pudimos consultar Alephoo en este momento.')
+                : (string) ($settings['empty_message'] ?? 'No encontramos opciones disponibles.');
+            $this->sendWhatsAppText($chat, $this->renderTemplate($message, $chat, $node), 'user', 'bot', $node->type);
+            $targetNextNodeId = $failed
+                ? ($settings['error_next_node_id'] ?? null)
+                : ($settings['empty_next_node_id'] ?? null);
+            if ($targetNextNodeId) {
+                $chat->bot_node_id = (int) $targetNextNodeId;
+                $chat->save();
+                $node->next_node_id = (int) $targetNextNodeId;
+                $node->setAttribute('runtime_branch_resolved', true);
+            }
+            return;
+        }
+
+        $this->sendDynamicWhatsAppList($chat, $node, $rows);
+        $state = $this->getState($chat);
+        $state['pending_input'] = [
+            'node_id' => $node->id,
+            'variable' => '',
+            'validation_regex' => '',
+            'error_message' => (string) ($settings['invalid_message'] ?? 'Elegi una opcion de la lista.'),
+            'next_node_id' => $node->next_node_id,
+            'response_mode' => 'list',
+            'options' => array_map(fn($row) => [
+                'id' => $row['id'],
+                'label' => $row['title'],
+                'next_node_id' => $node->next_node_id,
+                'vars' => $row['vars'],
+            ], $rows),
+        ];
+        $this->setState($chat, $state);
+        $chat->bot_node_id = $node->id;
+        $chat->save();
+    }
+
+    private function sendDynamicWhatsAppList(Chat $chat, BotNode $node, array $rows): void
+    {
+        $contact = $chat->contact;
+        if (!$contact || !$contact->whatsapp_id) {
+            return;
+        }
+        $settings = $this->nodeSettings($node);
+        $body = $this->renderTemplate((string) ($node->body ?: 'Selecciona una opcion.'), $chat, $node);
+        $waRows = array_map(fn($row) => [
+            'id' => (string) $row['id'],
+            'title' => (string) $row['title'],
+            'description' => $row['description'] !== '' ? (string) $row['description'] : null,
+        ], array_slice($rows, 0, 10));
+        $payload = [
+            'messaging_product' => 'whatsapp',
+            'to' => $this->formatPhoneNumber($contact->whatsapp_id),
+            'type' => 'interactive',
+            'interactive' => [
+                'type' => 'list',
+                'body' => ['text' => $body],
+                'action' => [
+                    'button' => Str::limit((string) ($settings['button_text'] ?? 'Ver opciones'), 20, ''),
+                    'sections' => [[
+                        'title' => Str::limit((string) ($settings['section_title'] ?? 'Opciones'), 24, ''),
+                        'rows' => $waRows,
+                    ]],
+                ],
+            ],
+        ];
+        $response = Http::withToken($this->whatsappAccessToken())
+            ->post('https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages', $payload);
+        if ($response->failed()) {
+            Log::error('API Error (sendDynamicWhatsAppList): ' . $response->body());
+            return;
+        }
+        $interactiveOptions = array_map(fn($row) => [
+            'id' => $row['id'],
+            'label' => $row['title'],
+            'description' => $row['description'] ?? '',
+            'kind' => 'list',
+        ], $waRows);
+        $this->persistAndPublishOutgoing($chat, $body, $response->json('messages.0.id'), $node->type, $interactiveOptions);
+    }
+
+    private function sendAppointmentCreateNode(Chat $chat, BotNode $node): void
+    {
+        $settings = $this->nodeSettings($node);
+        $vars = $this->getVars($chat);
+        $value = fn(string $setting, string $default) => $vars[trim((string) ($settings[$setting] ?? $default))] ?? null;
+
+        $personId = preg_replace('/\D+/u', '', (string) $value('person_variable', 'persona_id'));
+        $specialtyId = preg_replace('/\D+/u', '', (string) $value('specialty_variable', 'especialidad_id'));
+        $doctorId = preg_replace('/\D+/u', '', (string) $value('doctor_variable', 'profesional_id'));
+        $agendaId = preg_replace('/\D+/u', '', (string) $value('agenda_variable', 'turno_agenda_id'));
+        $date = trim((string) $value('date_variable', 'turno_fecha'));
+        $time = trim((string) $value('time_variable', 'turno_hora'));
+        $order = $value('order_variable', 'turno_orden');
+        $updateInsurance = filter_var($value('update_insurance_variable', 'actualizar_obra_social') ?? false, FILTER_VALIDATE_BOOL);
+        $insuranceId = $value('insurance_variable', 'persona_obra_social_id');
+        $planId = $value('plan_variable', 'persona_plan_id');
+
+        $resultVars = [
+            'turno_creado' => false,
+            'turno_create_status' => 'error',
+            'turno_creado_id' => null,
+            'turno_create_response' => null,
+        ];
+        $targetNextNodeId = $settings['error_next_node_id'] ?? null;
+        $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos confirmar el turno en este momento.');
+
+        $validDate = \DateTimeImmutable::createFromFormat('!Y-m-d', $date);
+        $missingData = $personId === '' || $specialtyId === '' || $doctorId === '' || $agendaId === ''
+            || !$validDate || $validDate->format('Y-m-d') !== $date || $time === '';
+
+        if ($missingData) {
+            $resultVars['turno_create_status'] = 'missing_data';
+        } elseif (
+            !$this->isAlephooEndpointEnabled('/turnos/{profesional}/{especialidad}/{dias}')
+            || !$this->isAlephooEndpointEnabled('/crear/turno')
+        ) {
+            $resultVars['turno_create_status'] = 'endpoint_disabled';
+        } else {
+            $baseUrl = $this->alephooApiRootUrl();
+            $apiKey = $this->alephooApiKey();
+
+            if ($baseUrl === '' || $apiKey === '') {
+                $resultVars['turno_create_status'] = 'misconfigured';
+            } else {
+                try {
+                    $today = new \DateTimeImmutable('today', new \DateTimeZone('America/Argentina/Buenos_Aires'));
+                    $days = max(1, min(365, (int) $today->diff($validDate)->format('%r%a') + 1));
+                    $availability = Http::timeout($this->alephooTimeout())
+                        ->acceptJson()
+                        ->withHeaders(['X-API-KEY' => $apiKey])
+                        ->get($baseUrl . "/turnos/{$doctorId}/{$specialtyId}/{$days}");
+
+                    $slots = $availability->successful() && is_array($availability->json()) ? $availability->json() : [];
+                    $stillAvailable = collect($slots)->contains(fn($slot) =>
+                        is_array($slot)
+                        && (string) ($slot['fecha'] ?? '') === $date
+                        && (string) ($slot['hora'] ?? '') === $time
+                        && (string) ($slot['agenda'] ?? '') === $agendaId
+                    );
+
+                    if (!$stillAvailable) {
+                        $resultVars['turno_create_status'] = 'unavailable';
+                        $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
+                        $messageToSend = (string) ($settings['unavailable_message'] ?? 'El turno seleccionado ya no esta disponible.');
+                    } else {
+                        $payload = [
+                            'hora' => $time,
+                            'fecha' => $date,
+                            'orden' => is_numeric($order) ? (int) $order : -1,
+                            'agenda_id' => (int) $agendaId,
+                            'persona_id' => (int) $personId,
+                            'especialidad_id' => (int) $specialtyId,
+                            'actualizarObraSocial' => $updateInsurance,
+                            'obraSocialId' => $insuranceId !== null && $insuranceId !== '' ? $insuranceId : null,
+                            'planId' => $planId !== null && $planId !== '' ? $planId : null,
+                        ];
+                        $response = Http::timeout($this->alephooTimeout())
+                            ->acceptJson()
+                            ->withHeaders(['X-API-KEY' => $apiKey])
+                            ->post($baseUrl . '/crear/turno', $payload);
+
+                        if ($response->successful()) {
+                            $json = is_array($response->json()) ? $response->json() : [];
+                            $resultVars = array_merge($resultVars, [
+                                'turno_creado' => true,
+                                'turno_create_status' => 'created',
+                                'turno_creado_id' => data_get($json, 'turno.data.id'),
+                                'turno_create_response' => $json,
+                            ]);
+                            $targetNextNodeId = $node->next_node_id;
+                            $messageToSend = (string) ($node->body ?? '');
+                        } elseif (in_array($response->status(), [409, 422], true)) {
+                            $resultVars['turno_create_status'] = 'unavailable';
+                            $resultVars['turno_create_response'] = $response->json();
+                            $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
+                            $messageToSend = (string) ($settings['unavailable_message'] ?? 'El turno seleccionado ya no esta disponible.');
+                        } else {
+                            $resultVars['turno_create_status'] = 'error';
+                            Log::warning('Hospital API appointment create error response', [
+                                'chat_id' => $chat->id,
+                                'node_id' => $node->id,
+                                'status' => $response->status(),
+                                'body' => $response->body(),
+                            ]);
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    $resultVars['turno_create_status'] = 'error';
+                    Log::error('Hospital API appointment create failed: ' . $e->getMessage(), [
+                        'chat_id' => $chat->id,
+                        'node_id' => $node->id,
+                    ]);
+                }
+            }
+        }
+
+        $this->setVars($chat, $resultVars);
+        if (trim($messageToSend) !== '') {
+            $renderedMessage = $this->renderTemplate(trim($messageToSend), $chat, $node);
+            if ($renderedMessage !== '') {
+                $this->sendWhatsAppText($chat, $renderedMessage, 'user', 'bot', 'appointment_create');
+            }
+        }
+        $node->next_node_id = $targetNextNodeId ? (int) $targetNextNodeId : null;
+    }
+
+    private function sendAppointmentCancelNode(Chat $chat, BotNode $node): void
+    {
+        $settings = $this->nodeSettings($node);
+        $vars = $this->getVars($chat);
+        $appointmentVariable = trim((string) ($settings['appointment_variable'] ?? 'turno_id'));
+        $appointmentId = preg_replace('/\D+/u', '', (string) ($vars[$appointmentVariable] ?? ''));
+        $knownAppointments = is_array($vars['turnos'] ?? null) ? $vars['turnos'] : [];
+        $knownAppointmentIds = array_values(array_filter(array_map(
+            fn($appointment) => is_array($appointment) ? (string) ($appointment['id'] ?? '') : '',
+            $knownAppointments
+        )));
+        $resultVars = [
+            'turno_cancelado' => false,
+            'turno_cancel_status' => 'error',
+            'turno_cancelado_id' => null,
+            'turno_cancel_response' => null,
+        ];
+        $targetNextNodeId = $settings['error_next_node_id'] ?? null;
+        $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos cancelar el turno en este momento.');
+
+        if ($appointmentId === '') {
+            $resultVars['turno_cancel_status'] = 'missing_data';
+        } elseif ($knownAppointmentIds === [] || !in_array((string) $appointmentId, $knownAppointmentIds, true)) {
+            $resultVars['turno_cancel_status'] = 'invalid_appointment';
+        } elseif (!$this->isAlephooEndpointEnabled('/cancelarTurnos/{turno}')) {
+            $resultVars['turno_cancel_status'] = 'endpoint_disabled';
+        } else {
+            $key = base64_decode((string) config('services.alephoo_cancel.key'), true);
+            $iv = base64_decode((string) config('services.alephoo_cancel.iv'), true);
+            $baseUrl = $this->alephooApiRootUrl();
+            $apiKey = $this->alephooApiKey();
+
+            if ($key === false || $key === '' || $iv === false || strlen($iv) !== 16 || $baseUrl === '' || $apiKey === '') {
+                $resultVars['turno_cancel_status'] = 'misconfigured';
+            } else {
+                try {
+                    $encrypted = openssl_encrypt($appointmentId, 'AES-128-CBC', $key, OPENSSL_RAW_DATA, $iv);
+                    if ($encrypted === false) {
+                        throw new \RuntimeException('No se pudo cifrar el ID del turno.');
+                    }
+                    $encryptedId = rtrim(strtr(base64_encode($encrypted), '+/', '-_'), '=');
+                    $response = Http::timeout($this->alephooTimeout())
+                        ->acceptJson()
+                        ->withHeaders(['X-API-KEY' => $apiKey])
+                        ->put($baseUrl . '/cancelarTurnos/' . rawurlencode($encryptedId));
+
+                    $resultVars['turno_cancel_response'] = $response->json() ?? $response->body();
+
+                    if ($response->successful()) {
+                        $resultVars['turno_cancelado'] = true;
+                        $resultVars['turno_cancel_status'] = 'cancelled';
+                        $resultVars['turno_cancelado_id'] = $appointmentId;
+                        $messageToSend = $node->body ?: 'Tu turno fue cancelado correctamente.';
+                        $targetNextNodeId = $node->next_node_id;
+                    } elseif (in_array($response->status(), [404, 409, 410, 422], true)) {
+                        $resultVars['turno_cancel_status'] = 'not_available';
+                        $messageToSend = (string) ($settings['unavailable_message'] ?? 'El turno ya no esta disponible o fue cancelado anteriormente.');
+                        $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
+                    } else {
+                        $resultVars['turno_cancel_status'] = 'error';
+                        Log::warning('Alephoo appointment cancellation error response', [
+                            'chat_id' => $chat->id,
+                            'node_id' => $node->id,
+                            'appointment_id' => $appointmentId,
+                            'status' => $response->status(),
+                            'body' => $response->body(),
+                        ]);
+                    }
+                } catch (\Throwable $e) {
+                    $resultVars['turno_cancel_status'] = 'error';
+                    Log::error('Alephoo appointment cancellation failed: ' . $e->getMessage(), [
+                        'chat_id' => $chat->id,
+                        'node_id' => $node->id,
+                        'appointment_id' => $appointmentId,
+                    ]);
+                }
+            }
+        }
+
+        $this->setVars($chat, $resultVars);
+        if (trim($messageToSend) !== '') {
+            $renderedMessage = $this->renderTemplate($messageToSend, $chat, $node);
+            if ($renderedMessage !== '') {
+                $this->sendWhatsAppText($chat, $renderedMessage, 'user', 'bot', 'appointment_cancel');
+            }
+        }
+
+        $node->next_node_id = $targetNextNodeId ? (int) $targetNextNodeId : null;
+    }
+
+    private function appointmentSpecialtyFilter(array $settings, array $vars): ?string
+    {
+        $mode = (string) ($settings['specialty_mode'] ?? 'all');
+        $value = $mode === 'variable'
+            ? ($vars[trim((string) ($settings['specialty_variable'] ?? 'especialidad_id'))] ?? null)
+            : ($mode === 'fixed' ? ($settings['specialty_id'] ?? null) : null);
+        $normalized = preg_replace('/\D+/u', '', (string) $value);
+
+        return $normalized !== '' ? $normalized : null;
+    }
+
+    private function emptyAppointmentVars(): array
+    {
+        return [
+            'turnos_encontrados' => false,
+            'turnos_lookup_status' => 'error',
+            'turnos_cantidad' => 0,
+            'turnos' => [],
+            'turno_id' => null,
+            'turno_fecha' => null,
+            'turno_hora' => null,
+            'turno_estado_id' => null,
+            'turno_estado' => null,
+            'turno_agenda_id' => null,
+            'turno_especialidad_id' => null,
+            'turno_especialidad' => null,
+            'turno_profesional_id' => null,
+            'turno_profesional' => null,
+            'turno_plan_id' => null,
+            'turno_sobreturno' => false,
+            'turno_observacion' => null,
+            'turno_arribo' => null,
+        ];
+    }
+
+    private function normalizeActiveAppointments(array $payload, \DateTimeImmutable $now, bool $excludeElapsedToday): array
+    {
+        $included = [];
+        foreach (($payload['included'] ?? []) as $resource) {
+            if (is_array($resource) && isset($resource['type'], $resource['id'])) {
+                $included[(string) $resource['type'] . ':' . (string) $resource['id']] = $resource;
+            }
+        }
+
+        $appointments = [];
+        foreach (($payload['data'] ?? []) as $resource) {
+            if (!is_array($resource)) {
+                continue;
+            }
+            $attributes = is_array($resource['attributes'] ?? null) ? $resource['attributes'] : [];
+            $date = (string) ($attributes['fecha'] ?? '');
+            $time = substr((string) ($attributes['hora'] ?? ''), 0, 5);
+            $dateTime = \DateTimeImmutable::createFromFormat(
+                '!Y-m-d H:i',
+                $date . ' ' . $time,
+                $now->getTimezone()
+            );
+            if (!$dateTime || $dateTime->format('Y-m-d') < $now->format('Y-m-d')) {
+                continue;
+            }
+            if ($excludeElapsedToday && $dateTime < $now) {
+                continue;
+            }
+
+            $relationships = is_array($resource['relationships'] ?? null) ? $resource['relationships'] : [];
+            $stateRef = $relationships['estadoTurno']['data'] ?? null;
+            $state = $this->includedResource($included, $stateRef);
+            $stateAttributes = is_array($state['attributes'] ?? null) ? $state['attributes'] : [];
+            $stateId = is_array($stateRef) ? ($stateRef['id'] ?? null) : null;
+            $stateCode = mb_strtoupper(trim((string) ($stateAttributes['codigo'] ?? '')));
+            $stateName = trim((string) ($stateAttributes['alias'] ?? $stateAttributes['nombre'] ?? ''));
+            if ((string) $stateId !== '1' && $stateCode !== 'P' && mb_strtolower($stateName) !== 'pendiente') {
+                continue;
+            }
+
+            $agendaRef = $relationships['agenda']['data'] ?? null;
+            $agenda = $this->includedResource($included, $agendaRef);
+            $agendaRelationships = is_array($agenda['relationships'] ?? null) ? $agenda['relationships'] : [];
+            $specialtyRef = $agendaRelationships['especialidad']['data'] ?? null;
+            $specialty = $this->includedResource($included, $specialtyRef);
+            $professionalRef = $agendaRelationships['profesional']['data'] ?? null;
+            $professional = $this->includedResource($included, $professionalRef);
+            $professionalPersonRef = $professional['relationships']['persona']['data'] ?? null;
+            $professionalPerson = $this->includedResource($included, $professionalPersonRef);
+            $professionalAttributes = is_array($professionalPerson['attributes'] ?? null)
+                ? $professionalPerson['attributes']
+                : [];
+            $planRef = $relationships['plan']['data'] ?? null;
+
+            $appointments[] = [
+                'id' => $resource['id'] ?? null,
+                'fecha' => $date,
+                'hora' => $time,
+                'estado_id' => $stateId,
+                'estado' => $stateName !== '' ? $stateName : 'Pendiente',
+                'agenda_id' => is_array($agendaRef) ? ($agendaRef['id'] ?? null) : null,
+                'especialidad_id' => is_array($specialtyRef) ? ($specialtyRef['id'] ?? null) : null,
+                'especialidad' => $specialty['attributes']['nombre'] ?? null,
+                'profesional_id' => is_array($professionalRef) ? ($professionalRef['id'] ?? null) : null,
+                'profesional' => trim(implode(' ', array_filter([
+                    $professionalAttributes['nombres'] ?? null,
+                    $professionalAttributes['apellidos'] ?? null,
+                ]))) ?: null,
+                'plan_id' => is_array($planRef) ? ($planRef['id'] ?? null) : null,
+                'sobreturno' => (bool) ($attributes['sobreturno'] ?? false),
+                'observacion' => $attributes['observacion'] ?? null,
+                'arribo' => $attributes['fechahoraArribo'] ?? null,
+            ];
+        }
+
+        usort($appointments, fn(array $a, array $b) => strcmp($a['fecha'] . ' ' . $a['hora'], $b['fecha'] . ' ' . $b['hora']));
+
+        return $appointments;
+    }
+
+    private function includedResource(array $included, mixed $reference): array
+    {
+        if (!is_array($reference) || !isset($reference['type'], $reference['id'])) {
+            return [];
+        }
+
+        return $included[(string) $reference['type'] . ':' . (string) $reference['id']] ?? [];
     }
 
 
@@ -2771,6 +3608,68 @@ class WhatsAppController extends Controller
         ]);
     }
 
+    public function resetBotFlow(Request $request, Chat $chat)
+    {
+        $flow = $this->getDefaultFlow();
+
+        if (!$flow || !$flow->start_node_id) {
+            return response()->json([
+                'ok' => false,
+                'message' => 'No hay un flujo activo con nodo inicial configurado.',
+            ], 422);
+        }
+
+        $before = [
+            'bot_enabled' => (bool) $chat->bot_enabled,
+            'bot_flow_id' => $chat->bot_flow_id,
+            'bot_node_id' => $chat->bot_node_id,
+            'bot_step' => $chat->bot_step,
+            'bot_state' => $chat->bot_state,
+        ];
+
+        $chat->bot_flow_id = $flow->id;
+        $chat->bot_node_id = $flow->start_node_id;
+        $chat->bot_step = null;
+        $chat->bot_state = [];
+        $chat->bot_enabled = true;
+        $chat->save();
+
+        try {
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_reset_bot_' . uniqid());
+            $mqtt->connect();
+            $mqtt->publish("status_bot/chat/" . $chat->id, json_encode([
+                'chat_id' => $chat->id,
+                'status' => 'enabled',
+                'reset' => true,
+            ]), 0);
+            $mqtt->disconnect();
+        } catch (\Throwable $e) {
+            Log::error('MQTT Error (resetBotFlow): ' . $e->getMessage());
+        }
+
+        $this->auditService->recordChatAction(
+            'bot_flow_reset',
+            'Reinicio el flujo del bot del chat',
+            $chat,
+            $request->user(),
+            [
+                'before' => $before,
+                'after' => [
+                    'bot_enabled' => true,
+                    'bot_flow_id' => $flow->id,
+                    'bot_node_id' => $flow->start_node_id,
+                    'bot_step' => null,
+                    'bot_state' => [],
+                ],
+            ],
+        );
+
+        return response()->json([
+            'ok' => true,
+            'chat' => $chat->fresh(),
+        ]);
+    }
+
     private function getDefaultFlow(): ?BotFlow
     {
         return BotFlow::where('is_default', true)
@@ -2829,7 +3728,7 @@ class WhatsAppController extends Controller
             return false;
 
         // Ã¢Å“â€¦ text y person_lookup pueden ser terminales automÃƒÂ¡ticos
-        if (in_array($sentNode->type, ['text', 'person_lookup', 'image', 'document', 'video', 'audio', 'location'], true) && empty($sentNode->next_node_id)) {
+        if (in_array($sentNode->type, ['text', 'person_lookup', 'appointment_lookup', 'appointment_create', 'appointment_cancel', 'image', 'document', 'video', 'audio', 'location'], true) && empty($sentNode->next_node_id)) {
             $this->resetChatToStartFromFlow($chat, $flow, 'terminal_text');
             return true;
         }
@@ -2846,8 +3745,16 @@ class WhatsAppController extends Controller
 
     private function shouldAutoAdvance(BotNode $node): bool
     {
-        if ($node->type === 'person_lookup') {
+        if ($node->type === 'appointment_lookup' && $node->getAttribute('runtime_waiting_input')) {
+            return false;
+        }
+
+        if (in_array($node->type, ['person_lookup', 'appointment_lookup', 'appointment_create', 'appointment_cancel'], true)) {
             return true;
+        }
+
+        if (in_array($node->type, ['specialty_search', 'doctor_select', 'availability_select'], true)) {
+            return (bool) $node->getAttribute('runtime_branch_resolved');
         }
 
         $s = $this->nodeSettings($node);
@@ -2871,7 +3778,6 @@ class WhatsAppController extends Controller
     private function runAutoAdvance(Chat $chat, BotFlow $flow, BotNode $justSent): void
     {
         $chat->refresh();
-        $justSent->refresh();
 
         Log::warning('runAutoAdvance start', [
             'chat_id' => $chat->id,
@@ -3081,6 +3987,7 @@ class WhatsAppController extends Controller
                     'id' => (string) ($option['id'] ?? ''),
                     'label' => (string) ($option['label'] ?? ''),
                     'next_node_id' => $option['next_node_id'] ?? null,
+                    'vars' => is_array($option['vars'] ?? null) ? $option['vars'] : [],
                 ];
             }
         }
@@ -3093,6 +4000,7 @@ class WhatsAppController extends Controller
                     'id' => (string) ($option['id'] ?? ''),
                     'label' => (string) ($option['label'] ?? ''),
                     'next_node_id' => $option['next_node_id'] ?? null,
+                    'vars' => is_array($option['vars'] ?? null) ? $option['vars'] : [],
                 ];
             }
         }
@@ -3313,6 +4221,12 @@ class WhatsAppController extends Controller
         }
 
         return $baseUrl . '/personas/' . urlencode($dni);
+    }
+
+    private function alephooApiRootUrl(): string
+    {
+        $baseUrl = $this->alephooBaseUrl();
+        return str_ends_with($baseUrl, '/personas') ? substr($baseUrl, 0, -9) : $baseUrl;
     }
 
     private function isAlephooEndpointEnabled(string $endpoint): bool

@@ -31,4 +31,17 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    'alephoo_v3' => [
+        'base_url' => env('ALEPHOO_V3_BASE_URL', 'https://universitario.alephoo.com/api/v3'),
+        'username' => env('ALEPHOO_V3_USERNAME'),
+        'password' => env('ALEPHOO_V3_PASSWORD'),
+        'timeout' => env('ALEPHOO_V3_TIMEOUT', 30),
+        'timezone' => env('ALEPHOO_V3_TIMEZONE', 'America/Argentina/Buenos_Aires'),
+    ],
+
+    'alephoo_cancel' => [
+        'key' => env('ALEPHOO_CANCEL_KEY', env('TURNO_KEY')),
+        'iv' => env('ALEPHOO_CANCEL_IV', env('TURNO_IV')),
+    ],
+
 ];

@@ -650,6 +650,8 @@ class BotFlowController extends Controller
             ['path' => 'next_node_id', 'label' => 'salida principal'],
             ['path' => 'settings.not_found_next_node_id', 'label' => 'rama No encontrado'],
             ['path' => 'settings.error_next_node_id', 'label' => 'rama Error'],
+            ['path' => 'settings.unavailable_next_node_id', 'label' => 'rama No disponible'],
+            ['path' => 'settings.empty_next_node_id', 'label' => 'rama Sin resultados'],
         ];
 
         $beforeButtons = Arr::get($before, 'settings.buttons', []);
@@ -715,7 +717,7 @@ class BotFlowController extends Controller
     {
         $settings = is_array($settings) ? $settings : [];
 
-        foreach (['not_found_next_node_id', 'error_next_node_id'] as $singleNextKey) {
+        foreach (['not_found_next_node_id', 'error_next_node_id', 'unavailable_next_node_id', 'empty_next_node_id'] as $singleNextKey) {
             if ((int) ($settings[$singleNextKey] ?? 0) === $deletedNodeId) {
                 $settings[$singleNextKey] = null;
             }

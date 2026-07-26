@@ -2,6 +2,10 @@
 @tailwind components;
 @tailwind utilities;
 
+.bot-flow-canvas .react-flow__edgelabel-renderer {
+    z-index: 1000;
+}
+
 @layer base {
   :root {
     --background: 0 0% 100%;

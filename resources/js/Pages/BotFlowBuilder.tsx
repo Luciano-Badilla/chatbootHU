@@ -4,21 +4,28 @@ import { createPortal } from "react-dom"
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { usePage } from "@inertiajs/react"
 import { toast } from "sonner"
-import { Plus, RefreshCcw, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp, ArrowLeft, PanelLeft, Settings2, X, ArrowDown, InfoIcon, FileText, AudioLines, ImageIcon, Video, Contact, MapPin } from "lucide-react"
+import { Plus, RefreshCcw, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp, ArrowLeft, PanelLeft, Settings2, X, ArrowDown, InfoIcon, FileText, AudioLines, ImageIcon, Video, Contact, MapPin, ShieldAlert } from "lucide-react"
 import {
   applyNodeChanges,
   ReactFlow,
   Background,
+  BaseEdge,
   Controls,
+  EdgeLabelRenderer,
   Handle,
   MarkerType,
   Position,
+  getSmoothStepPath,
+  useNodes,
   type Connection,
   type Edge,
+  type EdgeProps,
   type Node as FlowNode,
   type NodeChange,
   type NodeProps,
+  type ReactFlowInstance,
 } from "@xyflow/react"
+import { getSmartEdge } from "@tisoap/react-flow-smart-edge"
 import "@xyflow/react/dist/style.css"
 import { Button } from "shadcn/components/ui/button"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "shadcn/components/ui/command"
@@ -44,7 +51,7 @@ import {
 import { cn } from "shadcn/lib/utils"
 import { Badge } from "shadcn/components/ui/badge"
 
-type NodeType = "text" | "buttons" | "list" | "input" | "handoff" | "person_lookup" | "image" | "document" | "video" | "audio" | "contact" | "location"
+type NodeType = "text" | "buttons" | "list" | "input" | "handoff" | "person_lookup" | "appointment_lookup" | "appointment_create" | "appointment_cancel" | "specialty_search" | "doctor_select" | "availability_select" | "image" | "document" | "video" | "audio" | "contact" | "location"
 
 interface BotFlow {
   id: number
@@ -90,6 +97,16 @@ interface TemplateVariableOption {
   key: string
   label: string
   kind: "builtin" | "flow"
+}
+
+type FlowDiagnosticSeverity = "error" | "warning" | "info"
+
+interface FlowDiagnostic {
+  id: string
+  severity: FlowDiagnosticSeverity
+  title: string
+  description: string
+  nodeId?: number
 }
 
 interface CanvasNodeData extends Record<string, unknown> {
@@ -210,16 +227,283 @@ type BranchTone = "default" | "info" | "success" | "warning" | "danger"
 
 const getIndexedBranchTone = (index: number): BranchTone => branchToneCycle[index % branchToneCycle.length]
 
+type EdgePoint = { x: number; y: number }
+type EdgeObstacle = { left: number; top: number; right: number; bottom: number }
+
+const pointKey = (point: EdgePoint) => `${point.x}:${point.y}`
+
+const segmentHitsObstacle = (from: EdgePoint, to: EdgePoint, obstacles: EdgeObstacle[]) =>
+  obstacles.some((obstacle) => {
+    if (from.x === to.x) {
+      return (
+        from.x > obstacle.left &&
+        from.x < obstacle.right &&
+        Math.min(from.y, to.y) < obstacle.bottom &&
+        Math.max(from.y, to.y) > obstacle.top
+      )
+    }
+
+    return (
+      from.y > obstacle.top &&
+      from.y < obstacle.bottom &&
+      Math.min(from.x, to.x) < obstacle.right &&
+      Math.max(from.x, to.x) > obstacle.left
+    )
+  })
+
+const simplifyEdgePoints = (points: EdgePoint[]) =>
+  points.filter((point, index) => {
+    if (index === 0 || index === points.length - 1) return true
+    const previous = points[index - 1]
+    const next = points[index + 1]
+    return !(
+      (previous.x === point.x && point.x === next.x) ||
+      (previous.y === point.y && point.y === next.y)
+    )
+  })
+
+const getEdgeLabelPoint = (points: EdgePoint[]) => {
+  const lengths = points.slice(1).map((point, index) =>
+    Math.abs(point.x - points[index].x) + Math.abs(point.y - points[index].y)
+  )
+  const halfLength = lengths.reduce((sum, length) => sum + length, 0) / 2
+  let travelled = 0
+
+  for (let index = 0; index < lengths.length; index += 1) {
+    if (travelled + lengths[index] >= halfLength) {
+      const from = points[index]
+      const to = points[index + 1]
+      const ratio = lengths[index] === 0 ? 0 : (halfLength - travelled) / lengths[index]
+      return {
+        x: from.x + (to.x - from.x) * ratio,
+        y: from.y + (to.y - from.y) * ratio,
+      }
+    }
+    travelled += lengths[index]
+  }
+
+  return points[0]
+}
+
+const getObstacleAvoidingPath = (
+  source: EdgePoint,
+  target: EdgePoint,
+  obstacles: EdgeObstacle[]
+) => {
+  const handleClearance = 24
+  const start = { x: source.x, y: source.y + handleClearance }
+  const end = { x: target.x, y: target.y - handleClearance }
+  const outerPadding = 48
+  const left = Math.min(source.x, target.x, ...obstacles.map((obstacle) => obstacle.left)) - outerPadding
+  const right = Math.max(source.x, target.x, ...obstacles.map((obstacle) => obstacle.right)) + outerPadding
+  const top = Math.min(source.y, target.y, ...obstacles.map((obstacle) => obstacle.top)) - outerPadding
+  const bottom = Math.max(source.y, target.y, ...obstacles.map((obstacle) => obstacle.bottom)) + outerPadding
+  const xs = Array.from(new Set([
+    left,
+    source.x,
+    target.x,
+    right,
+    ...obstacles.flatMap((obstacle) => [obstacle.left, obstacle.right]),
+  ]))
+  const ys = Array.from(new Set([
+    top,
+    start.y,
+    end.y,
+    bottom,
+    ...obstacles.flatMap((obstacle) => [obstacle.top, obstacle.bottom]),
+  ]))
+  const points = ys
+    .flatMap((y) => xs.map((x) => ({ x, y })))
+    .filter((point) => !obstacles.some((obstacle) =>
+      point.x > obstacle.left &&
+      point.x < obstacle.right &&
+      point.y > obstacle.top &&
+      point.y < obstacle.bottom
+    ))
+  const pointsByKey = new Map(points.map((point) => [pointKey(point), point]))
+  pointsByKey.set(pointKey(start), start)
+  pointsByKey.set(pointKey(end), end)
+  const graphPoints = Array.from(pointsByKey.values())
+  const endKey = pointKey(end)
+  const distances = new Map<string, number>([[pointKey(start), 0]])
+  const previous = new Map<string, string>()
+  const pending = new Set(pointsByKey.keys())
+
+  while (pending.size > 0) {
+    let currentKey: string | null = null
+    let currentDistance = Number.POSITIVE_INFINITY
+    pending.forEach((key) => {
+      const distance = distances.get(key) ?? Number.POSITIVE_INFINITY
+      if (distance < currentDistance) {
+        currentKey = key
+        currentDistance = distance
+      }
+    })
+    if (!currentKey || currentKey === endKey) break
+
+    pending.delete(currentKey)
+    const current = pointsByKey.get(currentKey)!
+    graphPoints.forEach((neighbor) => {
+      const neighborKey = pointKey(neighbor)
+      if (
+        !pending.has(neighborKey) ||
+        (neighbor.x !== current.x && neighbor.y !== current.y) ||
+        segmentHitsObstacle(current, neighbor, obstacles)
+      ) {
+        return
+      }
+
+      const distance =
+        currentDistance +
+        Math.abs(neighbor.x - current.x) +
+        Math.abs(neighbor.y - current.y)
+      const previousKey = previous.get(currentKey)
+      const previousPoint = previousKey ? pointsByKey.get(previousKey) : null
+      const changesDirection = previousPoint
+        ? (previousPoint.x === current.x) !== (current.x === neighbor.x)
+        : false
+      const routedDistance = distance + (changesDirection ? 160 : 0)
+      if (routedDistance < (distances.get(neighborKey) ?? Number.POSITIVE_INFINITY)) {
+        distances.set(neighborKey, routedDistance)
+        previous.set(neighborKey, currentKey)
+      }
+    })
+  }
+
+  if (!distances.has(endKey)) return null
+
+  const route: EdgePoint[] = []
+  let cursor: string | undefined = endKey
+  while (cursor) {
+    const point = pointsByKey.get(cursor)
+    if (!point) return null
+    route.unshift(point)
+    if (cursor === pointKey(start)) break
+    cursor = previous.get(cursor)
+  }
+
+  const pointsWithHandles = simplifyEdgePoints([source, ...route, target])
+  const labelPoint = getEdgeLabelPoint(pointsWithHandles)
+  return {
+    path: pointsWithHandles.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" "),
+    labelX: labelPoint.x,
+    labelY: labelPoint.y,
+  }
+}
+
+const LabelAwareSmartEdge = memo(function LabelAwareSmartEdge(props: EdgeProps) {
+  const nodes = useNodes()
+  const {
+    id,
+    source,
+    target,
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+    markerEnd,
+    style,
+    label,
+    data,
+  } = props
+  const draggingNodeIds = new Set(
+    nodes.filter((node) => node.dragging).map((node) => node.id),
+  )
+  const isDragging = draggingNodeIds.size > 0
+  const touchesDraggedNode = draggingNodeIds.has(source) || draggingNodeIds.has(target)
+  const routeSignature = [
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+    ...nodes.map((node) => [
+      node.id,
+      node.position.x,
+      node.position.y,
+      node.measured?.width ?? node.width ?? 0,
+      node.measured?.height ?? node.height ?? 0,
+    ].join(":")),
+  ].join("|")
+  const routeCache = useRef<{
+    signature: string
+    result: ReturnType<typeof getSmartEdge>
+  } | null>(null)
+
+  if (!routeCache.current || (!isDragging && routeCache.current.signature !== routeSignature)) {
+    routeCache.current = {
+      signature: routeSignature,
+      result: getSmartEdge({
+        nodes,
+        sourceX,
+        sourceY,
+        targetX,
+        targetY,
+        sourcePosition,
+        targetPosition,
+        options: {
+          gridRatio: 8,
+          nodePadding: 18,
+        },
+      }),
+    }
+  }
+
+  const smartEdge = routeCache.current.result
+  const fallback = getSmoothStepPath({
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+  })
+  const useDragFallback = isDragging && touchesDraggedNode
+  const edgePath = useDragFallback || smartEdge instanceof Error ? fallback[0] : smartEdge.svgPathString
+  const labelX = useDragFallback || smartEdge instanceof Error ? fallback[1] : smartEdge.edgeCenterX
+  const labelY = useDragFallback || smartEdge instanceof Error ? fallback[2] : smartEdge.edgeCenterY
+  const labelOffsetY = Number((data as any)?.labelOffsetY ?? 0)
+  const edgeColor = typeof style?.stroke === "string" ? style.stroke : "#64748b"
+
+  return (
+    <>
+      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} interactionWidth={28} />
+      {label ? (
+        <EdgeLabelRenderer>
+          <div
+            className="pointer-events-none absolute z-[1000] rounded border px-2 py-1 text-[10px] font-medium text-white shadow-sm"
+            style={{
+              zIndex: 1000,
+              backgroundColor: edgeColor,
+              borderColor: edgeColor,
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY + labelOffsetY}px)`,
+            }}
+          >
+            {String(label)}
+          </div>
+        </EdgeLabelRenderer>
+      ) : null}
+    </>
+  )
+})
+
+const canvasEdgeTypes = { labelAwareSmoothStep: LabelAwareSmartEdge }
+
 function HoverTooltip({
   label,
   children,
   position = "bottom",
   align = "center",
+  triggerClassName,
 }: {
   label: string
   children: React.ReactNode
   position?: "top" | "bottom"
   align?: "left" | "center" | "right"
+  triggerClassName?: string
 }) {
   const [open, setOpen] = useState(false)
   const [mounted, setMounted] = useState(false)
@@ -248,7 +532,7 @@ function HoverTooltip({
   return (
     <div
       ref={triggerRef}
-      className="relative inline-flex"
+      className={cn("relative inline-flex", triggerClassName)}
       onMouseEnter={() => {
         updateTooltipPosition()
         setOpen(true)
@@ -270,7 +554,7 @@ function HoverTooltip({
             )}
             style={{ top: coords.top, left: coords.left }}
           >
-            <div className="whitespace-nowrap rounded-xl border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 shadow-lg">
+            <div className="whitespace-nowrap rounded-xl border border-[#013765] bg-[#013765] px-2.5 py-1 text-[11px] font-medium text-white shadow-lg">
               {label}
             </div>
           </div>,
@@ -789,6 +1073,18 @@ const getNodeTypeLabel = (type: NodeType) => {
       return "Capturar dato"
     case "person_lookup":
       return "Buscar datos personales"
+    case "appointment_lookup":
+      return "Consultar turnos activos"
+    case "appointment_create":
+      return "Sacar turno"
+    case "appointment_cancel":
+      return "Cancelar turno"
+    case "specialty_search":
+      return "Buscar especialidad"
+    case "doctor_select":
+      return "Elegir profesional"
+    case "availability_select":
+      return "Elegir fecha y horario"
     case "image":
       return "Imagen"
     case "document":
@@ -820,15 +1116,21 @@ const nodeTypeOptions: NodeType[] = [
   "list",
   "input",
   "person_lookup",
+  "appointment_lookup",
+  "specialty_search",
+  "doctor_select",
+  "availability_select",
+  "appointment_create",
+  "appointment_cancel",
   "handoff",
 ]
 
 function NodeTypeSelectItem({ type }: { type: NodeType }) {
-  if (type === "person_lookup") {
+  if (type === "person_lookup" || type === "appointment_lookup" || type === "appointment_create" || type === "appointment_cancel" || type === "specialty_search" || type === "doctor_select" || type === "availability_select") {
     return (
       <SelectItem value={type}>
         <div className="flex w-full items-center justify-between gap-2">
-          <span>Buscar datos personales por DNI</span>
+          <span>{getNodeTypeLabel(type)}</span>
           <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">
             Alephoo
           </span>
@@ -841,8 +1143,43 @@ function NodeTypeSelectItem({ type }: { type: NodeType }) {
 }
 
 const isAlephooNodeType = (type: NodeType) => {
-  return type === "person_lookup"
+  return type === "person_lookup" || type === "appointment_lookup" || type === "appointment_create" || type === "appointment_cancel" || isAlephooSelectionNodeType(type)
 }
+
+const isLookupNodeType = (type: NodeType) => {
+  return type === "person_lookup" || type === "appointment_lookup" || type === "appointment_create" || type === "appointment_cancel"
+}
+
+const isAlephooSelectionNodeType = (type: NodeType) =>
+  type === "specialty_search" || type === "doctor_select" || type === "availability_select"
+
+const isAlephooBranchNodeType = (type: NodeType) =>
+  isLookupNodeType(type) || isAlephooSelectionNodeType(type)
+
+const lookupNotFoundSetting = (type: NodeType) =>
+  isAlephooSelectionNodeType(type)
+    ? "empty_next_node_id"
+    : type === "appointment_create" || type === "appointment_cancel"
+      ? "unavailable_next_node_id"
+      : "not_found_next_node_id"
+
+const alephooSuccessLabel = (type: NodeType) =>
+  isAlephooSelectionNodeType(type)
+    ? "Seleccionado"
+    : type === "appointment_create" || type === "appointment_cancel"
+      ? type === "appointment_cancel" ? "Cancelado" : "Confirmado"
+      : type === "appointment_lookup"
+        ? "Turnos encontrados"
+        : "Encontrado"
+
+const alephooEmptyLabel = (type: NodeType) =>
+  isAlephooSelectionNodeType(type)
+    ? "Sin resultados"
+    : type === "appointment_create" || type === "appointment_cancel"
+      ? "No disponible"
+      : type === "appointment_lookup"
+        ? "Sin turnos"
+        : "No encontrado"
 
 const isMediaNodeType = (type: NodeType) => {
   return type === "image" || type === "document" || type === "video" || type === "audio"
@@ -907,6 +1244,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const [trashOpen, setTrashOpen] = useState(false)
   const [flowsDrawerOpen, setFlowsDrawerOpen] = useState(false)
   const [flowConfigOpen, setFlowConfigOpen] = useState(false)
+  const reactFlowInstanceRef = useRef<ReactFlowInstance<FlowNode<CanvasNodeData>, Edge> | null>(null)
   const [loadingTrash, setLoadingTrash] = useState(false)
   const [trashedFlows, setTrashedFlows] = useState<BotFlow[]>([])
   const [trashedNodes, setTrashedNodes] = useState<TrashedNodeSummary[]>([])
@@ -943,6 +1281,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const [newFlowName, setNewFlowName] = useState("")
   const [newNodeKey, setNewNodeKey] = useState("")
   const [newNodeType, setNewNodeType] = useState<NodeType>("text")
+  const [createAlephooDependencies, setCreateAlephooDependencies] = useState(true)
   const [editFlowName, setEditFlowName] = useState("")
   const [editFlowStartNodeId, setEditFlowStartNodeId] = useState<number | null>(null)
 
@@ -1008,6 +1347,35 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       { key: "persona_contacto_telefono", label: "persona_contacto_telefono", kind: "flow" },
       { key: "persona_contacto_telefono_2", label: "persona_contacto_telefono_2", kind: "flow" },
       { key: "persona_planes_activos", label: "persona_planes_activos", kind: "flow" },
+      { key: "turnos_encontrados", label: "turnos_encontrados", kind: "flow" },
+      { key: "turnos_lookup_status", label: "turnos_lookup_status", kind: "flow" },
+      { key: "turnos_cantidad", label: "turnos_cantidad", kind: "flow" },
+      { key: "turnos", label: "turnos", kind: "flow" },
+      { key: "turno_id", label: "turno_id", kind: "flow" },
+      { key: "turno_fecha", label: "turno_fecha", kind: "flow" },
+      { key: "turno_hora", label: "turno_hora", kind: "flow" },
+      { key: "turno_estado", label: "turno_estado", kind: "flow" },
+      { key: "turno_agenda_id", label: "turno_agenda_id", kind: "flow" },
+      { key: "turno_especialidad_id", label: "turno_especialidad_id", kind: "flow" },
+      { key: "turno_especialidad", label: "turno_especialidad", kind: "flow" },
+      { key: "turno_profesional_id", label: "turno_profesional_id", kind: "flow" },
+      { key: "turno_profesional", label: "turno_profesional", kind: "flow" },
+      { key: "turno_plan_id", label: "turno_plan_id", kind: "flow" },
+      { key: "turno_creado", label: "turno_creado", kind: "flow" },
+      { key: "turno_create_status", label: "turno_create_status", kind: "flow" },
+      { key: "turno_creado_id", label: "turno_creado_id", kind: "flow" },
+      { key: "turno_create_response", label: "turno_create_response", kind: "flow" },
+      { key: "turno_cancelado", label: "turno_cancelado", kind: "flow" },
+      { key: "turno_cancel_status", label: "turno_cancel_status", kind: "flow" },
+      { key: "turno_cancelado_id", label: "turno_cancelado_id", kind: "flow" },
+      { key: "turno_cancel_response", label: "turno_cancel_response", kind: "flow" },
+      { key: "especialidad_busqueda", label: "especialidad_busqueda", kind: "flow" },
+      { key: "especialidad_id", label: "especialidad_id", kind: "flow" },
+      { key: "especialidad_nombre", label: "especialidad_nombre", kind: "flow" },
+      { key: "profesional_id", label: "profesional_id", kind: "flow" },
+      { key: "profesional_nombre", label: "profesional_nombre", kind: "flow" },
+      { key: "profesional_agenda_dias", label: "profesional_agenda_dias", kind: "flow" },
+      { key: "turno_orden", label: "turno_orden", kind: "flow" },
     ]
 
     const flowVars = nodes
@@ -1456,29 +1824,194 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
     setCreatingNode(true)
     try {
-      const res = await fetch(`${API_BASE}/api/bot/flows/${selectedFlowId}/nodes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          key,
-          type: newNodeType,
-          body: "",
-          settings: {},
-        }),
+      type NodeDraft = { key: string; type: NodeType; body: string; settings: Record<string, any> }
+      const existingVariables = new Set<string>()
+      nodes.forEach((node) => {
+        if (node.type === "input") {
+          const variable = String(node.settings?.variable ?? "").trim()
+          if (variable) existingVariables.add(variable)
+        }
+        if (node.type === "person_lookup") existingVariables.add("persona_id")
+        if (node.type === "appointment_lookup") existingVariables.add("turno_id")
+        if (node.type === "specialty_search") existingVariables.add("especialidad_id")
+        if (node.type === "doctor_select") {
+          existingVariables.add("profesional_id")
+          existingVariables.add("profesional_agenda_dias")
+        }
+        if (node.type === "availability_select") {
+          existingVariables.add("turno_fecha")
+          existingVariables.add("turno_hora")
+          existingVariables.add("turno_agenda_id")
+          existingVariables.add("turno_orden")
+        }
       })
-      if (!res.ok) {
-        console.error("Error al crear node", await res.text())
-        return
+
+      const drafts: NodeDraft[] = []
+      const addInput = (variable: string, suffix: string, body: string) => {
+        if (existingVariables.has(variable)) return
+        drafts.push({
+          key: `${key}_${suffix}`,
+          type: "input",
+          body,
+          settings: {
+            variable,
+            response_mode: "text",
+            validation_regex: variable === "dni" ? "^[0-9]{7,9}$" : "",
+            error_message: variable === "dni" ? "Ingresa un DNI valido, sin puntos." : "Ingresa un valor valido.",
+          },
+        })
+        existingVariables.add(variable)
       }
-      const node: BotNode = await res.json()
+      const addDependency = (variable: string, draft: NodeDraft) => {
+        if (existingVariables.has(variable)) return
+        drafts.push(draft)
+        existingVariables.add(variable)
+      }
+
+      if (createAlephooDependencies && isAlephooNodeType(newNodeType)) {
+        if (["person_lookup", "appointment_lookup", "appointment_create", "appointment_cancel"].includes(newNodeType)) {
+          addInput("dni", "capturar_dni", "Por favor, ingresa tu DNI sin puntos.")
+        }
+        if (["appointment_lookup", "appointment_create", "appointment_cancel"].includes(newNodeType)) {
+          addDependency("persona_id", {
+            key: `${key}_buscar_persona`,
+            type: "person_lookup",
+            body: "",
+            settings: {
+              dni_variable: "dni",
+              not_found_message: "No encontramos datos personales para el DNI ingresado.",
+              error_message: "No pudimos consultar tus datos en este momento.",
+            },
+          })
+        }
+        if (["specialty_search", "doctor_select", "availability_select", "appointment_create"].includes(newNodeType)) {
+          addInput("especialidad_busqueda", "capturar_especialidad", "Escribi el nombre o parte de la especialidad que buscas.")
+        }
+        if (["doctor_select", "availability_select", "appointment_create"].includes(newNodeType)) {
+          addDependency("especialidad_id", {
+            key: `${key}_buscar_especialidad`,
+            type: "specialty_search",
+            body: "Selecciona la especialidad.",
+            settings: {
+              query_variable: "especialidad_busqueda",
+              button_text: "Ver especialidades",
+              section_title: "Especialidades",
+              empty_message: "No encontramos especialidades que coincidan. Proba con otra palabra.",
+            },
+          })
+        }
+        if (["availability_select", "appointment_create"].includes(newNodeType)) {
+          addDependency("profesional_id", {
+            key: `${key}_elegir_profesional`,
+            type: "doctor_select",
+            body: "Selecciona un profesional.",
+            settings: {
+              specialty_variable: "especialidad_id",
+              days: 28,
+              button_text: "Ver profesionales",
+              section_title: "Profesionales",
+            },
+          })
+        }
+        if (newNodeType === "appointment_create") {
+          addDependency("turno_agenda_id", {
+            key: `${key}_elegir_turno`,
+            type: "availability_select",
+            body: "Selecciona una fecha y horario.",
+            settings: {
+              specialty_variable: "especialidad_id",
+              doctor_variable: "profesional_id",
+              days_variable: "profesional_agenda_dias",
+              days: 28,
+              button_text: "Ver turnos",
+              section_title: "Fecha y horario",
+            },
+          })
+        }
+        if (newNodeType === "appointment_cancel") {
+          addDependency("turno_id", {
+            key: `${key}_consultar_turnos`,
+            type: "appointment_lookup",
+            body: "Encontramos este turno: {{ turno_especialidad }} con {{ turno_profesional }}, el {{ turno_fecha }} a las {{ turno_hora }}.",
+            settings: {
+              person_variable: "persona_id",
+              result_mode: "cancel_buttons",
+              cancel_button_text: "Cancelar",
+              invalid_message: "Selecciona el boton Cancelar del turno que quieras cancelar.",
+              not_found_message: "No encontramos turnos pendientes.",
+              error_message: "No pudimos consultar tus turnos en este momento.",
+            },
+          })
+        }
+      }
+
+      drafts.push({ key, type: newNodeType, body: "", settings: {} })
+      const createdNodes: BotNode[] = []
+      for (const draft of drafts) {
+        const res = await fetch(`${API_BASE}/api/bot/flows/${selectedFlowId}/nodes`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(draft),
+        })
+        if (!res.ok) {
+          throw new Error(await res.text())
+        }
+        createdNodes.push(await res.json())
+      }
+
+      createdNodes.forEach((node, index) => {
+        if (node.type !== "specialty_search") return
+        const captureNode = [...createdNodes.slice(0, index)].reverse().find(
+          (candidate) => candidate.type === "input" && candidate.settings?.variable === "especialidad_busqueda",
+        )
+        if (captureNode) {
+          node.settings = { ...(node.settings ?? {}), empty_next_node_id: captureNode.id }
+        }
+      })
+
+      for (let index = 0; index < createdNodes.length - 1; index += 1) {
+        const current = createdNodes[index]
+        const next = createdNodes[index + 1]
+        const res = await fetch(`${API_BASE}/api/bot/nodes/${current.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            key: current.key,
+            type: current.type,
+            body: current.body ?? "",
+            settings: current.settings ?? {},
+            next_node_id: next.id,
+          }),
+        })
+        if (!res.ok) throw new Error(await res.text())
+        createdNodes[index] = await res.json()
+      }
+      const lastCreatedNode = createdNodes[createdNodes.length - 1]
+      if (lastCreatedNode?.type === "specialty_search" && lastCreatedNode.settings?.empty_next_node_id) {
+        const res = await fetch(`${API_BASE}/api/bot/nodes/${lastCreatedNode.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            key: lastCreatedNode.key,
+            type: lastCreatedNode.type,
+            body: lastCreatedNode.body ?? "",
+            settings: lastCreatedNode.settings,
+            next_node_id: lastCreatedNode.next_node_id ?? null,
+          }),
+        })
+        if (!res.ok) throw new Error(await res.text())
+        createdNodes[createdNodes.length - 1] = await res.json()
+      }
+
       const flowRes = await fetch(`${API_BASE}/api/bot/flows`)
       const flowData = await flowRes.json()
       setFlows(flowData.flows ?? flowData)
-      setNodes((prev) => [...prev, node])
+      setNodes((prev) => [...prev, ...createdNodes])
       setSelectedNodeId(null)
       setEditNode(null)
       setNewNodeKey("")
       setNewNodeType("text")
+      setCreateAlephooDependencies(true)
       setCreateModal(null)
     } catch (err) {
       console.error("Error de red al crear node:", err)
@@ -2048,20 +2581,21 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           tone: getIndexedBranchTone(index),
         })
       })
-    } else if (node.type === "person_lookup") {
+    } else if (isAlephooBranchNodeType(node.type)) {
       const successTargetId = node.next_node_id ? Number(node.next_node_id) : null
       branches.push({
         id: `person-success-${node.id}`,
-        label: "Encontrado",
+        label: alephooSuccessLabel(node.type),
         targetId: successTargetId,
         targetLabel: getNodeLabel(successTargetId),
         tone: "success",
       })
 
-      const notFoundTargetId = settings.not_found_next_node_id ? Number(settings.not_found_next_node_id) : null
+      const emptySetting = lookupNotFoundSetting(node.type)
+      const notFoundTargetId = settings[emptySetting] ? Number(settings[emptySetting]) : null
       branches.push({
         id: `person-not-found-${node.id}`,
-        label: "No encontrado",
+        label: alephooEmptyLabel(node.type),
         targetId: notFoundTargetId,
         targetLabel: getNodeLabel(notFoundTargetId),
         tone: "warning",
@@ -2086,6 +2620,262 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     }
 
     return branches
+  }
+
+  const flowDiagnostics = useMemo<FlowDiagnostic[]>(() => {
+    const diagnostics: FlowDiagnostic[] = []
+    const nodeIds = new Set(nodes.map((node) => node.id))
+    const outgoing = new Map<number, number[]>()
+    const incoming = new Map<number, number[]>()
+
+    nodes.forEach((node) => {
+      outgoing.set(node.id, [])
+      incoming.set(node.id, [])
+    })
+
+    nodes.forEach((node) => {
+      const branches = getNodeBranches(node)
+      branches.forEach((branch) => {
+        if (!branch.targetId) return
+        if (!nodeIds.has(branch.targetId)) {
+          diagnostics.push({
+            id: `invalid-target-${node.id}-${branch.id}`,
+            severity: "error",
+            title: "Conexion con destino inexistente",
+            description: `${branch.label} apunta al nodo ${branch.targetId}, que no pertenece al flujo.`,
+            nodeId: node.id,
+          })
+          return
+        }
+        outgoing.get(node.id)?.push(branch.targetId)
+        incoming.get(branch.targetId)?.push(node.id)
+      })
+
+      const missingBranches = branches.filter((branch) => !branch.targetId)
+      if (node.type === "buttons" || node.type === "list" || (node.type === "input" && ["buttons", "list"].includes(node.settings?.response_mode))) {
+        missingBranches.forEach((branch) => diagnostics.push({
+          id: `missing-option-target-${node.id}-${branch.id}`,
+          severity: "error",
+          title: "Opcion sin destino",
+          description: `${branch.label} no tiene un nodo de destino configurado.`,
+          nodeId: node.id,
+        }))
+      } else if (isAlephooBranchNodeType(node.type)) {
+        missingBranches.forEach((branch) => diagnostics.push({
+          id: `missing-alephoo-branch-${node.id}-${branch.id}`,
+          severity: "warning",
+          title: `Rama ${branch.label} sin destino`,
+          description: "El flujo finalizara cuando Alephoo devuelva este resultado.",
+          nodeId: node.id,
+        }))
+      } else if (node.type === "input" && missingBranches.length > 0) {
+        diagnostics.push({
+          id: `input-without-output-${node.id}`,
+          severity: "warning",
+          title: "Captura sin salida",
+          description: "El dato se capturara, pero el flujo no tiene un siguiente paso.",
+          nodeId: node.id,
+        })
+      } else if (branches.length > 0 && missingBranches.length === branches.length && node.type !== "handoff") {
+        diagnostics.push({
+          id: `terminal-node-${node.id}`,
+          severity: "info",
+          title: "Nodo terminal",
+          description: "Este nodo finaliza el recorrido de esta rama.",
+          nodeId: node.id,
+        })
+      }
+    })
+
+    const startNodeId = selectedFlow?.start_node_id ?? null
+    if (!startNodeId) {
+      diagnostics.push({
+        id: "missing-start-node",
+        severity: "error",
+        title: "Flujo sin nodo inicial",
+        description: "Configura el nodo desde el que debe comenzar la conversacion.",
+      })
+    } else if (!nodeIds.has(startNodeId)) {
+      diagnostics.push({
+        id: "invalid-start-node",
+        severity: "error",
+        title: "Nodo inicial inexistente",
+        description: `El nodo inicial ${startNodeId} no pertenece al flujo.`,
+      })
+    }
+
+    nodes.forEach((node) => {
+      if (node.id !== startNodeId && (incoming.get(node.id)?.length ?? 0) === 0) {
+        diagnostics.push({
+          id: `without-input-${node.id}`,
+          severity: "warning",
+          title: "Nodo sin entrada",
+          description: "Ninguna conexion conduce hasta este nodo.",
+          nodeId: node.id,
+        })
+      }
+    })
+
+    const reachable = new Set<number>()
+    if (startNodeId && nodeIds.has(startNodeId)) {
+      const pending = [startNodeId]
+      while (pending.length > 0) {
+        const current = pending.pop()!
+        if (reachable.has(current)) continue
+        reachable.add(current)
+        outgoing.get(current)?.forEach((targetId) => pending.push(targetId))
+      }
+    }
+    nodes.forEach((node) => {
+      if (startNodeId && !reachable.has(node.id)) {
+        diagnostics.push({
+          id: `unreachable-${node.id}`,
+          severity: "warning",
+          title: "Nodo inalcanzable",
+          description: "No existe un recorrido desde el nodo inicial hasta este nodo.",
+          nodeId: node.id,
+        })
+      }
+    })
+
+    const capturedVariables = new Map<string, number[]>()
+    nodes.forEach((node) => {
+      if (node.type !== "input") return
+      const variable = String(node.settings?.variable ?? "").trim()
+      if (!variable) return
+      capturedVariables.set(variable, [...(capturedVariables.get(variable) ?? []), node.id])
+    })
+    capturedVariables.forEach((producerIds, variable) => {
+      if (producerIds.length < 2) return
+      producerIds.forEach((nodeId) => diagnostics.push({
+        id: `duplicate-variable-${variable}-${nodeId}`,
+        severity: "warning",
+        title: `Variable {{ ${variable} }} duplicada`,
+        description: `${producerIds.length} nodos de captura escriben sobre la misma variable.`,
+        nodeId,
+      }))
+    })
+
+    const producedVariables = (node: BotNode): string[] => {
+      if (node.type === "input") return [String(node.settings?.variable ?? "").trim()].filter(Boolean)
+      if (node.type === "person_lookup") return ["persona_id"]
+      if (node.type === "appointment_lookup") return ["turnos", "turno_id"]
+      if (node.type === "specialty_search") return ["especialidad_id"]
+      if (node.type === "doctor_select") return ["profesional_id"]
+      if (node.type === "availability_select") return ["turno_agenda_id", "turno_fecha", "turno_hora", "turno_orden"]
+      return []
+    }
+    const requiredVariables = (node: BotNode): string[] => {
+      const settings = node.settings ?? {}
+      if (node.type === "person_lookup") return [settings.dni_variable ?? "dni"]
+      if (node.type === "appointment_lookup") return [settings.person_variable ?? "persona_id"]
+      if (node.type === "specialty_search") return [settings.query_variable ?? "especialidad_busqueda"]
+      if (node.type === "doctor_select") return [settings.specialty_variable ?? "especialidad_id"]
+      if (node.type === "availability_select") return [settings.specialty_variable ?? "especialidad_id", settings.doctor_variable ?? "profesional_id"]
+      if (node.type === "appointment_create") {
+        return [
+          settings.person_variable ?? "persona_id",
+          settings.specialty_variable ?? "especialidad_id",
+          settings.doctor_variable ?? "profesional_id",
+          settings.agenda_variable ?? "turno_agenda_id",
+          settings.date_variable ?? "turno_fecha",
+          settings.time_variable ?? "turno_hora",
+        ]
+      }
+      if (node.type === "appointment_cancel") return ["turnos", settings.appointment_variable ?? "turno_id"]
+      return []
+    }
+    nodes.forEach((node) => {
+      const upstream = new Set<number>()
+      const pending = [...(incoming.get(node.id) ?? [])]
+      while (pending.length > 0) {
+        const current = pending.pop()!
+        if (upstream.has(current)) continue
+        upstream.add(current)
+        incoming.get(current)?.forEach((sourceId) => pending.push(sourceId))
+      }
+      const available = new Set(
+        Array.from(upstream).flatMap((nodeId) => producedVariables(nodes.find((item) => item.id === nodeId)!)),
+      )
+      requiredVariables(node).filter(Boolean).forEach((variable) => {
+        if (available.has(String(variable))) return
+        diagnostics.push({
+          id: `missing-variable-${node.id}-${variable}`,
+          severity: "warning",
+          title: `Falta {{ ${variable} }}`,
+          description: "Ningun nodo anterior en esta rama genera la variable requerida.",
+          nodeId: node.id,
+        })
+      })
+
+      if (node.type === "appointment_lookup" && node.settings?.result_mode === "cancel_buttons") {
+        const nextNode = node.next_node_id ? nodes.find((item) => item.id === Number(node.next_node_id)) : null
+        if (nextNode?.type !== "appointment_cancel") {
+          diagnostics.push({
+            id: `cancel-mode-target-${node.id}`,
+            severity: "error",
+            title: "Consulta de cancelacion mal conectada",
+            description: "El siguiente nodo debe ser de tipo Cancelar turno.",
+            nodeId: node.id,
+          })
+        }
+      }
+    })
+
+    const autoNode = (nodeId: number) => {
+      const node = nodes.find((item) => item.id === nodeId)
+      if (!node) return false
+      return ["person_lookup", "appointment_lookup", "appointment_create", "appointment_cancel"].includes(node.type)
+        || Boolean(node.settings?.auto_advance)
+    }
+    const visiting = new Set<number>()
+    const visited = new Set<number>()
+    const reportedCycles = new Set<string>()
+    const visit = (nodeId: number, path: number[]) => {
+      if (visiting.has(nodeId)) {
+        const cycleStart = path.indexOf(nodeId)
+        const cycle = path.slice(cycleStart)
+        if (cycle.length > 0 && cycle.every(autoNode)) {
+          const key = [...cycle].sort((a, b) => a - b).join("-")
+          if (!reportedCycles.has(key)) {
+            reportedCycles.add(key)
+            diagnostics.push({
+              id: `automatic-cycle-${key}`,
+              severity: "error",
+              title: "Ciclo automatico",
+              description: "Esta ruta puede repetirse sin esperar una respuesta del paciente.",
+              nodeId,
+            })
+          }
+        }
+        return
+      }
+      if (visited.has(nodeId)) return
+      visiting.add(nodeId)
+      outgoing.get(nodeId)?.forEach((targetId) => visit(targetId, [...path, nodeId]))
+      visiting.delete(nodeId)
+      visited.add(nodeId)
+    }
+    nodes.forEach((node) => visit(node.id, []))
+
+    const severityOrder: Record<FlowDiagnosticSeverity, number> = { error: 0, warning: 1, info: 2 }
+    return diagnostics.sort((left, right) => severityOrder[left.severity] - severityOrder[right.severity])
+  }, [nodes, selectedFlow?.start_node_id])
+
+  const diagnosticCounts = useMemo(() => ({
+    error: flowDiagnostics.filter((item) => item.severity === "error").length,
+    warning: flowDiagnostics.filter((item) => item.severity === "warning").length,
+    info: flowDiagnostics.filter((item) => item.severity === "info").length,
+  }), [flowDiagnostics])
+
+  const focusDiagnosticNode = (nodeId?: number) => {
+    if (!nodeId) return
+    void reactFlowInstanceRef.current?.fitView({
+      nodes: [{ id: String(nodeId) }],
+      padding: 0.55,
+      maxZoom: 1.4,
+      duration: 300,
+    })
   }
 
   const referencedNodeIds = useMemo(() => {
@@ -2218,7 +3008,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           type: node.type,
           typeLabel: getNodeTypeLabel(node.type),
           isStart: selectedFlow?.start_node_id === node.id,
-          isSelected: selectedNodeId === node.id,
+          isSelected: false,
           isReadOnly,
           canDelete: !isReadOnly,
           canSource:
@@ -2226,26 +3016,27 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             isMediaNodeType(node.type) ||
             isContactNodeType(node.type) ||
             isLocationNodeType(node.type) ||
+            isAlephooSelectionNodeType(node.type) ||
             node.type === "input" ||
-            node.type === "person_lookup" ||
+            isAlephooBranchNodeType(node.type) ||
             node.type === "buttons" ||
             node.type === "list",
           canToggleAutoAdvance: !isReadOnly && (node.type === "text" || isMediaNodeType(node.type) || isContactNodeType(node.type) || isLocationNodeType(node.type)),
           autoAdvanceEnabled: Boolean(node.settings?.auto_advance),
           sourceHandles:
-            node.type === "person_lookup"
+            isAlephooBranchNodeType(node.type)
               ? [
                 {
                   id: "success",
-                  label: "Encontrado",
+                  label: alephooSuccessLabel(node.type),
                   tone: "success" as const,
                   hasConnection: Boolean(node.next_node_id),
                 },
                 {
                   id: "not_found",
-                  label: "No encontrado",
+                  label: alephooEmptyLabel(node.type),
                   tone: "warning" as const,
-                  hasConnection: Boolean(node.settings?.not_found_next_node_id),
+                  hasConnection: Boolean(node.settings?.[lookupNotFoundSetting(node.type)]),
                 },
                 {
                   id: "error",
@@ -2285,20 +3076,58 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         },
       }
     })
-  }, [nodes, selectedFlow?.start_node_id, selectedNodeId, deletingNodeId, isReadOnly])
+  }, [nodes, selectedFlow?.start_node_id, deletingNodeId, isReadOnly])
 
   const [flowCanvasNodes, setFlowCanvasNodes] = useState<FlowNode<CanvasNodeData>[]>([])
 
   useEffect(() => {
-    setFlowCanvasNodes(computedCanvasNodes)
+    setFlowCanvasNodes((current) => {
+      const currentById = new Map(current.map((node) => [node.id, node]))
+
+      return computedCanvasNodes.map((node) => {
+        const previous = currentById.get(node.id)
+        if (!previous) return node
+
+        return {
+          ...node,
+          measured: previous.measured,
+          width: previous.width,
+          height: previous.height,
+          data: {
+            ...node.data,
+            isSelected: previous.data.isSelected,
+          },
+        }
+      })
+    })
   }, [computedCanvasNodes])
+
+  useEffect(() => {
+    setFlowCanvasNodes((current) =>
+      current.map((node) => {
+        const isSelected = Number(node.id) === selectedNodeId
+        if (node.data.isSelected === isSelected) return node
+
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            isSelected,
+          },
+        }
+      }),
+    )
+  }, [selectedNodeId])
 
   const flowCanvasEdges = useMemo<Edge[]>(() => {
     const edges: Edge[] = []
 
     nodes.forEach((node) => {
-      getNodeBranches(node).forEach((branch) => {
+      getNodeBranches(node).forEach((branch, branchIndex) => {
         if (!branch.targetId) return
+        const labelOffsetY = branchIndex === 0
+          ? 0
+          : Math.ceil(branchIndex / 2) * 32 * (branchIndex % 2 === 1 ? -1 : 1)
 
         edges.push({
           id: branch.id,
@@ -2310,7 +3139,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               node.type === "list" ||
               (node.type === "input" && (node.settings?.response_mode === "buttons" || node.settings?.response_mode === "list"))
               ? branch.id
-              : node.type === "person_lookup"
+              : isAlephooBranchNodeType(node.type)
                 ? branch.tone === "success"
                   ? "success"
                   : branch.tone === "warning"
@@ -2322,7 +3151,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                   ? "next"
                   : undefined,
           label: branch.label === "Siguiente" ? undefined : branch.label,
-          type: "smoothstep",
+          type: "labelAwareSmoothStep",
+          data: { labelOffsetY },
           animated: branch.tone === "success" || branch.tone === "warning" || branch.tone === "danger",
           markerEnd: {
             type: MarkerType.ArrowClosed,
@@ -2350,8 +3180,6 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                       : "#64748b",
             strokeWidth: 2,
           },
-          labelStyle: { fontSize: 10, fill: "#334155" },
-          labelBgStyle: { fill: "#ffffff", fillOpacity: 0.95 },
         })
       })
     })
@@ -2404,8 +3232,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       isMediaNodeType(sourceNode.type) ||
       isContactNodeType(sourceNode.type) ||
       isLocationNodeType(sourceNode.type) ||
+      isAlephooSelectionNodeType(sourceNode.type) ||
       sourceNode.type === "input" ||
-      sourceNode.type === "person_lookup" ||
+      isAlephooBranchNodeType(sourceNode.type) ||
       sourceNode.type === "buttons" ||
       sourceNode.type === "list"
     )) {
@@ -2416,12 +3245,12 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     const settings = sourceNode.settings ?? {}
 
     const patch: Partial<BotNode> =
-      sourceNode.type === "person_lookup"
+      isAlephooBranchNodeType(sourceNode.type)
         ? sourceHandle === "not_found"
           ? {
             settings: {
               ...settings,
-              not_found_next_node_id: targetId,
+              [lookupNotFoundSetting(sourceNode.type)]: targetId,
             } as any,
           }
           : sourceHandle === "error"
@@ -2461,12 +3290,12 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         node.id === sourceId
           ? {
             ...node,
-            ...(sourceNode.type === "person_lookup"
+            ...(isAlephooBranchNodeType(sourceNode.type)
               ? sourceHandle === "not_found"
                 ? {
                   settings: {
                     ...(node.settings ?? {}),
-                    not_found_next_node_id: targetId,
+                    [lookupNotFoundSetting(sourceNode.type)]: targetId,
                   },
                 }
                 : sourceHandle === "error"
@@ -2516,12 +3345,12 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     const settings = sourceNode.settings ?? {}
 
     const patch: Partial<BotNode> =
-      sourceNode.type === "person_lookup"
+      isAlephooBranchNodeType(sourceNode.type)
         ? sourceHandle === "not_found"
           ? {
             settings: {
               ...settings,
-              not_found_next_node_id: null,
+              [lookupNotFoundSetting(sourceNode.type)]: null,
             } as any,
           }
           : sourceHandle === "error"
@@ -2561,12 +3390,12 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         node.id === sourceId
           ? {
             ...node,
-            ...(sourceNode.type === "person_lookup"
+            ...(isAlephooBranchNodeType(sourceNode.type)
               ? sourceHandle === "not_found"
                 ? {
                   settings: {
                     ...(node.settings ?? {}),
-                    not_found_next_node_id: null,
+                    [lookupNotFoundSetting(sourceNode.type)]: null,
                   },
                 }
                 : sourceHandle === "error"
@@ -2824,6 +3653,14 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
     if (Number(nextSettings.not_found_next_node_id) === deletedNodeId) {
       nextSettings.not_found_next_node_id = null
+    }
+
+    if (Number(nextSettings.unavailable_next_node_id) === deletedNodeId) {
+      nextSettings.unavailable_next_node_id = null
+    }
+
+    if (Number(nextSettings.empty_next_node_id) === deletedNodeId) {
+      nextSettings.empty_next_node_id = null
     }
 
     if (Number(nextSettings.error_next_node_id) === deletedNodeId) {
@@ -3698,6 +4535,444 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       )
     }
 
+    if (t === "appointment_lookup") {
+      const settings = ensureSettings<{
+        person_variable: string
+        specialty_mode: "all" | "fixed" | "variable"
+        specialty_id: string
+        specialty_variable: string
+        include_ad_hoc: boolean
+        exclude_elapsed_today: boolean
+        limit: number
+        result_mode: "messages" | "cancel_buttons"
+        cancel_button_text: string
+        invalid_message: string
+        not_found_message: string
+        not_found_next_node_id: number | null
+        error_message: string
+        error_next_node_id: number | null
+      }>({
+        person_variable: "persona_id",
+        specialty_mode: "all",
+        specialty_id: "",
+        specialty_variable: "especialidad_id",
+        include_ad_hoc: true,
+        exclude_elapsed_today: true,
+        limit: 50,
+        result_mode: "messages",
+        cancel_button_text: "Cancelar",
+        invalid_message: "Selecciona el boton Cancelar del turno que quieras cancelar.",
+        not_found_message: "No encontramos turnos pendientes próximos.",
+        not_found_next_node_id: null,
+        error_message: "No pudimos consultar tus turnos en este momento.",
+        error_next_node_id: null,
+      })
+
+      const update = (field: keyof typeof settings, value: string | number | boolean | null) => {
+        setEditNode((prev) =>
+          prev
+            ? { ...prev, settings: { ...settings, [field]: value } }
+            : prev,
+        )
+      }
+      const flowVariables = templateVariableOptions.filter(
+        (item) => item.kind === "flow" && !item.key.startsWith("turno"),
+      )
+
+      return (
+        <div className="space-y-3">
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Variable con el ID de persona</label>
+            <Select value={settings.person_variable} onValueChange={(value) => update("person_variable", value)}>
+              <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Seleccioná una variable" /></SelectTrigger>
+              <SelectContent>
+                {flowVariables.map((option) => (
+                  <SelectItem key={option.key} value={option.key}>{option.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              Normalmente se usa <span className="font-medium">{"{{ persona_id }}"}</span>, generada por “Buscar datos personales”.
+            </p>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Especialidad</label>
+            <Select value={settings.specialty_mode} onValueChange={(value: "all" | "fixed" | "variable") => update("specialty_mode", value)}>
+              <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todas las especialidades</SelectItem>
+                <SelectItem value="fixed">ID fijo</SelectItem>
+                <SelectItem value="variable">Desde una variable</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {settings.specialty_mode === "fixed" ? (
+            <Input
+              value={settings.specialty_id}
+              onChange={(e) => update("specialty_id", e.target.value.replace(/\D/g, "").slice(0, 12))}
+              placeholder="ID de especialidad"
+              className="text-xs"
+            />
+          ) : null}
+
+          {settings.specialty_mode === "variable" ? (
+            <Select value={settings.specialty_variable} onValueChange={(value) => update("specialty_variable", value)}>
+              <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Variable con la especialidad" /></SelectTrigger>
+              <SelectContent>
+                {flowVariables.map((option) => (
+                  <SelectItem key={option.key} value={option.key}>{option.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
+
+          <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <label className="flex items-center gap-2 text-xs">
+              <Checkbox checked={settings.include_ad_hoc} onCheckedChange={(checked) => update("include_ad_hoc", checked === true)} />
+              Incluir turnos asignados de manera excepcional
+            </label>
+            <label className="flex items-center gap-2 text-xs">
+              <Checkbox checked={settings.exclude_elapsed_today} onCheckedChange={(checked) => update("exclude_elapsed_today", checked === true)} />
+              Excluir horarios de hoy que ya pasaron
+            </label>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">Cantidad máxima</label>
+              <Input
+                type="number"
+                min={1}
+                max={50}
+                value={settings.limit}
+                onChange={(e) => update("limit", Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
+                className="h-8 text-xs"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Presentacion de los turnos</label>
+            <Select
+              value={settings.result_mode}
+              onValueChange={(value: "messages" | "cancel_buttons") => update("result_mode", value)}
+            >
+              <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="messages">Un mensaje por turno</SelectItem>
+                <SelectItem value="cancel_buttons">Mensaje y boton Cancelar por turno</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {settings.result_mode === "cancel_buttons" ? (
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">Texto del boton</label>
+              <Input
+                value={settings.cancel_button_text}
+                maxLength={20}
+                onChange={(e) => update("cancel_button_text", e.target.value.slice(0, 20))}
+                className="h-8 text-xs"
+              />
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                El siguiente nodo debe ser Cancelar turno. El boton guarda el ID del turno seleccionado.
+              </p>
+            </div>
+          ) : null}
+
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+            Consulta desde hoy, conserva únicamente estados Pendiente y ordena el próximo turno primero. Guarda la lista en
+            {" "}<span className="font-medium">{"{{ turnos }}"}</span> y el próximo en variables <span className="font-medium">{"{{ turno_* }}"}</span>.
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Mensaje cuando no hay turnos activos</label>
+            <Textarea value={settings.not_found_message} onChange={(e) => update("not_found_message", e.target.value.slice(0, TEXT_MESSAGE_MAX))} rows={2} maxLength={TEXT_MESSAGE_MAX} className="text-xs" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Siguiente nodo si no hay turnos</label>
+            <Select value={settings.not_found_next_node_id ? String(settings.not_found_next_node_id) : "none"} onValueChange={(value) => update("not_found_next_node_id", value === "none" ? null : Number(value))}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Finalizar flujo" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Finalizar flujo</SelectItem>
+                {nextNodeOptions.map((option) => <SelectItem key={option.id} value={String(option.id)}>{option.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Mensaje cuando hay error</label>
+            <Textarea value={settings.error_message} onChange={(e) => update("error_message", e.target.value.slice(0, ERROR_MESSAGE_MAX))} rows={2} maxLength={ERROR_MESSAGE_MAX} className="text-xs" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Siguiente nodo si hay error</label>
+            <Select value={settings.error_next_node_id ? String(settings.error_next_node_id) : "none"} onValueChange={(value) => update("error_next_node_id", value === "none" ? null : Number(value))}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Finalizar flujo" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Finalizar flujo</SelectItem>
+                {nextNodeOptions.map((option) => <SelectItem key={option.id} value={String(option.id)}>{option.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      )
+    }
+
+    if (isAlephooSelectionNodeType(t)) {
+      const defaults = t === "specialty_search"
+        ? {
+          query_variable: "especialidad_busqueda",
+          button_text: "Ver especialidades",
+          section_title: "Especialidades",
+          empty_message: "No encontramos especialidades que coincidan. Proba con otra palabra.",
+          invalid_message: "Elegi una especialidad de la lista.",
+          empty_next_node_id: null,
+          error_message: "No pudimos consultar las especialidades en este momento.",
+          error_next_node_id: null,
+        }
+        : t === "doctor_select"
+          ? {
+            specialty_variable: "especialidad_id",
+            days: 28,
+            button_text: "Ver profesionales",
+            section_title: "Profesionales",
+            empty_message: "No encontramos profesionales disponibles para esa especialidad.",
+            invalid_message: "Elegi un profesional de la lista.",
+            empty_next_node_id: null,
+            error_message: "No pudimos consultar los profesionales en este momento.",
+            error_next_node_id: null,
+          }
+          : {
+            specialty_variable: "especialidad_id",
+            doctor_variable: "profesional_id",
+            days_variable: "profesional_agenda_dias",
+            days: 28,
+            button_text: "Ver turnos",
+            section_title: "Fecha y horario",
+            empty_message: "No encontramos turnos disponibles para ese profesional.",
+            invalid_message: "Elegi una fecha y horario de la lista.",
+            empty_next_node_id: null,
+            error_message: "No pudimos consultar los turnos en este momento.",
+            error_next_node_id: null,
+          }
+      const settings = ensureSettings<any>(defaults)
+      const update = (field: string, value: string | number) => {
+        setEditNode((prev) => prev ? { ...prev, settings: { ...settings, [field]: value } } : prev)
+      }
+      const variableFields = t === "specialty_search"
+        ? [["query_variable", "Variable con el texto buscado"]]
+        : t === "doctor_select"
+          ? [["specialty_variable", "Variable con el ID de especialidad"]]
+          : [
+            ["specialty_variable", "Variable con el ID de especialidad"],
+            ["doctor_variable", "Variable con el ID de profesional"],
+            ["days_variable", "Variable con los dias de agenda"],
+          ]
+      const flowVariables = templateVariableOptions.filter((item) => item.kind === "flow")
+
+      return (
+        <div className="space-y-3">
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+            {t === "specialty_search"
+              ? "Busca coincidencias sin distinguir mayusculas ni acentos y muestra hasta 10 resultados."
+              : t === "doctor_select"
+                ? "Consulta los profesionales de la especialidad seleccionada y muestra hasta 10 opciones."
+                : "Consulta la agenda y muestra los primeros 10 turnos ordenados por fecha y hora."}
+          </div>
+          {variableFields.map(([field, label]) => (
+            <div key={field}>
+              <label className="mb-1 block text-xs text-muted-foreground">{label}</label>
+              <Select value={String(settings[field] ?? "")} onValueChange={(value) => update(field, value)}>
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue placeholder="Selecciona una variable" />
+                </SelectTrigger>
+                <SelectContent>
+                  {flowVariables.map((option) => (
+                    <SelectItem key={option.key} value={option.key}>{option.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ))}
+          {t !== "specialty_search" ? (
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">Dias de agenda por defecto</label>
+              <Input type="number" min={1} max={365} value={settings.days} onChange={(e) => update("days", Math.max(1, Math.min(365, Number(e.target.value) || 28)))} className="h-8 text-xs" />
+            </div>
+          ) : null}
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">Texto del boton</label>
+              <Input value={settings.button_text} maxLength={20} onChange={(e) => update("button_text", e.target.value.slice(0, 20))} className="h-8 text-xs" />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">Titulo de la lista</label>
+              <Input value={settings.section_title} maxLength={24} onChange={(e) => update("section_title", e.target.value.slice(0, 24))} className="h-8 text-xs" />
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Mensaje sin resultados</label>
+            <Textarea value={settings.empty_message} onChange={(e) => update("empty_message", e.target.value.slice(0, ERROR_MESSAGE_MAX))} rows={2} className="text-xs" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Nodo que espera la proxima respuesta si no hay resultados</label>
+            <Select value={settings.empty_next_node_id ? String(settings.empty_next_node_id) : "none"} onValueChange={(value) => update("empty_next_node_id", value === "none" ? "" : Number(value))}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Permanecer en este nodo" /></SelectTrigger>
+              <SelectContent><SelectItem value="none">Permanecer en este nodo</SelectItem>{nextNodeOptions.map((option) => <SelectItem key={option.id} value={String(option.id)}>{option.label}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Mensaje ante una respuesta invalida</label>
+            <Textarea value={settings.invalid_message} onChange={(e) => update("invalid_message", e.target.value.slice(0, ERROR_MESSAGE_MAX))} rows={2} className="text-xs" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Mensaje cuando hay error</label>
+            <Textarea value={settings.error_message} onChange={(e) => update("error_message", e.target.value.slice(0, ERROR_MESSAGE_MAX))} rows={2} className="text-xs" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Siguiente nodo si hay error</label>
+            <Select value={settings.error_next_node_id ? String(settings.error_next_node_id) : "none"} onValueChange={(value) => update("error_next_node_id", value === "none" ? "" : Number(value))}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Permanecer en este nodo" /></SelectTrigger>
+              <SelectContent><SelectItem value="none">Permanecer en este nodo</SelectItem>{nextNodeOptions.map((option) => <SelectItem key={option.id} value={String(option.id)}>{option.label}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+            {t === "specialty_search"
+              ? "Guarda especialidad_id y especialidad_nombre."
+              : t === "doctor_select"
+                ? "Guarda profesional_id, profesional_nombre y profesional_agenda_dias."
+                : "Guarda turno_fecha, turno_hora, turno_agenda_id y turno_orden."}
+          </div>
+        </div>
+      )
+    }
+
+    if (t === "appointment_cancel") {
+      const settings = ensureSettings<any>({
+        appointment_variable: "turno_id",
+        unavailable_message: "El turno ya no esta disponible o fue cancelado anteriormente.",
+        unavailable_next_node_id: null,
+        error_message: "No pudimos cancelar el turno en este momento.",
+        error_next_node_id: null,
+      })
+      const update = (field: string, value: string | number | null) => {
+        setEditNode((prev) => prev ? { ...prev, settings: { ...settings, [field]: value } } : prev)
+      }
+      const flowVariables = templateVariableOptions.filter((item) => item.kind === "flow")
+
+      return (
+        <div className="space-y-3">
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+            Cancela el turno consultado usando la misma API y el mismo cifrado que autogestion.
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Variable con el ID del turno</label>
+            <Select value={settings.appointment_variable} onValueChange={(value) => update("appointment_variable", value)}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Selecciona una variable" /></SelectTrigger>
+              <SelectContent>
+                {flowVariables.map((option) => <SelectItem key={option.key} value={option.key}>{option.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+            Por seguridad, el ID debe pertenecer a la lista <span className="font-medium">{"{{ turnos }}"}</span> obtenida por Consultar turnos activos.
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Mensaje si el turno no esta disponible</label>
+            <Textarea value={settings.unavailable_message} onChange={(e) => update("unavailable_message", e.target.value.slice(0, ERROR_MESSAGE_MAX))} rows={2} className="text-xs" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Siguiente nodo si no esta disponible</label>
+            <Select value={settings.unavailable_next_node_id ? String(settings.unavailable_next_node_id) : "none"} onValueChange={(value) => update("unavailable_next_node_id", value === "none" ? null : Number(value))}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Finalizar flujo" /></SelectTrigger>
+              <SelectContent><SelectItem value="none">Finalizar flujo</SelectItem>{nextNodeOptions.map((option) => <SelectItem key={option.id} value={String(option.id)}>{option.label}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Mensaje cuando hay error</label>
+            <Textarea value={settings.error_message} onChange={(e) => update("error_message", e.target.value.slice(0, ERROR_MESSAGE_MAX))} rows={2} className="text-xs" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Siguiente nodo si hay error</label>
+            <Select value={settings.error_next_node_id ? String(settings.error_next_node_id) : "none"} onValueChange={(value) => update("error_next_node_id", value === "none" ? null : Number(value))}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Finalizar flujo" /></SelectTrigger>
+              <SelectContent><SelectItem value="none">Finalizar flujo</SelectItem>{nextNodeOptions.map((option) => <SelectItem key={option.id} value={String(option.id)}>{option.label}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+        </div>
+      )
+    }
+
+    if (t === "appointment_create") {
+      const settings = ensureSettings<any>({
+        person_variable: "persona_id",
+        specialty_variable: "especialidad_id",
+        doctor_variable: "profesional_id",
+        date_variable: "turno_fecha",
+        time_variable: "turno_hora",
+        agenda_variable: "turno_agenda_id",
+        order_variable: "turno_orden",
+        update_insurance_variable: "actualizar_obra_social",
+        insurance_variable: "persona_obra_social_id",
+        plan_variable: "persona_plan_id",
+        unavailable_message: "El turno seleccionado ya no esta disponible. Por favor, elegi otro.",
+        unavailable_next_node_id: null,
+        error_message: "No pudimos confirmar el turno en este momento.",
+        error_next_node_id: null,
+      })
+      const update = (field: string, value: string | number | null) => {
+        setEditNode((prev) => prev ? { ...prev, settings: { ...settings, [field]: value } } : prev)
+      }
+      const fields: Array<[string, string]> = [
+        ["person_variable", "ID de persona"],
+        ["specialty_variable", "ID de especialidad"],
+        ["doctor_variable", "ID de profesional"],
+        ["date_variable", "Fecha (AAAA-MM-DD)"],
+        ["time_variable", "Hora"],
+        ["agenda_variable", "ID de agenda"],
+        ["order_variable", "Orden (opcional, usa -1)"],
+        ["update_insurance_variable", "Actualizar obra social (opcional)"],
+        ["insurance_variable", "ID de obra social (opcional)"],
+        ["plan_variable", "ID de plan (opcional)"],
+      ]
+
+      return (
+        <div className="space-y-3">
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+            Revalida fecha, hora y agenda y luego crea el turno con la misma API de autogestion.
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {fields.map(([field, label]) => (
+              <div key={field}>
+                <label className="mb-1 block text-xs text-muted-foreground">{label}</label>
+                <Input value={String(settings[field] ?? "")} onChange={(e) => update(field, e.target.value.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 80))} className="h-8 text-xs" />
+              </div>
+            ))}
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Mensaje si el turno ya no esta disponible</label>
+            <Textarea value={settings.unavailable_message} onChange={(e) => update("unavailable_message", e.target.value.slice(0, ERROR_MESSAGE_MAX))} rows={2} className="text-xs" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Siguiente nodo si no esta disponible</label>
+            <Select value={settings.unavailable_next_node_id ? String(settings.unavailable_next_node_id) : "none"} onValueChange={(value) => update("unavailable_next_node_id", value === "none" ? null : Number(value))}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Finalizar flujo" /></SelectTrigger>
+              <SelectContent><SelectItem value="none">Finalizar flujo</SelectItem>{nextNodeOptions.map((option) => <SelectItem key={option.id} value={String(option.id)}>{option.label}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Mensaje cuando hay error</label>
+            <Textarea value={settings.error_message} onChange={(e) => update("error_message", e.target.value.slice(0, ERROR_MESSAGE_MAX))} rows={2} className="text-xs" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Siguiente nodo si hay error</label>
+            <Select value={settings.error_next_node_id ? String(settings.error_next_node_id) : "none"} onValueChange={(value) => update("error_next_node_id", value === "none" ? null : Number(value))}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Finalizar flujo" /></SelectTrigger>
+              <SelectContent><SelectItem value="none">Finalizar flujo</SelectItem>{nextNodeOptions.map((option) => <SelectItem key={option.id} value={String(option.id)}>{option.label}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+        </div>
+      )
+    }
+
     if (t === "contact") {
       const settings = ensureSettings<{
         agenda_contact_id?: number | null
@@ -4338,7 +5613,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     return null
   }
 
-  const isLinearType = (t: NodeType) => t === "text" || t === "input" || t === "person_lookup" || isMediaNodeType(t) || isContactNodeType(t) || isLocationNodeType(t)
+  const isLinearType = (t: NodeType) => t === "text" || t === "input" || isAlephooBranchNodeType(t) || isMediaNodeType(t) || isContactNodeType(t) || isLocationNodeType(t)
 
   const getBranchToneClass = (tone?: BranchTone) => {
     switch (tone) {
@@ -4807,16 +6082,76 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                 </div>
               </div>
 
-              <div className="flex-1 overflow-auto min-h-0 rounded-xl border border-slate-200 bg-slate-50/80 p-4">
+              <div className="relative flex-1 overflow-auto min-h-0 rounded-xl border border-slate-200 bg-slate-50/80 p-4">
+                {selectedFlow ? (
+                  <div className="absolute right-7 top-7 z-50 flex max-h-44 w-[min(23rem,calc(100%-3.5rem))] flex-col overflow-hidden rounded-md border border-slate-300/50 bg-white/35 shadow-md backdrop-blur-[1px]">
+                    <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-200/60 bg-white/30 px-3 py-2">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-[#013765]" />
+                        <span className="truncate text-[11px] font-semibold text-slate-800">Diagnostico</span>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2 text-[10px] font-semibold">
+                        <span className="text-red-700">{diagnosticCounts.error} E</span>
+                        <span className="text-amber-700">{diagnosticCounts.warning} A</span>
+                      </div>
+                    </div>
+                    <div className="min-h-0 overflow-y-auto">
+                      {flowDiagnostics.length === 0 ? (
+                        <div className="px-3 py-2 text-[11px] text-emerald-700">Sin problemas detectados.</div>
+                      ) : (
+                        flowDiagnostics.map((diagnostic) => (
+                          <HoverTooltip
+                            key={diagnostic.id}
+                            label={`${diagnostic.title}: ${diagnostic.description}`}
+                            position="top"
+                            align="right"
+                            triggerClassName="flex w-full"
+                          >
+                            <button
+                              type="button"
+                              className={cn(
+                                "flex w-full items-center gap-2 border-b border-slate-200/40 px-3 py-1.5 text-left hover:bg-white/60",
+                                diagnostic.nodeId ? "cursor-pointer" : "cursor-default",
+                              )}
+                              onClick={() => focusDiagnosticNode(diagnostic.nodeId)}
+                            >
+                              <span className={cn(
+                                "h-2 w-2 shrink-0 rounded-full",
+                                diagnostic.severity === "error"
+                                  ? "bg-red-500"
+                                  : diagnostic.severity === "warning"
+                                    ? "bg-amber-500"
+                                    : "bg-sky-500",
+                              )} />
+                              <span className="min-w-0 flex-1 truncate text-[10px] font-medium text-slate-700">
+                                {diagnostic.title}
+                              </span>
+                              {diagnostic.nodeId ? (
+                                <span className="max-w-24 truncate text-[9px] text-slate-500">
+                                  {nodesById.get(diagnostic.nodeId)?.key || diagnostic.nodeId}
+                                </span>
+                              ) : null}
+                            </button>
+                          </HoverTooltip>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                ) : null}
                 {loadingNodes ? (
                   <p className="text-xs text-muted-foreground">Cargando nodos...</p>
                 ) : nodes.length === 0 ? (
                   <p className="text-xs text-muted-foreground">No hay nodos para este flujo.</p>
                 ) : (
                   <ReactFlow
+                    className="bot-flow-canvas"
                     nodes={flowCanvasNodes}
                     edges={flowCanvasEdges}
                     nodeTypes={canvasNodeTypes}
+                    edgeTypes={canvasEdgeTypes}
+                    onInit={(instance) => {
+                      reactFlowInstanceRef.current = instance
+                    }}
                     fitView
                     fitViewOptions={{ padding: 0.2 }}
                     minZoom={0.2}
@@ -5016,7 +6351,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                     setEditNode((prev) => {
                                       if (!prev) return prev
 
-                                      const linear = val === "text" || val === "input" || val === "person_lookup" || isMediaNodeType(val) || isContactNodeType(val) || isLocationNodeType(val)
+                                      const linear = val === "text" || val === "input" || isAlephooBranchNodeType(val) || isMediaNodeType(val) || isContactNodeType(val) || isLocationNodeType(val)
                                       const supportsAutoAdvance = val === "text" || isMediaNodeType(val) || isContactNodeType(val) || isLocationNodeType(val)
 
                                       const cleanedSettings = (() => {
@@ -5510,7 +6845,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                   </label>
                   <Select
                     value={newNodeType}
-                    onValueChange={(value: NodeType) => setNewNodeType(value)}
+                    onValueChange={(value: NodeType) => {
+                      setNewNodeType(value)
+                      setCreateAlephooDependencies(true)
+                    }}
                   >
                     <SelectTrigger className="h-9 text-sm">
                       <SelectValue />
@@ -5521,6 +6859,18 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                       ))}
                     </SelectContent>
                   </Select>
+                  {isAlephooNodeType(newNodeType) ? (
+                    <label className="mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                      <Checkbox
+                        checked={createAlephooDependencies}
+                        onCheckedChange={(checked) => setCreateAlephooDependencies(checked === true)}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        <span className="block text-xs font-medium text-amber-900">Agregar plantilla de nodos necesarios</span>
+                      </span>
+                    </label>
+                  ) : null}
                 </div>
               ) : null}
               {createModal === "node" && !selectedFlowId ? (

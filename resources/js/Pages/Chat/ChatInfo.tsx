@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useEffect, useMemo, useRef, useState } from "react"
-import { AudioLines, Code, Contact, Database, Zap, User, Image as ImageIcon, FileText, Video, Bot, Clock3, MessageSquare, PowerOff, Power, Loader2, ChevronDown, ChevronRight, ExternalLink, MapPin, X } from "lucide-react"
+import { AudioLines, Code, Contact, Database, Zap, User, Image as ImageIcon, FileText, Video, Bot, Clock3, MessageSquare, PowerOff, Power, Loader2, RotateCcw, ChevronDown, ChevronRight, ExternalLink, MapPin, X } from "lucide-react"
 import { Avatar } from "shadcn/components/ui/avatar"
 import { Badge } from "shadcn/components/ui/badge"
 import { Button } from "shadcn/components/ui/button"
@@ -322,6 +322,7 @@ export default function ChatInfo({
   // ---------------------------
   const [botEnabled, setBotEnabled] = useState<boolean>(chat?.bot_enabled ?? true)
   const [togglingBot, setTogglingBot] = useState(false)
+  const [resettingBot, setResettingBot] = useState(false)
   const [totalMessages, setTotalMessages] = useState<number | null>(null)
   const [lastMessageAt, setLastMessageAt] = useState<string | null>(chat?.timestamp ?? null)
   const knownMessageIdsRef = useRef<Set<string>>(new Set())
@@ -839,7 +840,7 @@ export default function ChatInfo({
   }, [mqttStatus])
 
   const handleToggleBot = async () => {
-    if (!chat?.id || togglingBot || !canToggleBot) return
+    if (!chat?.id || togglingBot || resettingBot || !canToggleBot) return
 
     const nextEnabled = !botEnabled
     setTogglingBot(true)
@@ -861,6 +862,29 @@ export default function ChatInfo({
       setBotEnabled(!nextEnabled)
     } finally {
       setTogglingBot(false)
+    }
+  }
+
+  const handleResetBot = async () => {
+    if (!chat?.id || togglingBot || resettingBot || !canToggleBot) return
+
+    setResettingBot(true)
+
+    try {
+      const res = await fetch(`${API_BASE}/api/chats/${chat.id}/bot/reset`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      })
+
+      if (!res.ok) return
+
+      setBotEnabled(true)
+      setVarsByDateMap({})
+      setExpandedVarDate(null)
+    } finally {
+      setResettingBot(false)
     }
   }
 
@@ -936,7 +960,7 @@ export default function ChatInfo({
       </div>
 
       <div className="flex-1 overflow-y-auto custom-scrollbar">
-        <div className="p-4">
+        <div className="flex flex-col p-4">
           {/* Contacto */}
           <div className="flex flex-col items-center text-center mb-6">
             <div className="relative mb-3">
@@ -977,22 +1001,42 @@ export default function ChatInfo({
                   <Badge variant="secondary" className={botEnabled ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}>
                     {botEnabled ? "Activo" : "Pausado"}
                   </Badge>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="h-8 w-full px-2"
-                    onClick={handleToggleBot}
-                    disabled={togglingBot || !canToggleBot}
-                  >
-                    {togglingBot ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : botEnabled ? (
-                      <PowerOff className="h-3.5 w-3.5 text-red-600" />
-                    ) : (
-                      <Power className="h-3.5 w-3.5 text-green-600" />
-                    )}
-                  </Button>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-8 w-full px-2"
+                      onClick={handleToggleBot}
+                      disabled={togglingBot || resettingBot || !canToggleBot}
+                      title={botEnabled ? "Apagar bot" : "Encender bot"}
+                      aria-label={botEnabled ? "Apagar bot" : "Encender bot"}
+                    >
+                      {togglingBot ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : botEnabled ? (
+                        <PowerOff className="h-3.5 w-3.5 text-red-600" />
+                      ) : (
+                        <Power className="h-3.5 w-3.5 text-green-600" />
+                      )}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-8 w-full px-2"
+                      onClick={handleResetBot}
+                      disabled={togglingBot || resettingBot || !canToggleBot}
+                      title="Reiniciar flujo"
+                      aria-label="Reiniciar flujo"
+                    >
+                      {resettingBot ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <RotateCcw className="h-3.5 w-3.5 text-blue-600" />
+                      )}
+                    </Button>
+                  </div>
                 </div>
               </div>
 
@@ -1036,7 +1080,7 @@ export default function ChatInfo({
           </div>
 
           {/* Variables */}
-          <div className="mb-4">
+          <div className="order-2 mb-4">
             <h4 className="font-medium text-foreground mb-3 flex items-center gap-2">
               <Database className="h-4 w-4" />
               Variables del Chat
@@ -1126,7 +1170,7 @@ export default function ChatInfo({
           </div>
 
           {/* Medios */}
-          <div className="mb-4">
+          <div className="order-1 mb-4">
             <h4 className="font-medium text-foreground mb-3 flex items-center gap-2">
               <ImageIcon className="h-4 w-4" />
               Medios

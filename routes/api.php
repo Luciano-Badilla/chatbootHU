@@ -44,6 +44,7 @@ Route::middleware($sessionAuthenticated)->group(function () {
     Route::get('/location/search', [LocationController::class, 'search']);
     Route::get('/location/reverse', [LocationController::class, 'reverse']);
     Route::post('/chats/{chat}/bot', [WhatsAppController::class, 'updateBotStatus'])->middleware('permission:can_toggle_bot');
+    Route::post('/chats/{chat}/bot/reset', [WhatsAppController::class, 'resetBotFlow'])->middleware('permission:can_toggle_bot');
     Route::post('/chats/{chat}/operator', [ChatController::class, 'updateOperator'])->middleware('permission:can_assign_chats');
     Route::post('/chats/{chat}/finish-operator-attention', [ChatController::class, 'finishOperatorAttention'])->middleware('permission:can_assign_chats');
     Route::get('/chats/{chat}/media', [ChatMediaController::class, 'index']);
