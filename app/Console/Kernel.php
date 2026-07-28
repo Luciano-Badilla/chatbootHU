@@ -15,6 +15,10 @@ class Kernel extends ConsoleKernel
         $schedule->command('bot:expire-inactive-chats')
             ->everyMinute()
             ->withoutOverlapping();
+
+        $schedule->command('campaigns:dispatch')
+            ->everyMinute()
+            ->withoutOverlapping();
     }
 
     /**

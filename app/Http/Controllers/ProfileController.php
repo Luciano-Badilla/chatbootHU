@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\ProfileUpdateRequest;
+use App\Services\AuditService;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -13,6 +14,8 @@ use Inertia\Response;
 
 class ProfileController extends Controller
 {
+    public function __construct(private readonly AuditService $auditService) {}
+
     /**
      * Display the user's profile form.
      */
@@ -29,13 +32,30 @@ class ProfileController extends Controller
      */
     public function update(ProfileUpdateRequest $request): RedirectResponse
     {
-        $request->user()->fill($request->validated());
+        $user = $request->user();
+        $before = $user->only(['name', 'email']);
+        $user->fill($request->validated());
 
-        if ($request->user()->isDirty('email')) {
-            $request->user()->email_verified_at = null;
+        if ($user->isDirty('email')) {
+            $user->email_verified_at = null;
         }
 
-        $request->user()->save();
+        $user->save();
+
+        $after = $user->only(['name', 'email']);
+        if ($before !== $after) {
+            $this->auditService->record(
+                'users',
+                'profile_updated',
+                "Actualizo su perfil {$user->name}",
+                $user,
+                $user,
+                [
+                    'before' => $before,
+                    'after' => $after,
+                ],
+            );
+        }
 
         return Redirect::route('profile.edit');
     }
@@ -50,6 +70,17 @@ class ProfileController extends Controller
         ]);
 
         $user = $request->user();
+
+        $this->auditService->record(
+            'security',
+            'account_deleted',
+            "Elimino su cuenta {$user->name}",
+            $user,
+            $user,
+            [
+                'target_user' => $user->only(['id', 'name', 'email']),
+            ],
+        );
 
         Auth::logout();
 

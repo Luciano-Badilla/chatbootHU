@@ -1,10 +1,12 @@
 import { usePage } from "@inertiajs/react"
+import type { LucideIcon } from "lucide-react"
 import {
   Activity,
   Contact,
   GitBranch,
   LayoutDashboard,
   LogOut,
+  Megaphone,
   MessageSquare,
   Settings,
   ShieldCheck,
@@ -32,10 +34,11 @@ const APP_URL = import.meta.env.VITE_APP_URL || ""
 const HOSPITAL_LOGO_URL = `${APP_URL}/storage/images/hu_icon_new.png`
 const HOSPITAL_FAVICON_URL = `${APP_URL}/favicon-48x48.png`
 
-const navigationItems = [
+const navigationItems: Array<{ label: string; href: string; icon: LucideIcon; permission?: string }> = [
   { label: "Dashboard", href: `${APP_URL}/dashboard`, icon: LayoutDashboard },
   { label: "Mensajes", href: `${APP_URL}/chat-panel`, icon: MessageSquare },
   { label: "Agenda", href: `${APP_URL}/agenda-panel`, icon: Contact },
+  { label: "Campañas", href: `${APP_URL}/campaigns-panel`, icon: Megaphone, permission: "can_manage_campaigns" },
   { label: "Flujos", href: `${APP_URL}/bot/flows`, icon: GitBranch },
   { label: "Configuracion", href: `${APP_URL}/settings-panel`, icon: Settings },
   { label: "Auditoria", href: `${APP_URL}/audit-panel`, icon: ShieldCheck },
@@ -54,11 +57,13 @@ export function AppSidebar({ currentPath = "/dashboard" }: { currentPath?: strin
         role_label?: string | null
         role_name?: string | null
       } | null
+      permissions?: Record<string, boolean>
     }
   }>()
   const { open, isMobile, setOpen, setOpenMobile } = useSidebar()
   const compact = !open && !isMobile
   const user = props.auth?.user
+  const permissions = props.auth?.permissions ?? {}
   const userName = user?.name?.trim() || "Usuario"
   const userRole = user?.role_label?.trim() || user?.role_name?.trim() || "Usuario"
 
@@ -115,7 +120,7 @@ export function AppSidebar({ currentPath = "/dashboard" }: { currentPath?: strin
           <SidebarGroupLabel>Menu</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {navigationItems.map((item) => {
+              {navigationItems.filter((item) => !item.permission || permissions[item.permission]).map((item) => {
                 const Icon = item.icon
                 const isActive = currentPath === item.href.replace(APP_URL, "")
 

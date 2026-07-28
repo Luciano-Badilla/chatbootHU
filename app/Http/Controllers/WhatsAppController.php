@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\BotFlow;
 use App\Models\BotNode;
+use App\Models\CampaignRecipient;
 use App\Models\Chat;
 use App\Models\Contact;
 use App\Models\Message;
@@ -11,6 +12,7 @@ use App\Models\MessageStatus;
 use App\Models\SystemSetting;
 use App\Services\AuditService;
 use App\Services\BotInactivityService;
+use App\Services\CampaignMetricsService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Env;
 use Illuminate\Support\Facades\DB;
@@ -70,6 +72,45 @@ class WhatsAppController extends Controller
             }
 
             $message = Message::where('whatsapp_message_id', $whatsappMessageId)->first();
+            $campaignRecipient = CampaignRecipient::query()
+                ->where('whatsapp_message_id', $whatsappMessageId)
+                ->first();
+
+            if ($campaignRecipient) {
+                $currentPriority = $priority[$campaignRecipient->status] ?? -1;
+                $nextPriority = $priority[$status];
+                $changedAt = isset($statusData['timestamp'])
+                    ? now()->setTimestamp((int) $statusData['timestamp'])
+                    : now();
+                $updates = [];
+
+                if ($status === 'failed' || $nextPriority >= $currentPriority) {
+                    $updates['status'] = $status;
+                }
+
+                if ($status === 'sent') {
+                    $updates['sent_at'] = $campaignRecipient->sent_at ?? $changedAt;
+                } elseif ($status === 'delivered') {
+                    $updates['delivered_at'] = $changedAt;
+                } elseif ($status === 'read') {
+                    $updates['read_at'] = $changedAt;
+                    $updates['delivered_at'] = $campaignRecipient->delivered_at ?? $changedAt;
+                } elseif ($status === 'failed') {
+                    $updates['failed_at'] = $changedAt;
+                    $updates['error_code'] = (string) data_get($statusData, 'errors.0.code', '');
+                    $updates['error_message'] = (string) data_get(
+                        $statusData,
+                        'errors.0.error_data.details',
+                        data_get($statusData, 'errors.0.title', 'Meta informo que el mensaje fallo.')
+                    );
+                }
+
+                if ($updates !== []) {
+                    $campaignRecipient->update($updates);
+                    app(CampaignMetricsService::class)->refresh($campaignRecipient->campaign_id);
+                }
+            }
+
             if (!$message) {
                 Log::warning('Status recibido para mensaje no encontrado', [
                     'whatsapp_message_id' => $whatsappMessageId,
@@ -961,6 +1002,7 @@ class WhatsAppController extends Controller
 
         $chat = Chat::with('contact')->findOrFail($validated['chat_id']);
         $contact = $chat->contact;
+        $actor = $request->user();
 
         if (!$contact || !$contact->whatsapp_id) {
             return response()->json(['error' => 'Contacto sin whatsapp_id'], 422);
@@ -1014,6 +1056,22 @@ class WhatsAppController extends Controller
                 'chat_id' => $chat->id,
                 'payload' => $payload,
             ]);
+
+            $this->auditService->recordMessageAction(
+                'contact_send_failed',
+                'Fallo al enviar contacto al chat',
+                $chat,
+                $actor,
+                null,
+                [
+                    'meta' => [
+                        'display_name' => $formattedName,
+                        'phone' => $phone,
+                        'error' => 'Error enviando contacto a WhatsApp',
+                    ],
+                ],
+            );
+
             return response()->json(['error' => 'Error enviando contacto a WhatsApp'], 500);
         }
 
@@ -1035,6 +1093,21 @@ class WhatsAppController extends Controller
             'status' => 'sent',
             'whatsapp_message_id' => $response->json('messages.0.id'),
         ]);
+
+        $this->auditService->recordMessageAction(
+            'contact_sent',
+            'Envio contacto manual',
+            $chat,
+            $actor,
+            $message,
+            [
+                'meta' => [
+                    'display_name' => $formattedName,
+                    'phone' => $phone,
+                    'message_id' => $message->id,
+                ],
+            ],
+        );
 
         try {
             $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_contact_' . uniqid());

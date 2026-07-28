@@ -127,10 +127,10 @@ La aplicacion debe servirse desde Apache/Nginx/Laragon apuntando a la carpeta `p
 Ejemplo local con subcarpeta:
 
 ```env
-APP_URL=http://172.22.115.103/chatbot/public
-VITE_APP_URL=http://172.22.115.103/chatbot/public
+APP_URL=http://localhost/chatbot/public
+VITE_APP_URL=http://localhost/chatbot/public
 VITE_API_BASE_URL=/chatbot/public
-VITE_DEV_SERVER=http://172.22.115.103:5173
+VITE_DEV_SERVER=http://localhost:5173
 ```
 
 Actualmente no hay seeders obligatorios. Si se agregan datos iniciales en el futuro:
@@ -349,13 +349,13 @@ WHATSAPP_VERIFY_TOKEN=
 
 ## Queues / jobs
 
-El proyecto incluye tablas de jobs, pero por defecto usa:
+El proyecto incluye tablas de jobs y usa:
 
 ```env
-QUEUE_CONNECTION=sync
+QUEUE_CONNECTION=database
 ```
 
-Con `sync` no hace falta correr workers. Si se cambia a `database`, `redis` u otro driver, levantar un worker:
+Con `database`, Redis u otro driver asincronico se debe levantar un worker:
 
 Linux/macOS:
 
@@ -398,9 +398,37 @@ npm run build
 - `resources/js/Pages/AgendaPanel.tsx`: agenda interna de contactos.
 - `resources/js/Pages/SettingsPanel.tsx`: configuraciones generales, WhatsApp, Alephoo e inactividad.
 - `resources/js/Pages/AuditPanel.tsx`: auditoria.
+- `resources/js/Pages/CampaignsPanel.tsx`: campanas manuales y plantillas de Meta.
 - `app/Http/Controllers/WhatsAppController.php`: webhook y envios de WhatsApp.
+- `app/Jobs/SendCampaignRecipient.php`: envio individual de destinatarios de campana.
 - `app/Services/BotInactivityService.php`: reinicio por inactividad.
 - `app/Console/Commands/ExpireInactiveBotChats.php`: comando del scheduler.
+
+## Campanas de difusion
+
+El modulo `/campaigns-panel` sincroniza las plantillas disponibles en Meta y permite crear campanas manuales desde archivos CSV `.csv` codificados en UTF-8.
+
+La sincronizacion requiere `WHATSAPP_WABA_ID`, `WHATSAPP_ACCESS_TOKEN` y el permiso `whatsapp_business_management`. Las plantillas son de solo lectura en el sistema: se crean y modifican en Meta, y luego se importan con `Sincronizar con Meta`. Solo las plantillas aprobadas y compatibles con mensajes de texto quedan disponibles para campanas.
+
+Cuando Meta entrega variables posicionales como `{{1}}` y `{{2}}`, el sistema genera las columnas `variable_1` y `variable_2` respectivamente.
+
+El archivo puede estar separado por comas o punto y coma. Debe incluir una columna `telefono` con el numero internacional completo, sin necesidad del signo `+`, y una columna por cada variable configurada en la plantilla. La columna `nombre` es opcional. Por ejemplo:
+
+```csv
+telefono,nombre,fecha,hora,sede
+5492615551234,Ana,29/07/2026,10:30,Sede Central
+```
+
+La carga del CSV solo crea un borrador. Los envios comienzan cuando un usuario autorizado presiona `Iniciar`.
+
+Para procesar campanas en segundo plano:
+
+```bash
+php artisan queue:work --queue=campaigns,default
+php artisan schedule:work
+```
+
+En produccion se recomienda `QUEUE_CONNECTION=database` o Redis. El scheduler ejecuta `campaigns:dispatch` cada minuto y los webhooks de Meta actualizan los estados enviado, entregado, leido y fallido.
 
 ## Notas de operacion
 

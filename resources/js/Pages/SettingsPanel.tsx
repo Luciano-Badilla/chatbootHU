@@ -3,10 +3,14 @@ import {
   ArrowLeft,
   CalendarDays,
   Check,
+  CheckCircle2,
   ChevronsUpDown,
   ClipboardPaste,
   Contact,
   Download,
+  Eye,
+  EyeOff,
+  ExternalLink,
   Loader2,
   Upload,
 } from "lucide-react"
@@ -39,8 +43,11 @@ interface SettingsPanelProps {
     integrations?: {
       whatsapp?: {
         token?: string
+        token_configured?: boolean
+        waba_id?: string
         phone_number_id?: string
         webhook_verify_token?: string
+        webhook_verify_token_configured?: boolean
       }
       alephoo?: {
         base_url?: string
@@ -99,8 +106,11 @@ export default function SettingsPanel({
   const initialTimezone = settings?.general?.timezone ?? "America/Argentina/Buenos_Aires"
   const initialLanguage = settings?.general?.language ?? "es"
   const initialWhatsappToken = settings?.integrations?.whatsapp?.token ?? ""
+  const initialWhatsappWabaId = settings?.integrations?.whatsapp?.waba_id ?? ""
   const initialWhatsappPhoneNumberId = settings?.integrations?.whatsapp?.phone_number_id ?? ""
   const initialWhatsappVerifyToken = settings?.integrations?.whatsapp?.webhook_verify_token ?? ""
+  const whatsappTokenConfigured = settings?.integrations?.whatsapp?.token_configured ?? false
+  const whatsappVerifyTokenConfigured = settings?.integrations?.whatsapp?.webhook_verify_token_configured ?? false
   const initialAlephooBaseUrl = settings?.integrations?.alephoo?.base_url ?? ""
   const initialAlephooApiKey = settings?.integrations?.alephoo?.api_key ?? ""
   const initialAlephooTimeout = settings?.integrations?.alephoo?.timeout ?? "30"
@@ -117,13 +127,17 @@ export default function SettingsPanel({
   const [savedTimezone, setSavedTimezone] = useState(initialTimezone)
   const [savedLanguage, setSavedLanguage] = useState(initialLanguage)
   const [whatsappToken, setWhatsappToken] = useState(initialWhatsappToken)
+  const [whatsappWabaId, setWhatsappWabaId] = useState(initialWhatsappWabaId)
   const [whatsappPhoneNumberId, setWhatsappPhoneNumberId] = useState(initialWhatsappPhoneNumberId)
   const [whatsappVerifyToken, setWhatsappVerifyToken] = useState(initialWhatsappVerifyToken)
+  const [showWhatsappToken, setShowWhatsappToken] = useState(false)
+  const [showWhatsappVerifyToken, setShowWhatsappVerifyToken] = useState(false)
   const [alephooBaseUrl, setAlephooBaseUrl] = useState(initialAlephooBaseUrl)
   const [alephooApiKey, setAlephooApiKey] = useState(initialAlephooApiKey)
   const [alephooTimeout, setAlephooTimeout] = useState(initialAlephooTimeout)
   const [alephooEndpoints, setAlephooEndpoints] = useState(initialAlephooEndpoints)
   const [savedWhatsappToken, setSavedWhatsappToken] = useState(initialWhatsappToken)
+  const [savedWhatsappWabaId, setSavedWhatsappWabaId] = useState(initialWhatsappWabaId)
   const [savedWhatsappPhoneNumberId, setSavedWhatsappPhoneNumberId] = useState(initialWhatsappPhoneNumberId)
   const [savedWhatsappVerifyToken, setSavedWhatsappVerifyToken] = useState(initialWhatsappVerifyToken)
   const [savedAlephooBaseUrl, setSavedAlephooBaseUrl] = useState(initialAlephooBaseUrl)
@@ -160,6 +174,7 @@ export default function SettingsPanel({
     setSavedTimezone(initialTimezone)
     setSavedLanguage(initialLanguage)
     setWhatsappToken(initialWhatsappToken)
+    setWhatsappWabaId(initialWhatsappWabaId)
     setWhatsappPhoneNumberId(initialWhatsappPhoneNumberId)
     setWhatsappVerifyToken(initialWhatsappVerifyToken)
     setAlephooBaseUrl(initialAlephooBaseUrl)
@@ -167,6 +182,7 @@ export default function SettingsPanel({
     setAlephooTimeout(initialAlephooTimeout)
     setAlephooEndpoints(initialAlephooEndpoints)
     setSavedWhatsappToken(initialWhatsappToken)
+    setSavedWhatsappWabaId(initialWhatsappWabaId)
     setSavedWhatsappPhoneNumberId(initialWhatsappPhoneNumberId)
     setSavedWhatsappVerifyToken(initialWhatsappVerifyToken)
     setSavedAlephooBaseUrl(initialAlephooBaseUrl)
@@ -185,6 +201,7 @@ export default function SettingsPanel({
     initialTimezone,
     initialLanguage,
     initialWhatsappToken,
+    initialWhatsappWabaId,
     initialWhatsappPhoneNumberId,
     initialWhatsappVerifyToken,
     initialAlephooBaseUrl,
@@ -204,6 +221,7 @@ export default function SettingsPanel({
   const hasUnsavedIntegrationsChanges = useMemo(() => {
     return (
       whatsappToken !== savedWhatsappToken ||
+      whatsappWabaId !== savedWhatsappWabaId ||
       whatsappPhoneNumberId !== savedWhatsappPhoneNumberId ||
       whatsappVerifyToken !== savedWhatsappVerifyToken ||
       alephooBaseUrl !== savedAlephooBaseUrl ||
@@ -213,6 +231,7 @@ export default function SettingsPanel({
     )
   }, [
     whatsappToken,
+    whatsappWabaId,
     whatsappPhoneNumberId,
     whatsappVerifyToken,
     alephooBaseUrl,
@@ -220,6 +239,7 @@ export default function SettingsPanel({
     alephooTimeout,
     alephooEndpoints,
     savedWhatsappToken,
+    savedWhatsappWabaId,
     savedWhatsappPhoneNumberId,
     savedWhatsappVerifyToken,
     savedAlephooBaseUrl,
@@ -362,6 +382,7 @@ export default function SettingsPanel({
         body: JSON.stringify({
           whatsapp: {
             token: whatsappToken,
+            waba_id: whatsappWabaId,
             phone_number_id: whatsappPhoneNumberId,
             webhook_verify_token: whatsappVerifyToken,
           },
@@ -384,6 +405,7 @@ export default function SettingsPanel({
       }
 
       setSavedWhatsappToken(whatsappToken)
+      setSavedWhatsappWabaId(whatsappWabaId)
       setSavedWhatsappPhoneNumberId(whatsappPhoneNumberId)
       setSavedWhatsappVerifyToken(whatsappVerifyToken)
       setSavedAlephooBaseUrl(alephooBaseUrl)
@@ -930,45 +952,92 @@ export default function SettingsPanel({
                 <div>
                   <h3 className="text-sm font-semibold text-[#013765]">WhatsApp</h3>
                   <p className="text-xs text-[#013765]/65">
-                    Datos necesarios para operar el canal y validar el webhook.
+                    Credenciales, identificadores y requisitos necesarios para Meta Cloud API.
                   </p>
                 </div>
+                <a
+                  href="https://developers.facebook.com/apps/"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-[#013765] hover:underline"
+                >
+                  Abrir Meta
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </a>
               </div>
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="space-y-1.5 md:col-span-2">
-                  <label className="text-sm font-medium text-[#013765]">Token</label>
-                  <div className="relative">
-                    <Input
-                      value={whatsappToken}
-                      onChange={(e) => setWhatsappToken(e.target.value)}
-                      placeholder="Token de acceso de WhatsApp"
-                      className="pr-28"
-                    />
-                    <button
-                      type="button"
-                      onClick={handlePasteWhatsappToken}
-                      className="absolute right-1 top-1/2 inline-flex h-8 -translate-y-1/2 items-center gap-1.5 rounded-md border border-[#dbe5ef] bg-white px-2.5 text-xs font-medium text-[#013765] transition-colors hover:bg-slate-50"
-                    >
-                      <ClipboardPaste className="h-3.5 w-3.5" />
-                      Pegar
-                    </button>
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-sm font-medium text-[#013765]">System User Access Token</label>
                   </div>
+                  <div className="flex gap-2">
+                    <div className="relative min-w-0 flex-1">
+                      <Input
+                        type={showWhatsappToken ? "text" : "password"}
+                        value={whatsappToken}
+                        onChange={(e) => setWhatsappToken(e.target.value)}
+                        placeholder={whatsappTokenConfigured ? "Configurado mediante variable de entorno" : "Token permanente de usuario del sistema"}
+                        className="pr-10"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowWhatsappToken((current) => !current)}
+                        className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-[#013765]"
+                        aria-label={showWhatsappToken ? "Ocultar token" : "Mostrar token"}
+                      >
+                        {showWhatsappToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-9 shrink-0 rounded-md border-input text-[#013765]"
+                      onClick={handlePasteWhatsappToken}
+                    >
+                      <ClipboardPaste className="h-4 w-4" />
+                      Pegar
+                    </Button>
+                  </div>
+                  <p className="text-xs text-[#013765]/60">
+                    Debe incluir los permisos whatsapp_business_management y whatsapp_business_messaging.
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-[#013765]">WABA ID</label>
+                  <Input
+                    value={whatsappWabaId}
+                    onChange={(e) => setWhatsappWabaId(e.target.value.replace(/\D/g, ""))}
+                    placeholder="ID de la cuenta de WhatsApp Business"
+                  />
+                  <p className="text-xs text-[#013765]/60">Necesario para sincronizar plantillas y suscripciones.</p>
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium text-[#013765]">Phone Number ID</label>
                   <Input
                     value={whatsappPhoneNumberId}
-                    onChange={(e) => setWhatsappPhoneNumberId(e.target.value)}
+                    onChange={(e) => setWhatsappPhoneNumberId(e.target.value.replace(/\D/g, ""))}
                     placeholder="Ej: 123456789012345"
                   />
                 </div>
-                <div className="space-y-1.5">
+                <div className="space-y-1.5 md:col-span-2">
                   <label className="text-sm font-medium text-[#013765]">Webhook verify token</label>
-                  <Input
-                    value={whatsappVerifyToken}
-                    onChange={(e) => setWhatsappVerifyToken(e.target.value)}
-                    placeholder="Token de verificacion del webhook"
-                  />
+                  <div className="relative">
+                    <Input
+                      type={showWhatsappVerifyToken ? "text" : "password"}
+                      value={whatsappVerifyToken}
+                      onChange={(e) => setWhatsappVerifyToken(e.target.value)}
+                      placeholder={whatsappVerifyTokenConfigured ? "Configurado mediante variable de entorno" : "Token de verificación del webhook"}
+                      className="pr-10"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowWhatsappVerifyToken((current) => !current)}
+                      className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-[#013765]"
+                      aria-label={showWhatsappVerifyToken ? "Ocultar verify token" : "Mostrar verify token"}
+                    >
+                      {showWhatsappVerifyToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

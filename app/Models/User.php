@@ -25,7 +25,7 @@ class User extends Authenticatable
         'remember_token',
         'validated',
         'requestsPassword',
-        'role_id'
+        'role_id',
     ];
 
     /**
@@ -99,6 +99,7 @@ class User extends Authenticatable
                 'can_assign_chats' => true,
                 'can_toggle_bot' => true,
                 'can_manage_users' => true,
+                'can_manage_campaigns' => true,
             ],
             'supervisor' => [
                 'can_manage_settings' => false,
@@ -110,6 +111,7 @@ class User extends Authenticatable
                 'can_assign_chats' => true,
                 'can_toggle_bot' => true,
                 'can_manage_users' => false,
+                'can_manage_campaigns' => true,
             ],
             default => [
                 'can_manage_settings' => false,
@@ -121,6 +123,7 @@ class User extends Authenticatable
                 'can_assign_chats' => true,
                 'can_toggle_bot' => true,
                 'can_manage_users' => false,
+                'can_manage_campaigns' => false,
             ],
         };
     }

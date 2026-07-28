@@ -21,6 +21,7 @@ class AuditController extends Controller
             'configurationAuditLogs' => $this->auditLogsForScope('configuration'),
             'messageAuditLogs' => $this->auditLogsForScope('messages'),
             'flowAuditLogs' => $this->auditLogsForScope('flows'),
+            'campaignAuditLogs' => $this->auditLogsForScope('campaigns'),
             'logTail' => $this->readApplicationLogTail(),
         ]);
     }
@@ -51,7 +52,8 @@ class AuditController extends Controller
         match ($scope) {
             'messages' => $query->whereIn('log_name', ['messages', 'chat']),
             'flows' => $query->whereIn('log_name', ['flows', 'bot_flows']),
-            default => $query->whereIn('log_name', ['settings', 'users', 'security']),
+            'campaigns' => $query->where('log_name', 'campaigns'),
+            default => $query->whereIn('log_name', ['settings', 'users', 'security', 'agenda']),
         };
 
         return $query

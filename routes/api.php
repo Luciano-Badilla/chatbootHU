@@ -1,13 +1,15 @@
 <?php
 
-use App\Http\Controllers\BotFlowController;
 use App\Http\Controllers\AgendaContactController;
 use App\Http\Controllers\AuditController;
+use App\Http\Controllers\BotFlowController;
+use App\Http\Controllers\CampaignController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\ChatMediaController;
 use App\Http\Controllers\LocationController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\WhatsAppController;
+use App\Http\Controllers\WhatsAppTemplateController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -55,6 +57,15 @@ Route::middleware($sessionAuthenticated)->group(function () {
     Route::post('/agenda/contacts/{id}/restore', [AgendaContactController::class, 'restore']);
     Route::delete('/agenda/contacts/{id}/force', [AgendaContactController::class, 'forceDestroy']);
 
+    Route::middleware('permission:can_manage_campaigns')->group(function () {
+        Route::get('/campaigns', [CampaignController::class, 'apiIndex']);
+        Route::post('/campaigns', [CampaignController::class, 'store']);
+        Route::get('/campaigns/{campaign}', [CampaignController::class, 'show']);
+        Route::post('/campaigns/{campaign}/launch', [CampaignController::class, 'launch']);
+        Route::post('/campaigns/{campaign}/pause', [CampaignController::class, 'pause']);
+        Route::post('/campaign-templates/sync', [WhatsAppTemplateController::class, 'sync']);
+    });
+
     Route::middleware('permission:can_view_audit')->group(function () {
         Route::get('/audit/logs', [AuditController::class, 'logs']);
         Route::get('/audit/logs/tail', [AuditController::class, 'applicationLogs']);
@@ -92,10 +103,6 @@ Route::middleware($sessionAuthenticated)->group(function () {
         Route::post('/bot/nodes/{nodeId}/restore', [BotFlowController::class, 'restoreNode']);
     });
 });
-
-
-
-
 
 Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
     return $request->user();

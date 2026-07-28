@@ -3,11 +3,14 @@
 namespace App\Http\Controllers;
 
 use App\Models\AgendaContact;
+use App\Services\AuditService;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 
 class AgendaContactController extends Controller
 {
+    public function __construct(private readonly AuditService $auditService) {}
+
     public function index()
     {
         return Inertia::render('AgendaPanel');
@@ -47,34 +50,113 @@ class AgendaContactController extends Controller
         $data = $this->validatedData($request);
         $contact = AgendaContact::create($data);
 
+        $this->auditService->record(
+            'agenda',
+            'created',
+            "Creo el contacto {$contact->formatted_name}",
+            $request->user(),
+            $contact,
+            [
+                'after' => $contact->only([
+                    'formatted_name',
+                    'first_name',
+                    'last_name',
+                    'phone',
+                    'organization',
+                    'title',
+                ]),
+            ],
+        );
+
         return response()->json(['contact' => $contact], 201);
     }
 
     public function update(Request $request, AgendaContact $agendaContact)
     {
+        $before = $agendaContact->only([
+            'formatted_name',
+            'first_name',
+            'last_name',
+            'phone',
+            'organization',
+            'title',
+        ]);
         $agendaContact->update($this->validatedData($request, $agendaContact->id));
+        $agendaContact->refresh();
+        $after = $agendaContact->only(array_keys($before));
 
-        return response()->json(['contact' => $agendaContact->refresh()]);
+        if ($before !== $after) {
+            $this->auditService->record(
+                'agenda',
+                'updated',
+                "Actualizo el contacto {$agendaContact->formatted_name}",
+                $request->user(),
+                $agendaContact,
+                [
+                    'before' => $before,
+                    'after' => $after,
+                ],
+            );
+        }
+
+        return response()->json(['contact' => $agendaContact]);
     }
 
-    public function destroy(AgendaContact $agendaContact)
+    public function destroy(Request $request, AgendaContact $agendaContact)
     {
+        $name = $agendaContact->formatted_name;
         $agendaContact->delete();
+
+        $this->auditService->record(
+            'agenda',
+            'deleted',
+            "Envio a papelera el contacto {$name}",
+            $request->user(),
+            $agendaContact,
+        );
 
         return response()->json(['ok' => true]);
     }
 
-    public function restore(int $id)
+    public function restore(Request $request, int $id)
     {
         $contact = AgendaContact::onlyTrashed()->findOrFail($id);
         $contact->restore();
 
+        $this->auditService->record(
+            'agenda',
+            'restored',
+            "Restauro el contacto {$contact->formatted_name}",
+            $request->user(),
+            $contact,
+        );
+
         return response()->json(['contact' => $contact->refresh()]);
     }
 
-    public function forceDestroy(int $id)
+    public function forceDestroy(Request $request, int $id)
     {
         $contact = AgendaContact::onlyTrashed()->findOrFail($id);
+        $name = $contact->formatted_name;
+
+        $this->auditService->record(
+            'agenda',
+            'force_deleted',
+            "Elimino definitivamente el contacto {$name}",
+            $request->user(),
+            $contact,
+            [
+                'before' => $contact->only([
+                    'formatted_name',
+                    'first_name',
+                    'last_name',
+                    'phone',
+                    'organization',
+                    'title',
+                ]),
+            ],
+        );
+
         $contact->forceDelete();
 
         return response()->json(['ok' => true]);

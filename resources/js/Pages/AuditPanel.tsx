@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, ChevronDown, FileText, GitBranch, Loader2, MessageSquare, RefreshCcw, ShieldCheck } from "lucide-react"
+import { ArrowLeft, ChevronDown, FileText, GitBranch, Loader2, Megaphone, MessageSquare, RefreshCcw, ShieldCheck } from "lucide-react"
 import { Badge } from "shadcn/components/ui/badge"
 import { Button } from "shadcn/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "shadcn/components/ui/card"
@@ -68,6 +68,7 @@ interface AuditPanelProps {
   configurationAuditLogs?: AuditEntry[]
   messageAuditLogs?: AuditEntry[]
   flowAuditLogs?: AuditEntry[]
+  campaignAuditLogs?: AuditEntry[]
   logTail?: {
     path?: string
     updated_at?: string | null
@@ -75,7 +76,7 @@ interface AuditPanelProps {
   }
 }
 
-type AuditScope = "configuration" | "messages" | "flows" | "logs"
+type AuditScope = "configuration" | "messages" | "flows" | "campaigns" | "logs"
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || ""
 const AUDIT_PAGE_SIZE = 10
@@ -89,6 +90,19 @@ const AUDIT_FIELD_LABELS: Record<string, string> = {
   api_key: "API key de Alephoo",
   timeout: "Timeout de Alephoo",
   enabled_endpoints: "Endpoints habilitados",
+  first_name: "Nombre",
+  last_name: "Apellido",
+  formatted_name: "Nombre visible",
+  phone: "Telefono",
+  organization: "Organizacion",
+  title: "Cargo",
+  email: "Correo electronico",
+  template: "Plantilla",
+  total_count: "Destinatarios totales",
+  valid_count: "Destinatarios validos",
+  invalid_count: "Destinatarios invalidos",
+  duplicate_count: "Destinatarios duplicados",
+  variable_keys: "Variables",
   default_flow_id: "Flujo por defecto",
   default_flow_name: "Nombre del flujo por defecto",
   inactivity_timeout_minutes: "Tiempo de inactividad",
@@ -159,7 +173,7 @@ function getAuditFieldLabel(key: string): string {
 const scopeMeta: Record<Exclude<AuditScope, "logs">, { title: string; description: string; icon: typeof ShieldCheck }> = {
   configuration: {
     title: "Configuracion",
-    description: "Cambios administrativos sobre settings, usuarios, importaciones y exportaciones.",
+    description: "Cambios administrativos sobre settings, usuarios, seguridad, perfiles y agenda.",
     icon: ShieldCheck,
   },
   messages: {
@@ -172,19 +186,26 @@ const scopeMeta: Record<Exclude<AuditScope, "logs">, { title: string; descriptio
     description: "Cambios sobre el builder, flujos del bot y sus nodos.",
     icon: GitBranch,
   },
+  campaigns: {
+    title: "Campañas",
+    description: "Creación, ejecución, pausa y sincronización de plantillas de campañas.",
+    icon: Megaphone,
+  },
 }
 
 export default function AuditPanel({
   configurationAuditLogs = [],
   messageAuditLogs = [],
   flowAuditLogs = [],
+  campaignAuditLogs = [],
   logTail,
 }: AuditPanelProps) {
   const [activeScope, setActiveScope] = useState<AuditScope>("configuration")
-  const [auditByScope, setAuditByScope] = useState<Record<"configuration" | "messages" | "flows", AuditEntry[]>>({
+  const [auditByScope, setAuditByScope] = useState<Record<Exclude<AuditScope, "logs">, AuditEntry[]>>({
     configuration: configurationAuditLogs,
     messages: messageAuditLogs,
     flows: flowAuditLogs,
+    campaigns: campaignAuditLogs,
   })
   const [logTailState, setLogTailState] = useState(logTail ?? { path: "", updated_at: null, lines: [] })
   const [loadingAudit, setLoadingAudit] = useState(false)
@@ -200,9 +221,10 @@ export default function AuditPanel({
       configuration: configurationAuditLogs,
       messages: messageAuditLogs,
       flows: flowAuditLogs,
+      campaigns: campaignAuditLogs,
     })
     setLogTailState(logTail ?? { path: "", updated_at: null, lines: [] })
-  }, [configurationAuditLogs, flowAuditLogs, logTail, messageAuditLogs])
+  }, [campaignAuditLogs, configurationAuditLogs, flowAuditLogs, logTail, messageAuditLogs])
 
   useEffect(() => {
     if (activeScope !== "logs") {
@@ -383,6 +405,7 @@ export default function AuditPanel({
                 ["configuration", "Configuracion", ShieldCheck],
                 ["messages", "Mensajes", MessageSquare],
                 ["flows", "Flujos", GitBranch],
+                ["campaigns", "Campañas", Megaphone],
                 ["logs", "Logs tecnicos", FileText],
               ] as const).map(([scope, label, Icon]) => (
                 <Button

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Auth;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\LoginRequest;
 use App\Providers\RouteServiceProvider;
+use App\Services\AuditService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -14,6 +15,8 @@ use Inertia\Response;
 
 class AuthenticatedSessionController extends Controller
 {
+    public function __construct(private readonly AuditService $auditService) {}
+
     /**
      * Display the login view.
      */
@@ -34,6 +37,20 @@ class AuthenticatedSessionController extends Controller
 
         $request->session()->regenerate();
 
+        $user = $request->user();
+        $this->auditService->record(
+            'security',
+            'login',
+            "Inicio sesion {$user->name}",
+            $user,
+            $user,
+            [
+                'meta' => [
+                    'ip' => $request->ip(),
+                ],
+            ],
+        );
+
         return redirect('/dashboard');
     }
 
@@ -42,6 +59,22 @@ class AuthenticatedSessionController extends Controller
      */
     public function destroy(Request $request): RedirectResponse
     {
+        $user = $request->user();
+        if ($user) {
+            $this->auditService->record(
+                'security',
+                'logout',
+                "Cerro sesion {$user->name}",
+                $user,
+                $user,
+                [
+                    'meta' => [
+                        'ip' => $request->ip(),
+                    ],
+                ],
+            );
+        }
+
         Auth::guard('web')->logout();
 
         $request->session()->invalidate();

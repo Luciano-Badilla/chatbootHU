@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Auth;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Providers\RouteServiceProvider;
+use App\Services\AuditService;
 use Illuminate\Auth\Events\Registered;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -16,6 +17,8 @@ use Inertia\Response;
 
 class RegisteredUserController extends Controller
 {
+    public function __construct(private readonly AuditService $auditService) {}
+
     /**
      * Display the registration view.
      */
@@ -48,7 +51,20 @@ class RegisteredUserController extends Controller
 
         Auth::login($user);
 
-        // 🔁 Esta línea es la clave:
+        $this->auditService->record(
+            'security',
+            'registered',
+            "Registro la cuenta {$user->name}",
+            $user,
+            $user,
+            [
+                'target_user' => $user->only(['id', 'name', 'email']),
+                'meta' => [
+                    'ip' => $request->ip(),
+                ],
+            ],
+        );
+
         return redirect()->intended(RouteServiceProvider::HOME);
     }
 }

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Services\AuditService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -10,6 +11,8 @@ use Illuminate\Validation\Rules\Password;
 
 class PasswordController extends Controller
 {
+    public function __construct(private readonly AuditService $auditService) {}
+
     /**
      * Update the user's password.
      */
@@ -23,6 +26,20 @@ class PasswordController extends Controller
         $request->user()->update([
             'password' => Hash::make($validated['password']),
         ]);
+
+        $user = $request->user();
+        $this->auditService->record(
+            'security',
+            'password_changed',
+            "Cambio su contrasena {$user->name}",
+            $user,
+            $user,
+            [
+                'meta' => [
+                    'ip' => $request->ip(),
+                ],
+            ],
+        );
 
         return back();
     }

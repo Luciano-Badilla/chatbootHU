@@ -303,6 +303,23 @@ class BotFlowController extends Controller
         $storedName = uniqid($kind . '_') . '_' . $safeName;
         $path = $file->storeAs("bot-media/{$kind}", $storedName, 'public');
 
+        $this->auditService->record(
+            'flows',
+            'media_uploaded',
+            "Subio un archivo {$kind} para flujos",
+            $request->user(),
+            null,
+            [
+                'meta' => [
+                    'file_name' => $originalName,
+                    'media_kind' => $kind,
+                    'file_size' => $file->getSize(),
+                    'mime' => $mime,
+                    'stored_path' => $path,
+                ],
+            ],
+        );
+
         return response()->json([
             'ok' => true,
             'url' => Storage::url($path),

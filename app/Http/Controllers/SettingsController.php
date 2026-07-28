@@ -27,6 +27,7 @@ class SettingsController extends Controller
                 'general.timezone',
                 'general.language',
                 'integrations.whatsapp.token',
+                'integrations.whatsapp.waba_id',
                 'integrations.whatsapp.phone_number_id',
                 'integrations.whatsapp.webhook_verify_token',
                 'integrations.alephoo.base_url',
@@ -37,6 +38,10 @@ class SettingsController extends Controller
                 'bot.inactivity_timeout_message',
             ])
             ->pluck('value', 'key');
+        $storedWhatsappToken = trim((string) ($settings['integrations.whatsapp.token'] ?? ''));
+        $storedWhatsappWabaId = trim((string) ($settings['integrations.whatsapp.waba_id'] ?? ''));
+        $storedWhatsappPhoneNumberId = trim((string) ($settings['integrations.whatsapp.phone_number_id'] ?? ''));
+        $storedWhatsappVerifyToken = trim((string) ($settings['integrations.whatsapp.webhook_verify_token'] ?? ''));
 
         $activeFlows = BotFlow::query()
             ->where('is_active', true)
@@ -54,8 +59,11 @@ class SettingsController extends Controller
                 'integrations' => [
                     'whatsapp' => [
                         'token' => $settings['integrations.whatsapp.token'] ?? '',
-                        'phone_number_id' => $settings['integrations.whatsapp.phone_number_id'] ?? '',
+                        'token_configured' => $storedWhatsappToken !== '' || trim((string) env('WHATSAPP_ACCESS_TOKEN', '')) !== '',
+                        'waba_id' => $storedWhatsappWabaId !== '' ? $storedWhatsappWabaId : env('WHATSAPP_WABA_ID', ''),
+                        'phone_number_id' => $storedWhatsappPhoneNumberId !== '' ? $storedWhatsappPhoneNumberId : env('WHATSAPP_PHONE_ID', ''),
                         'webhook_verify_token' => $settings['integrations.whatsapp.webhook_verify_token'] ?? '',
+                        'webhook_verify_token_configured' => $storedWhatsappVerifyToken !== '' || trim((string) env('WHATSAPP_VERIFY_TOKEN', '')) !== '',
                     ],
                     'alephoo' => [
                         'base_url' => $settings['integrations.alephoo.base_url'] ?? '',
@@ -153,8 +161,9 @@ class SettingsController extends Controller
     {
         $data = $request->validate([
             'whatsapp.token' => ['nullable', 'string'],
-            'whatsapp.phone_number_id' => ['nullable', 'string'],
-            'whatsapp.webhook_verify_token' => ['nullable', 'string'],
+            'whatsapp.waba_id' => ['nullable', 'regex:/^\d+$/', 'max:40'],
+            'whatsapp.phone_number_id' => ['nullable', 'regex:/^\d+$/', 'max:40'],
+            'whatsapp.webhook_verify_token' => ['nullable', 'string', 'max:255'],
             'alephoo.base_url' => ['nullable', 'url'],
             'alephoo.api_key' => ['nullable', 'string'],
             'alephoo.timeout' => ['required', 'integer', 'min:1', 'max:300'],
@@ -164,6 +173,7 @@ class SettingsController extends Controller
         $before = [
             'whatsapp' => [
                 'token' => $this->settingValue('integrations.whatsapp.token', ''),
+                'waba_id' => $this->settingValue('integrations.whatsapp.waba_id', ''),
                 'phone_number_id' => $this->settingValue('integrations.whatsapp.phone_number_id', ''),
                 'webhook_verify_token' => $this->settingValue('integrations.whatsapp.webhook_verify_token', ''),
             ],
@@ -178,6 +188,10 @@ class SettingsController extends Controller
         SystemSetting::updateOrCreate(
             ['key' => 'integrations.whatsapp.token'],
             ['value' => $data['whatsapp']['token'] ?? ''],
+        );
+        SystemSetting::updateOrCreate(
+            ['key' => 'integrations.whatsapp.waba_id'],
+            ['value' => $data['whatsapp']['waba_id'] ?? ''],
         );
         SystemSetting::updateOrCreate(
             ['key' => 'integrations.whatsapp.phone_number_id'],
@@ -207,6 +221,7 @@ class SettingsController extends Controller
         $after = [
             'whatsapp' => [
                 'token' => $data['whatsapp']['token'] ?? '',
+                'waba_id' => $data['whatsapp']['waba_id'] ?? '',
                 'phone_number_id' => $data['whatsapp']['phone_number_id'] ?? '',
                 'webhook_verify_token' => $data['whatsapp']['webhook_verify_token'] ?? '',
             ],
@@ -226,6 +241,7 @@ class SettingsController extends Controller
                 'integrations' => [
                     'whatsapp' => [
                         'token' => $data['whatsapp']['token'] ?? '',
+                        'waba_id' => $data['whatsapp']['waba_id'] ?? '',
                         'phone_number_id' => $data['whatsapp']['phone_number_id'] ?? '',
                         'webhook_verify_token' => $data['whatsapp']['webhook_verify_token'] ?? '',
                     ],
