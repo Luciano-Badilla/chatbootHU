@@ -127,10 +127,10 @@ La aplicacion debe servirse desde Apache/Nginx/Laragon apuntando a la carpeta `p
 Ejemplo local con subcarpeta:
 
 ```env
-APP_URL=http://localhost/chatbot/public
-VITE_APP_URL=http://localhost/chatbot/public
+APP_URL=http://172.22.115.103/chatbot/public
+VITE_APP_URL=http://172.22.115.103/chatbot/public
 VITE_API_BASE_URL=/chatbot/public
-VITE_DEV_SERVER=http://localhost:5173
+VITE_DEV_SERVER=http://172.22.115.103:5173
 ```
 
 Actualmente no hay seeders obligatorios. Si se agregan datos iniciales en el futuro:

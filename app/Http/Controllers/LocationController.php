@@ -113,7 +113,7 @@ class LocationController extends Controller
 
     private function nominatim()
     {
-        $appUrl = config('app.url') ?: env('APP_URL', 'http://localhost');
+        $appUrl = config('app.url') ?: env('APP_URL', 'http://172.22.115.103');
 
         return Http::timeout(8)
             ->acceptJson()

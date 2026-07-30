@@ -44,4 +44,10 @@ return [
         'iv' => env('ALEPHOO_CANCEL_IV', env('TURNO_IV')),
     ],
 
+    'turnos_configuration' => [
+        'url' => env('TURNOS_CONFIGURATION_URL', 'https://turnos.hospital.uncu.edu.ar/api/configuration'),
+        'token' => env('TURNOS_CONFIGURATION_TOKEN'),
+        'timeout' => env('TURNOS_CONFIGURATION_TIMEOUT', 15),
+    ],
+
 ];

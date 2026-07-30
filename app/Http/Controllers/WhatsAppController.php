@@ -13,6 +13,7 @@ use App\Models\SystemSetting;
 use App\Services\AuditService;
 use App\Services\BotInactivityService;
 use App\Services\CampaignMetricsService;
+use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Request;
 use Illuminate\Support\Env;
 use Illuminate\Support\Facades\DB;
@@ -27,6 +28,7 @@ use PhpMqtt\Client\MqttClient;
 class WhatsAppController extends Controller
 {
     private ?array $runtimeSettingsCache = null;
+    private ?array $turnosConfigurationCache = null;
 
     public function __construct(
         private readonly BotInactivityService $botInactivityService,
@@ -2879,6 +2881,7 @@ class WhatsAppController extends Controller
                 ->withHeaders(['X-API-KEY' => $apiKey]);
 
             if ($node->type === 'specialty_search') {
+                $turnosConfiguration = $this->turnosConfiguration();
                 if (!$this->isAlephooEndpointEnabled('/especialidades')) {
                     throw new \RuntimeException('El endpoint de especialidades no esta habilitado.');
                 }
@@ -2892,9 +2895,11 @@ class WhatsAppController extends Controller
                     throw new \RuntimeException("Alephoo respondio {$response->status()} al consultar especialidades.");
                 }
                 $items = $response->successful() && is_array($response->json()) ? $response->json() : [];
+                $allowedSpecialtyIds = array_map('strval', $turnosConfiguration['specialties']);
                 $needle = mb_strtolower(Str::ascii($query));
                 $items = array_values(array_filter($items, fn($item) =>
                     is_array($item)
+                    && in_array((string) ($item['id'] ?? ''), $allowedSpecialtyIds, true)
                     && str_contains(mb_strtolower(Str::ascii((string) ($item['nombre'] ?? ''))), $needle)
                 ));
                 usort($items, fn($a, $b) => strcasecmp((string) ($a['nombre'] ?? ''), (string) ($b['nombre'] ?? '')));
@@ -2911,6 +2916,7 @@ class WhatsAppController extends Controller
                     }
                 }
             } elseif ($node->type === 'doctor_select') {
+                $turnosConfiguration = $this->turnosConfiguration();
                 if (!$this->isAlephooEndpointEnabled('/profesionales/{especialidad}')) {
                     throw new \RuntimeException('El endpoint de profesionales no esta habilitado.');
                 }
@@ -2924,18 +2930,107 @@ class WhatsAppController extends Controller
                     throw new \RuntimeException("Alephoo respondio {$response->status()} al consultar profesionales.");
                 }
                 $items = $response->successful() && is_array($response->json()) ? $response->json() : [];
-                usort($items, fn($a, $b) => strcasecmp(
-                    trim((string) ($a['apellidos'] ?? '') . ' ' . (string) ($a['nombres'] ?? '')),
-                    trim((string) ($b['apellidos'] ?? '') . ' ' . (string) ($b['nombres'] ?? ''))
+                $configuredDoctors = $turnosConfiguration['doctors_by_specialty'][(string) $specialtyId]
+                    ?? $turnosConfiguration['doctors_by_specialty'][(int) $specialtyId]
+                    ?? [];
+                $allowedDoctorIds = array_map('strval', is_array($configuredDoctors) ? $configuredDoctors : []);
+                $items = array_values(array_filter($items, fn($item) =>
+                    is_array($item)
+                    && in_array((string) ($item['id'] ?? ''), $allowedDoctorIds, true)
                 ));
+                $agendaDaysByDoctor = is_array($turnosConfiguration['doctor_agenda_days'] ?? null)
+                    ? $turnosConfiguration['doctor_agenda_days']
+                    : [];
+                $availabilityResponses = Http::pool(function (Pool $pool) use (
+                    $items,
+                    $agendaDaysByDoctor,
+                    $settings,
+                    $baseUrl,
+                    $specialtyId,
+                    $apiKey
+                ) {
+                    $requests = [];
+
+                    foreach ($items as $item) {
+                        $doctorId = (string) ($item['id'] ?? '');
+                        if ($doctorId === '') {
+                            continue;
+                        }
+
+                        $days = max(1, min(365, (int) (
+                            $agendaDaysByDoctor[$doctorId]
+                            ?? $item['agenda_days']
+                            ?? $settings['days']
+                            ?? 28
+                        )));
+                        $requests[] = $pool
+                            ->as($doctorId)
+                            ->timeout($this->alephooTimeout())
+                            ->acceptJson()
+                            ->withHeaders(['X-API-KEY' => $apiKey])
+                            ->get($baseUrl . "/turnos/{$doctorId}/{$specialtyId}/{$days}");
+                    }
+
+                    return $requests;
+                });
+                $items = array_map(function ($item) use ($availabilityResponses, $agendaDaysByDoctor, $settings) {
+                    $doctorId = (string) ($item['id'] ?? '');
+                    $availabilityResponse = $availabilityResponses[$doctorId] ?? null;
+                    $availableAppointments = $availabilityResponse instanceof \Illuminate\Http\Client\Response
+                        && $availabilityResponse->successful()
+                        && is_array($availabilityResponse->json())
+                            ? count($availabilityResponse->json())
+                            : 0;
+
+                    $item['agenda_days'] = max(1, min(365, (int) (
+                        $agendaDaysByDoctor[$doctorId]
+                        ?? $item['agenda_days']
+                        ?? $settings['days']
+                        ?? 28
+                    )));
+                    $item['available_appointments'] = $availableAppointments;
+
+                    return $item;
+                }, $items);
+                $successfulAvailabilityQueries = count(array_filter(
+                    $availabilityResponses,
+                    fn($response) => $response instanceof \Illuminate\Http\Client\Response
+                        && $response->successful()
+                        && is_array($response->json())
+                ));
+
+                if ($items !== [] && $successfulAvailabilityQueries === 0) {
+                    throw new \RuntimeException('No se pudo consultar la disponibilidad de los profesionales.');
+                }
+
+                $items = array_values(array_filter(
+                    $items,
+                    fn($item) => (int) ($item['available_appointments'] ?? 0) > 0
+                ));
+                usort($items, function ($a, $b) {
+                    $availabilityOrder = ((int) ($a['available_appointments'] ?? 0) > 0 ? 0 : 1)
+                        <=> ((int) ($b['available_appointments'] ?? 0) > 0 ? 0 : 1);
+
+                    if ($availabilityOrder !== 0) {
+                        return $availabilityOrder;
+                    }
+
+                    return strcasecmp(
+                        trim((string) ($a['apellidos'] ?? '') . ' ' . (string) ($a['nombres'] ?? '')),
+                        trim((string) ($b['apellidos'] ?? '') . ' ' . (string) ($b['nombres'] ?? ''))
+                    );
+                });
                 foreach (array_slice($items, 0, 10) as $item) {
                     $id = (string) ($item['id'] ?? '');
                     $name = trim((string) ($item['nombres'] ?? '') . ' ' . (string) ($item['apellidos'] ?? ''));
                     if ($id !== '' && $name !== '') {
+                        $availableAppointments = (int) ($item['available_appointments'] ?? 0);
                         $rows[] = [
                             'id' => 'doctor:' . $id,
                             'title' => Str::limit($name, 24, ''),
-                            'description' => '',
+                            'description' => $availableAppointments === 1
+                                ? '1 turno disponible'
+                                : "{$availableAppointments} turnos disponibles",
                             'vars' => [
                                 'profesional_id' => $id,
                                 'profesional_nombre' => $name,
@@ -2969,13 +3064,18 @@ class WhatsAppController extends Controller
                     $time = (string) ($item['hora'] ?? '');
                     $agenda = (string) ($item['agenda'] ?? '');
                     if ($date !== '' && $time !== '' && $agenda !== '') {
+                        $parsedDate = \DateTimeImmutable::createFromFormat('!Y-m-d', substr($date, 0, 10));
+                        $parsedTime = \DateTimeImmutable::createFromFormat('!H:i', substr($time, 0, 5));
+                        $displayDate = $parsedDate ? $parsedDate->format('d/m/Y') : $date;
+                        $displayTime = $parsedTime ? $parsedTime->format('H:i') : $time;
+
                         $rows[] = [
                             'id' => 'slot:' . $index . ':' . $agenda,
-                            'title' => Str::limit($date . ' ' . $time, 24, ''),
-                            'description' => '',
+                            'title' => Str::limit($displayDate, 24, ''),
+                            'description' => $displayTime,
                             'vars' => [
-                                'turno_fecha' => $date,
-                                'turno_hora' => $time,
+                                'turno_fecha' => $displayDate,
+                                'turno_hora' => $displayTime,
                                 'turno_agenda_id' => $agenda,
                                 'turno_orden' => is_numeric($item['orden'] ?? null) ? (int) $item['orden'] : -1,
                             ],
@@ -3100,9 +3200,22 @@ class WhatsAppController extends Controller
         $targetNextNodeId = $settings['error_next_node_id'] ?? null;
         $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos confirmar el turno en este momento.');
 
-        $validDate = \DateTimeImmutable::createFromFormat('!Y-m-d', $date);
+        $validDate = null;
+        if (preg_match('/^\d{2}\/\d{2}\/\d{4}$/', $date)) {
+            $candidateDate = \DateTimeImmutable::createFromFormat('!d/m/Y', $date);
+            $validDate = $candidateDate && $candidateDate->format('d/m/Y') === $date ? $candidateDate : null;
+        } elseif (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+            $candidateDate = \DateTimeImmutable::createFromFormat('!Y-m-d', $date);
+            $validDate = $candidateDate && $candidateDate->format('Y-m-d') === $date ? $candidateDate : null;
+        }
+        $validTime = \DateTimeImmutable::createFromFormat('!H:i', substr($time, 0, 5));
+        if (!$validTime || $validTime->format('H:i') !== substr($time, 0, 5)) {
+            $validTime = null;
+        }
+        $apiDate = $validDate ? $validDate->format('Y-m-d') : '';
+        $apiTime = $validTime ? $validTime->format('H:i') : '';
         $missingData = $personId === '' || $specialtyId === '' || $doctorId === '' || $agendaId === ''
-            || !$validDate || $validDate->format('Y-m-d') !== $date || $time === '';
+            || !$validDate || !$validTime;
 
         if ($missingData) {
             $resultVars['turno_create_status'] = 'missing_data';
@@ -3129,8 +3242,8 @@ class WhatsAppController extends Controller
                     $slots = $availability->successful() && is_array($availability->json()) ? $availability->json() : [];
                     $stillAvailable = collect($slots)->contains(fn($slot) =>
                         is_array($slot)
-                        && (string) ($slot['fecha'] ?? '') === $date
-                        && (string) ($slot['hora'] ?? '') === $time
+                        && substr((string) ($slot['fecha'] ?? ''), 0, 10) === $apiDate
+                        && substr((string) ($slot['hora'] ?? ''), 0, 5) === $apiTime
                         && (string) ($slot['agenda'] ?? '') === $agendaId
                     );
 
@@ -3140,8 +3253,8 @@ class WhatsAppController extends Controller
                         $messageToSend = (string) ($settings['unavailable_message'] ?? 'El turno seleccionado ya no esta disponible.');
                     } else {
                         $payload = [
-                            'hora' => $time,
-                            'fecha' => $date,
+                            'hora' => $apiTime,
+                            'fecha' => $apiDate,
                             'orden' => is_numeric($order) ? (int) $order : -1,
                             'agenda_id' => (int) $agendaId,
                             'persona_id' => (int) $personId,
@@ -4300,6 +4413,45 @@ class WhatsAppController extends Controller
     {
         $baseUrl = $this->alephooBaseUrl();
         return str_ends_with($baseUrl, '/personas') ? substr($baseUrl, 0, -9) : $baseUrl;
+    }
+
+    private function turnosConfiguration(): array
+    {
+        if ($this->turnosConfigurationCache !== null) {
+            return $this->turnosConfigurationCache;
+        }
+
+        $url = trim((string) config('services.turnos_configuration.url', ''));
+        $token = trim((string) config('services.turnos_configuration.token', ''));
+        $timeout = max(1, min(60, (int) config('services.turnos_configuration.timeout', 15)));
+
+        if ($url === '' || $token === '') {
+            throw new \RuntimeException('La API de configuracion de turnos no esta configurada.');
+        }
+
+        $response = Http::timeout($timeout)
+            ->acceptJson()
+            ->withToken($token)
+            ->get($url);
+
+        if (!$response->successful()) {
+            throw new \RuntimeException(
+                "La API de configuracion de turnos respondio {$response->status()}."
+            );
+        }
+
+        $configuration = $response->json();
+        if (
+            !is_array($configuration)
+            || !is_array($configuration['specialties'] ?? null)
+            || !is_array($configuration['doctors_by_specialty'] ?? null)
+        ) {
+            throw new \RuntimeException('La API de configuracion de turnos devolvio una respuesta invalida.');
+        }
+
+        $this->turnosConfigurationCache = $configuration;
+
+        return $this->turnosConfigurationCache;
     }
 
     private function isAlephooEndpointEnabled(string $endpoint): bool

@@ -57,7 +57,7 @@ interface AuditEntry {
       before?: string | null
       after?: string | null
       value?: string | null
-    }>
+    } | null>
     before?: Record<string, unknown>
     after?: Record<string, unknown>
     meta?: Record<string, unknown>
@@ -264,7 +264,7 @@ export default function AuditPanel({
       const flowName = String(entry.properties?.flow?.name ?? entry.properties?.node?.flow_name ?? "")
       const nodeKey = String(entry.properties?.node?.key ?? "")
       const changedKeyLabels = (entry.properties?.changed_keys ?? []).map((key) => getAuditFieldLabel(key))
-      const humanChanges = (entry.properties?.changes_human ?? []).flatMap((change) => [
+      const humanChanges = (entry.properties?.changes_human ?? []).filter((change) => change !== null).flatMap((change) => [
         change.label ?? "",
         change.before ?? "",
         change.after ?? "",
@@ -545,14 +545,14 @@ export default function AuditPanel({
                               </div>
                             ) : null}
 
-                            {entry.properties?.changes_human?.length ? (
+                            {entry.properties?.changes_human?.some((change) => change !== null) ? (
                               <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                                 <div className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)] gap-3 border-b border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                                   <span>Campo</span>
                                   <span>Antes</span>
                                   <span>Despues</span>
                                 </div>
-                                {entry.properties.changes_human.map((change, index) => {
+                                {entry.properties.changes_human.filter((change) => change !== null).map((change, index) => {
                                   const hasBeforeAfter = change.before !== undefined || change.after !== undefined
 
                                   return (

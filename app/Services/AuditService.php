@@ -593,13 +593,13 @@ class AuditService
                     ? $this->valueChange('mode', 'Chat ocupado por otro operador')
                     : null,
             ])),
-            'bot_enabled', 'bot_disabled' => [
+            'bot_enabled', 'bot_disabled' => array_values(array_filter([
                 $this->beforeAfterChange(
                     'bot_enabled',
                     $before['bot_enabled'] ?? null,
                     $after['bot_enabled'] ?? null,
                 ),
-            ],
+            ])),
             'message_sent' => array_values(array_filter([
                 $this->valueChange('message_type', $meta['message_type'] ?? null),
                 $this->valueChange('body_preview', $meta['body_preview'] ?? null),
