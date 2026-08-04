@@ -7,6 +7,10 @@ use App\Models\CampaignRecipient;
 
 class CampaignMetricsService
 {
+    public function __construct(private readonly AuditService $auditService)
+    {
+    }
+
     public function refresh(int $campaignId): void
     {
         $counts = CampaignRecipient::query()
@@ -34,11 +38,31 @@ class CampaignMetricsService
             'failed_count' => (int) ($counts?->failed_count ?? 0),
         ];
 
-        if ($campaign->status === 'running' && $remaining === 0) {
+        $completedNow = $campaign->status === 'running' && $remaining === 0;
+        if ($completedNow) {
             $updates['status'] = 'completed';
             $updates['finished_at'] = now();
         }
 
         $campaign->update($updates);
+
+        if ($completedNow) {
+            $this->auditService->record(
+                'campaigns',
+                'campaign_completed',
+                'Completo automaticamente la campaña',
+                null,
+                $campaign,
+                [
+                    'after' => [
+                        'status' => 'completed',
+                        'sent_count' => $campaign->sent_count,
+                        'delivered_count' => $campaign->delivered_count,
+                        'read_count' => $campaign->read_count,
+                        'failed_count' => $campaign->failed_count,
+                    ],
+                ],
+            );
+        }
     }
 }

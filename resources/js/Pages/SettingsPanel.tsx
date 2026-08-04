@@ -13,6 +13,7 @@ import {
   ExternalLink,
   Loader2,
   Upload,
+  XCircle,
 } from "lucide-react"
 import { Badge } from "shadcn/components/ui/badge"
 import { Button } from "shadcn/components/ui/button"
@@ -54,6 +55,17 @@ interface SettingsPanelProps {
         api_key?: string
         timeout?: string
         enabled_endpoints?: string
+      }
+      alephoo_v3?: {
+        base_url?: string
+        username?: string
+        password?: string
+        timeout?: string
+      }
+      autogestion?: {
+        base_url?: string
+        token?: string
+        timeout?: string
       }
     }
     bot?: {
@@ -115,6 +127,13 @@ export default function SettingsPanel({
   const initialAlephooApiKey = settings?.integrations?.alephoo?.api_key ?? ""
   const initialAlephooTimeout = settings?.integrations?.alephoo?.timeout ?? "30"
   const initialAlephooEndpoints = settings?.integrations?.alephoo?.enabled_endpoints ?? ""
+  const initialAlephooV3BaseUrl = settings?.integrations?.alephoo_v3?.base_url ?? ""
+  const initialAlephooV3Username = settings?.integrations?.alephoo_v3?.username ?? ""
+  const initialAlephooV3Password = settings?.integrations?.alephoo_v3?.password ?? ""
+  const initialAlephooV3Timeout = settings?.integrations?.alephoo_v3?.timeout ?? "30"
+  const initialAutogestionBaseUrl = settings?.integrations?.autogestion?.base_url ?? ""
+  const initialAutogestionToken = settings?.integrations?.autogestion?.token ?? ""
+  const initialAutogestionTimeout = settings?.integrations?.autogestion?.timeout ?? "15"
   const initialDefaultFlowId =
     settings?.bot?.default_flow_id ?? botFlows.find((flow) => flow.is_default)?.id ?? botFlows[0]?.id ?? null
   const initialInactivityTimeoutMinutes = settings?.bot?.inactivity_timeout_minutes ?? "1440"
@@ -132,10 +151,32 @@ export default function SettingsPanel({
   const [whatsappVerifyToken, setWhatsappVerifyToken] = useState(initialWhatsappVerifyToken)
   const [showWhatsappToken, setShowWhatsappToken] = useState(false)
   const [showWhatsappVerifyToken, setShowWhatsappVerifyToken] = useState(false)
+  const [showApiTurnosKey, setShowApiTurnosKey] = useState(false)
+  const [showAlephooPassword, setShowAlephooPassword] = useState(false)
+  const [showAutogestionToken, setShowAutogestionToken] = useState(false)
   const [alephooBaseUrl, setAlephooBaseUrl] = useState(initialAlephooBaseUrl)
   const [alephooApiKey, setAlephooApiKey] = useState(initialAlephooApiKey)
   const [alephooTimeout, setAlephooTimeout] = useState(initialAlephooTimeout)
   const [alephooEndpoints, setAlephooEndpoints] = useState(initialAlephooEndpoints)
+  const [alephooV3BaseUrl, setAlephooV3BaseUrl] = useState(initialAlephooV3BaseUrl)
+  const [alephooV3Username, setAlephooV3Username] = useState(initialAlephooV3Username)
+  const [alephooV3Password, setAlephooV3Password] = useState(initialAlephooV3Password)
+  const [alephooV3Timeout, setAlephooV3Timeout] = useState(initialAlephooV3Timeout)
+  const [autogestionBaseUrl, setAutogestionBaseUrl] = useState(initialAutogestionBaseUrl)
+  const [autogestionToken, setAutogestionToken] = useState(initialAutogestionToken)
+  const [autogestionTimeout, setAutogestionTimeout] = useState(initialAutogestionTimeout)
+  const [testingAlephoo, setTestingAlephoo] = useState(false)
+  const [alephooTestResult, setAlephooTestResult] = useState<any>(null)
+  const [testingApiTurnos, setTestingApiTurnos] = useState(false)
+  const [apiTurnosTestResult, setApiTurnosTestResult] = useState<any>(null)
+  const [testingAutogestion, setTestingAutogestion] = useState(false)
+  const [autogestionTestResult, setAutogestionTestResult] = useState<any>(null)
+  const [integrationTestModalOpen, setIntegrationTestModalOpen] = useState(false)
+  const [integrationTestLoading, setIntegrationTestLoading] = useState(false)
+  const [integrationTestName, setIntegrationTestName] = useState("")
+  const [integrationTestResult, setIntegrationTestResult] = useState<any>(null)
+  const [visibleIntegrationResults, setVisibleIntegrationResults] = useState(0)
+  const [integrationTestItems, setIntegrationTestItems] = useState<any[]>([])
   const [savedWhatsappToken, setSavedWhatsappToken] = useState(initialWhatsappToken)
   const [savedWhatsappWabaId, setSavedWhatsappWabaId] = useState(initialWhatsappWabaId)
   const [savedWhatsappPhoneNumberId, setSavedWhatsappPhoneNumberId] = useState(initialWhatsappPhoneNumberId)
@@ -144,6 +185,8 @@ export default function SettingsPanel({
   const [savedAlephooApiKey, setSavedAlephooApiKey] = useState(initialAlephooApiKey)
   const [savedAlephooTimeout, setSavedAlephooTimeout] = useState(initialAlephooTimeout)
   const [savedAlephooEndpoints, setSavedAlephooEndpoints] = useState(initialAlephooEndpoints)
+  const [savedAlephooV3, setSavedAlephooV3] = useState([initialAlephooV3BaseUrl, initialAlephooV3Username, initialAlephooV3Password, initialAlephooV3Timeout])
+  const [savedAutogestion, setSavedAutogestion] = useState([initialAutogestionBaseUrl, initialAutogestionToken, initialAutogestionTimeout])
   const [defaultFlowId, setDefaultFlowId] = useState<number | null>(initialDefaultFlowId)
   const [inactivityTimeoutMinutes, setInactivityTimeoutMinutes] = useState(initialInactivityTimeoutMinutes)
   const [inactivityTimeoutMessage, setInactivityTimeoutMessage] = useState(initialInactivityTimeoutMessage)
@@ -227,7 +270,9 @@ export default function SettingsPanel({
       alephooBaseUrl !== savedAlephooBaseUrl ||
       alephooApiKey !== savedAlephooApiKey ||
       alephooTimeout !== savedAlephooTimeout ||
-      alephooEndpoints !== savedAlephooEndpoints
+      alephooEndpoints !== savedAlephooEndpoints ||
+      [alephooV3BaseUrl, alephooV3Username, alephooV3Password, alephooV3Timeout].some((value, index) => value !== savedAlephooV3[index]) ||
+      [autogestionBaseUrl, autogestionToken, autogestionTimeout].some((value, index) => value !== savedAutogestion[index])
     )
   }, [
     whatsappToken,
@@ -246,6 +291,8 @@ export default function SettingsPanel({
     savedAlephooApiKey,
     savedAlephooTimeout,
     savedAlephooEndpoints,
+    alephooV3BaseUrl, alephooV3Username, alephooV3Password, alephooV3Timeout, savedAlephooV3,
+    autogestionBaseUrl, autogestionToken, autogestionTimeout, savedAutogestion,
   ])
 
   const hasUnsavedBotChanges = useMemo(() => {
@@ -392,6 +439,17 @@ export default function SettingsPanel({
             timeout: Number(alephooTimeout || 30),
             enabled_endpoints: alephooEndpoints,
           },
+          alephoo_v3: {
+            base_url: alephooV3BaseUrl,
+            username: alephooV3Username,
+            password: alephooV3Password,
+            timeout: Number(alephooV3Timeout || 30),
+          },
+          autogestion: {
+            base_url: autogestionBaseUrl,
+            token: autogestionToken,
+            timeout: Number(autogestionTimeout || 15),
+          },
         }),
       })
 
@@ -412,6 +470,8 @@ export default function SettingsPanel({
       setSavedAlephooApiKey(alephooApiKey)
       setSavedAlephooTimeout(alephooTimeout)
       setSavedAlephooEndpoints(alephooEndpoints)
+      setSavedAlephooV3([alephooV3BaseUrl, alephooV3Username, alephooV3Password, alephooV3Timeout])
+      setSavedAutogestion([autogestionBaseUrl, autogestionToken, autogestionTimeout])
       setIntegrationsSaved(true)
       toast.success("Integraciones guardadas", {
         description: "La configuracion de WhatsApp y Alephoo se guardo correctamente.",
@@ -425,6 +485,198 @@ export default function SettingsPanel({
       setSavingIntegrations(false)
     }
   }
+
+  const handleTestAlephoo = async () => {
+    setTestingAlephoo(true)
+    setAlephooTestResult(null)
+
+    try {
+      const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content")
+      const res = await fetch(`${API_BASE}/api/settings/integrations/test`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          ...(csrfToken ? { "X-CSRF-TOKEN": csrfToken } : {}),
+        },
+        body: JSON.stringify({
+          base_url: alephooBaseUrl,
+          api_key: alephooApiKey,
+          timeout: Number(alephooTimeout || 30),
+          enabled_endpoints: "",
+          only_alephoo: true,
+          alephoo_v3: {
+            base_url: alephooV3BaseUrl,
+            username: alephooV3Username,
+            password: alephooV3Password,
+            timeout: Number(alephooV3Timeout || 30),
+          },
+        }),
+      })
+      const payload = await res.json().catch(() => null)
+      if (!res.ok) {
+        toast.error("No se pudo ejecutar la prueba", {
+          description: getErrorMessage(payload, "Revisa la URL, API key y timeout."),
+        })
+        return
+      }
+      setAlephooTestResult(payload)
+      if (payload?.ok) {
+        toast.success("Todos los endpoints respondieron correctamente")
+      } else {
+        toast.error("Algunos endpoints presentan problemas", {
+          description: `${payload?.summary?.failed ?? 0} de ${payload?.summary?.total ?? 0} pruebas fallaron.`,
+        })
+      }
+    } catch (err) {
+      console.error("Error probando Alephoo:", err)
+      toast.error("Error de red", { description: "No se pudo iniciar la prueba de Alephoo." })
+    } finally {
+      setTestingAlephoo(false)
+    }
+  }
+
+  const handleTestAdditionalIntegration = async (integration: "api_turnos" | "autogestion") => {
+    const setLoading = integration === "api_turnos" ? setTestingApiTurnos : setTestingAutogestion
+    const setResult = integration === "api_turnos" ? setApiTurnosTestResult : setAutogestionTestResult
+    setLoading(true)
+    setResult(null)
+    try {
+      const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content")
+      const res = await fetch(`${API_BASE}/api/settings/integrations/test`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          ...(csrfToken ? { "X-CSRF-TOKEN": csrfToken } : {}),
+        },
+        body: JSON.stringify({
+          integration,
+          base_url: alephooBaseUrl,
+          api_key: alephooApiKey,
+          timeout: Number(alephooTimeout || 30),
+          enabled_endpoints: "",
+          autogestion: {
+            base_url: autogestionBaseUrl,
+            token: autogestionToken,
+            timeout: Number(autogestionTimeout || 15),
+          },
+        }),
+      })
+      const payload = await res.json().catch(() => null)
+      if (!res.ok) {
+        toast.error("No se pudo ejecutar la prueba", { description: getErrorMessage(payload, "Revisa la configuracion.") })
+        return
+      }
+      setResult(payload)
+      payload?.ok
+        ? toast.success(`Prueba de ${integration === "api_turnos" ? "API Turnos" : "Autogestion"} correcta`)
+        : toast.error("Algunos endpoints presentan problemas")
+    } catch (err) {
+      console.error("Error probando integracion:", err)
+      toast.error("Error de red")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleOpenIntegrationTest = async (integration: "alephoo" | "api_turnos" | "autogestion") => {
+    const names = { alephoo: "Alephoo v3", api_turnos: "API Turnos", autogestion: "Autogestion" }
+    const catalogs: Record<string, Array<{ endpoint: string; method: string }>> = {
+      alephoo: [{ endpoint: "/admision/turnos", method: "GET" }],
+      api_turnos: [
+        { endpoint: "/personas/{dni}", method: "GET" },
+        { endpoint: "/especialidades", method: "GET" },
+        { endpoint: "/profesionales/{especialidad}", method: "GET" },
+        { endpoint: "/turnos/{profesional}/{especialidad}/{dias}", method: "GET" },
+        { endpoint: "/obrasocial", method: "GET" },
+        { endpoint: "/planes/{id}", method: "GET" },
+        { endpoint: "/crear/persona", method: "OPTIONS" },
+        { endpoint: "/crear/turno", method: "OPTIONS" },
+        { endpoint: "/cancelarTurnos/{turno}", method: "OPTIONS" },
+      ],
+      autogestion: [{ endpoint: "/api/configuration", method: "GET" }],
+    }
+    const catalog = catalogs[integration]
+    setIntegrationTestName(names[integration])
+    setIntegrationTestModalOpen(true)
+    setIntegrationTestLoading(true)
+    setIntegrationTestResult(null)
+    setVisibleIntegrationResults(0)
+    setIntegrationTestItems(catalog.map((item) => ({ ...item, state: "pending" })))
+
+    const completed: any[] = []
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content")
+    for (let index = 0; index < catalog.length; index += 1) {
+      setIntegrationTestItems((current) => current.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, state: "testing" } : item
+      ))
+      let result: any
+      try {
+        const res = await fetch(`${API_BASE}/api/settings/integrations/test`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            ...(csrfToken ? { "X-CSRF-TOKEN": csrfToken } : {}),
+          },
+          body: JSON.stringify({
+            integration,
+            only_alephoo: integration === "alephoo",
+            base_url: alephooBaseUrl,
+            api_key: alephooApiKey,
+            timeout: Number(alephooTimeout || 30),
+            enabled_endpoints: integration === "api_turnos" ? catalog[index].endpoint : "",
+            alephoo_v3: {
+              base_url: alephooV3BaseUrl,
+              username: alephooV3Username,
+              password: alephooV3Password,
+              timeout: Number(alephooV3Timeout || 30),
+            },
+            autogestion: {
+              base_url: autogestionBaseUrl,
+              token: autogestionToken,
+              timeout: Number(autogestionTimeout || 15),
+            },
+          }),
+        })
+        const payload = await res.json().catch(() => null)
+        if (!res.ok) throw new Error(getErrorMessage(payload, "No se pudo ejecutar la prueba."))
+        result = payload?.results?.[0] ?? {
+          ...catalog[index], ok: false, status: null, duration_ms: 0, message: "El endpoint no devolvio resultado.",
+        }
+      } catch (err) {
+        result = {
+          ...catalog[index],
+          ok: false,
+          status: null,
+          duration_ms: 0,
+          message: err instanceof Error ? err.message : "Error de red.",
+        }
+      }
+      completed.push(result)
+      setIntegrationTestItems((current) => current.map((item, itemIndex) =>
+        itemIndex === index ? { ...result, state: result.ok ? "success" : "error" } : item
+      ))
+    }
+    const passed = completed.filter((item) => item.ok).length
+    setIntegrationTestResult({
+      ok: passed === completed.length,
+      summary: { passed, failed: completed.length - passed, total: completed.length },
+      results: completed,
+    })
+    setIntegrationTestLoading(false)
+  }
+
+  useEffect(() => {
+    const total = integrationTestResult?.results?.length ?? 0
+    if (!integrationTestModalOpen || integrationTestLoading || visibleIntegrationResults >= total) return
+    const timer = window.setTimeout(
+      () => setVisibleIntegrationResults((current) => Math.min(current + 1, total)),
+      180,
+    )
+    return () => window.clearTimeout(timer)
+  }, [integrationTestLoading, integrationTestModalOpen, integrationTestResult, visibleIntegrationResults])
 
   const handlePasteWhatsappToken = async () => {
     try {
@@ -1045,9 +1297,9 @@ export default function SettingsPanel({
             <div className="rounded-xl border border-[#dbe5ef] p-4">
               <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
-                  <h3 className="text-sm font-semibold text-[#013765]">Alephoo</h3>
+                  <h3 className="text-sm font-semibold text-[#013765]">API intermedia (la que usa Autogestion)</h3>
                   <p className="text-xs text-[#013765]/65">
-                    Configuracion del sistema central y endpoints permitidos para el bot.
+                    Configuracion de la API intermedia utilizada por los nodos del bot.
                   </p>
                 </div>
               </div>
@@ -1062,11 +1314,23 @@ export default function SettingsPanel({
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium text-[#013765]">API key</label>
-                  <Input
-                    value={alephooApiKey}
-                    onChange={(e) => setAlephooApiKey(e.target.value)}
-                    placeholder="Clave de acceso a Alephoo"
-                  />
+                  <div className="relative">
+                    <Input
+                      type={showApiTurnosKey ? "text" : "password"}
+                      value={alephooApiKey}
+                      onChange={(e) => setAlephooApiKey(e.target.value)}
+                      placeholder="Clave de acceso a API Turnos"
+                      className="pr-10"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowApiTurnosKey((current) => !current)}
+                      className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-[#013765]"
+                      aria-label={showApiTurnosKey ? "Ocultar API key" : "Mostrar API key"}
+                    >
+                      {showApiTurnosKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium text-[#013765]">Timeout (segundos)</label>
@@ -1079,18 +1343,157 @@ export default function SettingsPanel({
                     placeholder="30"
                   />
                 </div>
+              </div>
+              <div className="mt-4 border-t border-[#dbe5ef] pt-4">
+                <Button type="button" variant="outline" onClick={() => handleOpenIntegrationTest("api_turnos")} className="border-[#013765] text-[#013765] hover:bg-[#013765] hover:text-white">
+                  Probar integracion
+                </Button>
+                {false && apiTurnosTestResult ? (
+                  <div className="mt-3 overflow-hidden rounded-lg border border-[#dbe5ef]">
+                    {(apiTurnosTestResult.results ?? []).map((result: any) => (
+                      <div key={result.endpoint} className={cn("grid grid-cols-[24px_minmax(0,1fr)_70px] gap-2 border-b border-[#dbe5ef] px-3 py-3 text-xs last:border-b-0", result.ok ? "bg-emerald-50/40" : "bg-red-50/50")}>
+                        {result.ok ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : <XCircle className="h-4 w-4 text-red-600" />}
+                        <div><p className="font-semibold text-[#013765]">{result.method} {result.endpoint}</p><p>{result.message}</p></div>
+                        <div className="text-right text-slate-500"><p>{result.status ?? "Sin HTTP"}</p><p>{result.duration_ms} ms</p></div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-[#dbe5ef] p-4">
+              <div className="mb-4">
+                <h3 className="text-sm font-semibold text-[#013765]">Alephoo</h3>
+                <p className="text-xs text-[#013765]/65">
+                  Prueba del servicio de Alephoo consumido directamente por el sistema.
+                </p>
+              </div>
+              <div className="mb-5 grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="space-y-1.5 md:col-span-2">
-                  <label className="text-sm font-medium text-[#013765]">Endpoints habilitados</label>
-                  <Textarea
-                    rows={5}
-                    value={alephooEndpoints}
-                    onChange={(e) => setAlephooEndpoints(e.target.value)}
-                    placeholder={"/personas/{dni}\n/obrasocial\n/planes/{id}"}
-                  />
-                  <p className="text-xs text-[#013765]/60">
-                    Ingresa un endpoint por linea para dejar documentado y controlado lo que puede usar el sistema.
-                  </p>
+                  <label className="text-sm font-medium text-[#013765]">Base URL</label>
+                  <Input value={alephooV3BaseUrl} onChange={(e) => setAlephooV3BaseUrl(e.target.value)} placeholder="https://universitario.alephoo.com/api/v3" />
                 </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-[#013765]">Usuario</label>
+                  <Input value={alephooV3Username} onChange={(e) => setAlephooV3Username(e.target.value)} placeholder="Usuario de Alephoo" />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-[#013765]">Contraseña</label>
+                  <div className="relative">
+                    <Input type={showAlephooPassword ? "text" : "password"} value={alephooV3Password} onChange={(e) => setAlephooV3Password(e.target.value)} placeholder="Contraseña de Alephoo" className="pr-10" />
+                    <button
+                      type="button"
+                      onClick={() => setShowAlephooPassword((current) => !current)}
+                      className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-[#013765]"
+                      aria-label={showAlephooPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+                    >
+                      {showAlephooPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-[#013765]">Timeout (segundos)</label>
+                  <Input type="number" min={1} max={300} value={alephooV3Timeout} onChange={(e) => setAlephooV3Timeout(e.target.value)} />
+                </div>
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => handleOpenIntegrationTest("alephoo")}
+                    className="border-[#013765] text-[#013765] hover:bg-[#013765] hover:text-white"
+                  >
+                    Probar integracion
+                  </Button>
+                </div>
+
+                {false && alephooTestResult ? (
+                  <div className="mt-4 space-y-2">
+                    {[["alephoo", "Alephoo"]].map(([integration, label]) => (
+                      <div key={integration} className="overflow-hidden rounded-lg border border-[#dbe5ef]">
+                        <div className="bg-[#013765]/[0.04] px-3 py-2 text-xs font-semibold uppercase tracking-wide text-[#013765]">
+                          {label}
+                        </div>
+                        {(alephooTestResult.results ?? [])
+                          .filter((result: any) => result.integration === integration)
+                          .map((result: any) => (
+                            <div
+                              key={`${integration}-${result.method}-${result.endpoint}`}
+                              className={cn(
+                                "grid grid-cols-[24px_minmax(0,1fr)_70px] items-start gap-2 border-t border-[#dbe5ef] px-3 py-3 text-xs",
+                                result.ok ? "bg-emerald-50/40" : "bg-red-50/50",
+                              )}
+                            >
+                              {result.ok
+                                ? <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-600" />
+                                : <XCircle className="mt-0.5 h-4 w-4 text-red-600" />}
+                              <div className="min-w-0">
+                                <p className="truncate font-semibold text-[#013765]">
+                                  {result.method} {result.endpoint}
+                                </p>
+                                <p className={result.ok ? "text-emerald-700" : "text-red-700"}>{result.message}</p>
+                              </div>
+                              <div className="text-right text-slate-500">
+                                <p className="font-medium">{result.status ?? "Sin HTTP"}</p>
+                                <p>{result.duration_ms} ms</p>
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-[#dbe5ef] p-4">
+              <div className="mb-4">
+                <h3 className="text-sm font-semibold text-[#013765]">Autogestion</h3>
+                <p className="text-xs text-[#013765]/65">
+                  Configuracion de la API que determina especialidades, profesionales, obras sociales y planes habilitados.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="space-y-1.5 md:col-span-2">
+                  <label className="text-sm font-medium text-[#013765]">Base URL</label>
+                  <Input value={autogestionBaseUrl} onChange={(e) => setAutogestionBaseUrl(e.target.value)} placeholder="https://turnos.hospital.uncu.edu.ar/api/configuration" />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-[#013765]">Token Bearer</label>
+                  <div className="relative">
+                    <Input type={showAutogestionToken ? "text" : "password"} value={autogestionToken} onChange={(e) => setAutogestionToken(e.target.value)} placeholder="Token de autogestion" className="pr-10" />
+                    <button
+                      type="button"
+                      onClick={() => setShowAutogestionToken((current) => !current)}
+                      className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-[#013765]"
+                      aria-label={showAutogestionToken ? "Ocultar token" : "Mostrar token"}
+                    >
+                      {showAutogestionToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-[#013765]">Timeout (segundos)</label>
+                  <Input type="number" min={1} max={300} value={autogestionTimeout} onChange={(e) => setAutogestionTimeout(e.target.value)} />
+                </div>
+              </div>
+              <div className="mt-4 border-t border-[#dbe5ef] pt-4">
+                <Button type="button" variant="outline" onClick={() => handleOpenIntegrationTest("autogestion")} className="border-[#013765] text-[#013765] hover:bg-[#013765] hover:text-white">
+                  Probar integracion
+                </Button>
+                {false && autogestionTestResult ? (
+                  <div className="mt-3 overflow-hidden rounded-lg border border-[#dbe5ef]">
+                    {(autogestionTestResult.results ?? []).map((result: any) => (
+                      <div key={result.endpoint} className={cn("grid grid-cols-[24px_minmax(0,1fr)_70px] gap-2 px-3 py-3 text-xs", result.ok ? "bg-emerald-50/40" : "bg-red-50/50")}>
+                        {result.ok ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : <XCircle className="h-4 w-4 text-red-600" />}
+                        <div><p className="font-semibold text-[#013765]">{result.method} {result.endpoint}</p><p>{result.message}</p></div>
+                        <div className="text-right text-slate-500"><p>{result.status ?? "Sin HTTP"}</p><p>{result.duration_ms} ms</p></div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             </div>
 
@@ -1120,6 +1523,74 @@ export default function SettingsPanel({
           </CardContent>
         </Card>
       
+
+      <Dialog open={integrationTestModalOpen} onOpenChange={setIntegrationTestModalOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Prueba de {integrationTestName}</DialogTitle>
+            <DialogDescription>
+              Comprobacion endpoint por endpoint con resultado y tiempo de respuesta.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="max-h-[60vh] space-y-3 overflow-y-auto pr-1">
+            {integrationTestResult ? (
+              <>
+              </>
+            ) : null}
+
+            {integrationTestItems.length > 0 ? (
+                <div className="overflow-hidden rounded-xl border border-[#dbe5ef]">
+                  {integrationTestItems.map((result: any, index: number) => (
+                      <div
+                        key={`${result.method}-${result.endpoint}-${index}`}
+                        className={cn(
+                          "grid grid-cols-[28px_minmax(0,1fr)_72px] items-start gap-3 border-b border-[#dbe5ef] px-4 py-3 text-sm last:border-b-0",
+                          result.state === "success"
+                            ? "bg-emerald-50/50"
+                            : result.state === "error"
+                              ? "bg-red-50/60"
+                              : result.state === "testing"
+                                ? "bg-blue-50/70"
+                                : "bg-slate-50",
+                        )}
+                      >
+                        {result.state === "testing"
+                          ? <Loader2 className="mt-0.5 h-5 w-5 animate-spin text-blue-600" />
+                          : result.state === "success"
+                            ? <CheckCircle2 className="mt-0.5 h-5 w-5 text-emerald-600" />
+                            : result.state === "error"
+                              ? <XCircle className="mt-0.5 h-5 w-5 text-red-600" />
+                              : <div className="mt-1 h-3 w-3 rounded-full border-2 border-slate-300" />}
+                        <div className="min-w-0">
+                          <p className="truncate font-semibold text-[#013765]">
+                            {result.method} {result.endpoint}
+                          </p>
+                          <p className={cn(
+                            "mt-1 text-xs",
+                            result.state === "success" ? "text-emerald-700" : result.state === "error" ? "text-red-700" : result.state === "testing" ? "text-blue-700" : "text-slate-500",
+                          )}>
+                            {result.state === "pending" ? "Pendiente" : result.state === "testing" ? "Probando ahora..." : result.message}
+                          </p>
+                        </div>
+                        <div className="pt-0.5 text-right">
+                          <p className="text-xs font-medium text-slate-500">
+                            {result.duration_ms !== undefined ? `${result.duration_ms} ms` : "—"}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+            ) : null}
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setIntegrationTestModalOpen(false)} disabled={integrationTestLoading}>
+              Cerrar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={exportDialogOpen} onOpenChange={setExportDialogOpen}>
         <DialogContent className="max-w-xl">

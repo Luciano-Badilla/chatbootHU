@@ -475,9 +475,9 @@ export default function AuditPanel({
                   </Select>
                 </div>
 
-                <div className="grid grid-cols-[minmax(0,1.6fr)_180px_90px] gap-3 border-b border-[#dbe5ef] bg-[#013765]/[0.03] px-4 py-3 text-xs font-medium text-[#013765]/70">
-                  <span>Evento</span>
+                <div className="grid grid-cols-[180px_minmax(0,1.6fr)_90px] gap-3 border-b border-[#dbe5ef] bg-[#013765]/[0.03] px-4 py-3 text-xs font-medium text-[#013765]/70">
                   <span>Usuario</span>
+                  <span>Evento</span>
                   <span className="text-right">Detalle</span>
                 </div>
 
@@ -489,9 +489,13 @@ export default function AuditPanel({
                       <div key={entry.id} className="border-b border-[#dbe5ef] last:border-b-0">
                         <button
                           type="button"
-                          className="grid w-full grid-cols-[minmax(0,1.6fr)_180px_90px] gap-3 px-4 py-3 text-left hover:bg-slate-50"
+                          className="grid w-full grid-cols-[180px_minmax(0,1.6fr)_90px] gap-3 px-4 py-3 text-left hover:bg-slate-50"
                           onClick={() => setExpandedAuditId(isExpanded ? null : entry.id)}
                         >
+                          <div className="min-w-0">
+                            <p className="truncate text-sm text-slate-700">{entry.causer_name ?? "Sistema"}</p>
+                            <p className="truncate text-xs text-slate-500">{entry.causer_email ?? ""}</p>
+                          </div>
                           <div className="min-w-0">
                             <p className="truncate text-sm font-medium text-[#013765]">{entry.description}</p>
                             {entry.properties?.target_user?.name ? (
@@ -515,10 +519,6 @@ export default function AuditPanel({
                             <p className="mt-1 truncate text-xs text-[#013765]/65">
                               {entry.created_at_human ?? entry.created_at ?? "sin fecha"}
                             </p>
-                          </div>
-                          <div className="min-w-0">
-                            <p className="truncate text-sm text-slate-700">{entry.causer_name ?? "Sistema"}</p>
-                            <p className="truncate text-xs text-slate-500">{entry.causer_email ?? ""}</p>
                           </div>
                           <div className="flex items-center justify-end gap-3 pl-2">
                             <span className="hidden text-[11px] text-[#013765]/60 md:inline">

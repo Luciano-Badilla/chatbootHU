@@ -1736,12 +1736,15 @@ class WhatsAppController extends Controller
 
             case 'input':
             case 'person_lookup':
+            case 'person_create':
             case 'appointment_lookup':
             case 'appointment_create':
             case 'appointment_cancel':
             case 'specialty_search':
             case 'doctor_select':
             case 'availability_select':
+            case 'health_insurance_select':
+            case 'health_insurance_plan_select':
                 // devolvemos el mismo nodo (para que el bot lo envÃƒÂ­e)
                 // y sendBotNode va a setear pending_input
                 return $currentNode;
@@ -1928,6 +1931,11 @@ class WhatsAppController extends Controller
             return;
         }
 
+        if ($node->type === 'person_create') {
+            $this->sendPersonCreateNode($chat, $node);
+            return;
+        }
+
         if ($node->type === 'appointment_lookup') {
             $this->sendAppointmentLookupNode($chat, $node);
             return;
@@ -1943,7 +1951,13 @@ class WhatsAppController extends Controller
             return;
         }
 
-        if (in_array($node->type, ['specialty_search', 'doctor_select', 'availability_select'], true)) {
+        if (in_array($node->type, [
+            'specialty_search',
+            'doctor_select',
+            'availability_select',
+            'health_insurance_select',
+            'health_insurance_plan_select',
+        ], true)) {
             $this->sendAlephooSelectionNode($chat, $node);
             return;
         }
@@ -2629,10 +2643,10 @@ class WhatsAppController extends Controller
             $messageToSend = (string) ($settings['error_message'] ?? 'La consulta de turnos no esta habilitada en este momento.');
             $targetNextNodeId = $settings['error_next_node_id'] ?? null;
         } else {
-            $baseUrl = rtrim((string) config('services.alephoo_v3.base_url'), '/');
-            $username = (string) config('services.alephoo_v3.username');
-            $password = (string) config('services.alephoo_v3.password');
-            $timeout = max(1, min(300, (int) config('services.alephoo_v3.timeout', 30)));
+            $baseUrl = $this->alephooV3BaseUrl();
+            $username = $this->alephooV3Username();
+            $password = $this->alephooV3Password();
+            $timeout = $this->alephooV3Timeout();
 
             if ($baseUrl === '' || $username === '' || $password === '') {
                 $this->setVars($chat, array_merge($baseVars, ['turnos_lookup_status' => 'misconfigured']));
@@ -2880,7 +2894,97 @@ class WhatsAppController extends Controller
                 ->acceptJson()
                 ->withHeaders(['X-API-KEY' => $apiKey]);
 
-            if ($node->type === 'specialty_search') {
+            if ($node->type === 'health_insurance_select') {
+                $turnosConfiguration = $this->turnosConfiguration();
+                if (!$this->isAlephooEndpointEnabled('/obrasocial')) {
+                    throw new \RuntimeException('El endpoint de obras sociales no esta habilitado.');
+                }
+                $queryVariable = trim((string) ($settings['query_variable'] ?? 'obra_social_busqueda'));
+                $query = trim((string) ($vars[$queryVariable] ?? ''));
+                if ($query === '') {
+                    throw new \RuntimeException('Falta el texto de busqueda de obra social.');
+                }
+
+                $response = $client->get($baseUrl . '/obrasocial');
+                if (!$response->successful()) {
+                    throw new \RuntimeException("Alephoo respondio {$response->status()} al consultar obras sociales.");
+                }
+
+                $allowedInsuranceIds = array_map('strval', $turnosConfiguration['health_insurances'] ?? []);
+                $needle = mb_strtolower(Str::ascii($query));
+                $items = is_array($response->json()) ? $response->json() : [];
+                $items = array_values(array_filter($items, fn($item) =>
+                    is_array($item)
+                    && in_array((string) ($item['id'] ?? ''), $allowedInsuranceIds, true)
+                    && str_contains(mb_strtolower(Str::ascii((string) ($item['nombre'] ?? ''))), $needle)
+                ));
+                usort($items, fn($a, $b) => strcasecmp(
+                    (string) ($a['nombre'] ?? ''),
+                    (string) ($b['nombre'] ?? '')
+                ));
+
+                foreach (array_slice($items, 0, 10) as $item) {
+                    $id = (string) ($item['id'] ?? '');
+                    $name = trim((string) ($item['nombre'] ?? ''));
+                    if ($id !== '' && $name !== '') {
+                        $rows[] = [
+                            'id' => 'insurance:' . $id,
+                            'title' => Str::limit($name, 24, ''),
+                            'description' => '',
+                            'vars' => [
+                                'registro_obra_social_id' => $id,
+                                'registro_obra_social_nombre' => $name,
+                            ],
+                        ];
+                    }
+                }
+            } elseif ($node->type === 'health_insurance_plan_select') {
+                $turnosConfiguration = $this->turnosConfiguration();
+                if (!$this->isAlephooEndpointEnabled('/planes/{id}')) {
+                    throw new \RuntimeException('El endpoint de planes no esta habilitado.');
+                }
+
+                $insuranceVariable = trim((string) ($settings['insurance_variable'] ?? 'registro_obra_social_id'));
+                $insuranceId = preg_replace('/\D+/u', '', (string) ($vars[$insuranceVariable] ?? ''));
+                if ($insuranceId === '') {
+                    throw new \RuntimeException('Falta el ID de obra social.');
+                }
+
+                $response = $client->get($baseUrl . '/planes/' . $insuranceId);
+                if (!$response->successful()) {
+                    throw new \RuntimeException("Alephoo respondio {$response->status()} al consultar planes.");
+                }
+
+                $configuredPlans = $turnosConfiguration['plans_by_health_insurance'][(string) $insuranceId]
+                    ?? $turnosConfiguration['plans_by_health_insurance'][(int) $insuranceId]
+                    ?? [];
+                $allowedPlanIds = array_map('strval', is_array($configuredPlans) ? $configuredPlans : []);
+                $items = is_array($response->json()) ? $response->json() : [];
+                $items = array_values(array_filter($items, fn($item) =>
+                    is_array($item)
+                    && in_array((string) ($item['id'] ?? ''), $allowedPlanIds, true)
+                ));
+                usort($items, fn($a, $b) => strcasecmp(
+                    (string) ($a['nombre'] ?? ''),
+                    (string) ($b['nombre'] ?? '')
+                ));
+
+                foreach (array_slice($items, 0, 10) as $item) {
+                    $id = (string) ($item['id'] ?? '');
+                    $name = trim((string) ($item['nombre'] ?? ''));
+                    if ($id !== '' && $name !== '') {
+                        $rows[] = [
+                            'id' => 'plan:' . $id,
+                            'title' => Str::limit($name, 24, ''),
+                            'description' => '',
+                            'vars' => [
+                                'registro_plan_id' => $id,
+                                'registro_plan_nombre' => $name,
+                            ],
+                        ];
+                    }
+                }
+            } elseif ($node->type === 'specialty_search') {
                 $turnosConfiguration = $this->turnosConfiguration();
                 if (!$this->isAlephooEndpointEnabled('/especialidades')) {
                     throw new \RuntimeException('El endpoint de especialidades no esta habilitado.');
@@ -3174,6 +3278,200 @@ class WhatsAppController extends Controller
         $this->persistAndPublishOutgoing($chat, $body, $response->json('messages.0.id'), $node->type, $interactiveOptions);
     }
 
+    private function sendPersonCreateNode(Chat $chat, BotNode $node): void
+    {
+        $settings = $this->nodeSettings($node);
+        $vars = $this->getVars($chat);
+        $value = fn(string $setting, string $default) =>
+            $vars[trim((string) ($settings[$setting] ?? $default))] ?? null;
+
+        $dni = preg_replace('/\D+/u', '', (string) $value('dni_variable', 'dni'));
+        $firstName = trim((string) $value('first_name_variable', 'registro_nombres'));
+        $lastName = trim((string) $value('last_name_variable', 'registro_apellidos'));
+        $birthDateInput = trim((string) $value('birth_date_variable', 'registro_fecha_nacimiento'));
+        $gender = mb_strtolower(trim((string) $value('gender_variable', 'registro_genero')));
+        $phoneCode = preg_replace('/\D+/u', '', (string) $value('phone_code_variable', 'registro_codigo_celular'));
+        $phone = preg_replace('/\D+/u', '', (string) $value('phone_variable', 'registro_numero_celular'));
+        $email = mb_strtolower(trim((string) $value('email_variable', 'registro_email')));
+        $insuranceId = preg_replace('/\D+/u', '', (string) $value('insurance_variable', 'registro_obra_social_id'));
+        $planId = preg_replace('/\D+/u', '', (string) $value('plan_variable', 'registro_plan_id'));
+
+        $birthDate = null;
+        if (preg_match('/^\d{2}\/\d{2}\/\d{4}$/', $birthDateInput)) {
+            $candidate = \DateTimeImmutable::createFromFormat('!d/m/Y', $birthDateInput);
+            $birthDate = $candidate && $candidate->format('d/m/Y') === $birthDateInput ? $candidate : null;
+        } elseif (preg_match('/^\d{4}-\d{2}-\d{2}$/', $birthDateInput)) {
+            $candidate = \DateTimeImmutable::createFromFormat('!Y-m-d', $birthDateInput);
+            $birthDate = $candidate && $candidate->format('Y-m-d') === $birthDateInput ? $candidate : null;
+        }
+
+        $resultVars = [
+            'persona_creada' => false,
+            'persona_create_status' => 'error',
+            'persona_create_response' => null,
+        ];
+        $targetNextNodeId = $settings['error_next_node_id'] ?? null;
+        $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos registrar al paciente en este momento.');
+
+        $invalidData = strlen($dni) < 7
+            || strlen($dni) > 9
+            || mb_strlen($firstName) < 2
+            || mb_strlen($lastName) < 2
+            || !$birthDate
+            || $birthDate > new \DateTimeImmutable('today')
+            || !in_array($gender, ['m', 'f', 'o'], true)
+            || strlen($phoneCode) < 2
+            || strlen($phone) < 6
+            || !filter_var($email, FILTER_VALIDATE_EMAIL)
+            || $insuranceId === ''
+            || $planId === '';
+
+        if ($invalidData) {
+            $resultVars['persona_create_status'] = 'invalid_data';
+            $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
+            $messageToSend = (string) ($settings['invalid_message'] ?? 'Algunos datos del paciente no son validos.');
+        } elseif (
+            !$this->isAlephooEndpointEnabled('/personas/{dni}')
+            || !$this->isAlephooEndpointEnabled('/crear/persona')
+        ) {
+            $resultVars['persona_create_status'] = 'endpoint_disabled';
+        } else {
+            $baseUrl = $this->alephooApiRootUrl();
+            $apiKey = $this->alephooApiKey();
+
+            if ($baseUrl === '' || $apiKey === '') {
+                $resultVars['persona_create_status'] = 'misconfigured';
+            } else {
+                try {
+                    $client = Http::timeout($this->alephooTimeout())
+                        ->acceptJson()
+                        ->withHeaders(['X-API-KEY' => $apiKey]);
+                    $lookupResponse = $client->get($this->alephooPersonLookupUrl($dni));
+                    $existingPayload = $lookupResponse->successful() ? $lookupResponse->json() : [];
+                    $existingPerson = is_array($existingPayload)
+                        && isset($existingPayload[0])
+                        && is_array($existingPayload[0])
+                            ? $existingPayload[0]
+                            : null;
+
+                    if ($existingPerson) {
+                        $resultVars = array_merge($resultVars, [
+                            'persona_create_status' => 'already_exists',
+                            'persona_id' => $existingPerson['id'] ?? null,
+                            'persona_nombres' => $existingPerson['nombres'] ?? null,
+                            'persona_apellidos' => $existingPerson['apellidos'] ?? null,
+                            'persona_documento' => $existingPerson['documento'] ?? $dni,
+                            'persona_fecha_nacimiento' => $existingPerson['fecha_nacimiento'] ?? null,
+                            'persona_genero' => $existingPerson['genero'] ?? null,
+                            'persona_obra_social' => $existingPerson['obra_social'] ?? null,
+                            'persona_obra_social_id' => $existingPerson['obra_social_id'] ?? null,
+                            'persona_plan_id' => $existingPerson['plan_id'] ?? null,
+                            'persona_email' => $existingPerson['email'] ?? null,
+                            'persona_contacto_telefono' => $existingPerson['contacto_telefono'] ?? null,
+                        ]);
+                        $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
+                        $messageToSend = (string) ($settings['already_exists_message'] ?? 'El paciente ya se encuentra registrado.');
+                    } else {
+                        $payload = [
+                            'data' => [
+                                'attributes' => [
+                                    'nombres' => $firstName,
+                                    'apellidos' => $lastName,
+                                    'nacimiento' => $birthDate->format('Y-m-d'),
+                                    'documento' => $dni,
+                                    'género' => $gender,
+                                    'celulares' => [
+                                        'codigoCelular' => $phoneCode,
+                                        'numCelular' => $phone,
+                                    ],
+                                    'email' => $email,
+                                    'obraSocialSelectedId' => (int) $insuranceId,
+                                    'planSelectedId' => (int) $planId,
+                                ],
+                            ],
+                        ];
+                        $response = $client->post($baseUrl . '/crear/persona', $payload);
+                        $json = is_array($response->json()) ? $response->json() : [];
+
+                        if ($response->successful()) {
+                            $personId = data_get($json, 'respuesta.data.id')
+                                ?? data_get($json, 'data.id')
+                                ?? data_get($json, 'persona.data.id');
+
+                            if (!$personId) {
+                                throw new \RuntimeException('Alephoo no devolvio el ID de la persona creada.');
+                            }
+
+                            $resultVars = array_merge($resultVars, [
+                                'persona_creada' => true,
+                                'persona_create_status' => 'created',
+                                'persona_create_response' => $json,
+                                'persona_encontrada' => true,
+                                'persona_lookup_status' => 'found',
+                                'persona_id' => $personId,
+                                'persona_nombres' => $firstName,
+                                'persona_apellidos' => $lastName,
+                                'persona_documento' => $dni,
+                                'persona_fecha_nacimiento' => $birthDate->format('d/m/Y'),
+                                'persona_genero' => $gender,
+                                'persona_obra_social' => $vars['registro_obra_social_nombre'] ?? null,
+                                'persona_obra_social_id' => (int) $insuranceId,
+                                'persona_plan_id' => (int) $planId,
+                                'persona_email' => $email,
+                                'persona_contacto_telefono' => $phoneCode . $phone,
+                            ]);
+                            $targetNextNodeId = $node->next_node_id;
+                            $messageToSend = (string) ($node->body ?: 'Paciente registrado correctamente.');
+                        } elseif ($response->status() === 409) {
+                            $resultVars['persona_create_status'] = 'already_exists';
+                            $resultVars['persona_create_response'] = $json;
+                            $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
+                            $messageToSend = (string) ($settings['already_exists_message'] ?? 'El paciente ya se encuentra registrado.');
+                        } elseif ($response->status() === 422) {
+                            $resultVars['persona_create_status'] = 'invalid_data';
+                            $resultVars['persona_create_response'] = $json;
+                            $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
+                            $messageToSend = (string) ($settings['invalid_message'] ?? 'Algunos datos del paciente no son validos.');
+                        } else {
+                            $resultVars['persona_create_response'] = $json;
+                            Log::warning('Hospital API person create error response', [
+                                'chat_id' => $chat->id,
+                                'node_id' => $node->id,
+                                'status' => $response->status(),
+                            ]);
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    $resultVars['persona_create_status'] = 'error';
+                    Log::error('Hospital API person create failed: ' . $e->getMessage(), [
+                        'chat_id' => $chat->id,
+                        'node_id' => $node->id,
+                    ]);
+                }
+            }
+        }
+
+        $this->setVars($chat, $resultVars);
+        $this->auditAlephooOperation(
+            $chat,
+            $node,
+            'patient_create',
+            (string) $resultVars['persona_create_status'],
+            ['person_id' => $resultVars['persona_id'] ?? null],
+        );
+        if (trim($messageToSend) !== '') {
+            $this->sendWhatsAppText(
+                $chat,
+                $this->renderTemplate($messageToSend, $chat, $node),
+                'user',
+                'bot',
+                'person_create'
+            );
+        }
+
+        $node->next_node_id = $targetNextNodeId ? (int) $targetNextNodeId : null;
+    }
+
     private function sendAppointmentCreateNode(Chat $chat, BotNode $node): void
     {
         $settings = $this->nodeSettings($node);
@@ -3304,6 +3602,13 @@ class WhatsAppController extends Controller
         }
 
         $this->setVars($chat, $resultVars);
+        $this->auditAlephooOperation(
+            $chat,
+            $node,
+            'appointment_create',
+            (string) $resultVars['turno_create_status'],
+            ['appointment_id' => $resultVars['turno_creado_id'] ?? null],
+        );
         if (trim($messageToSend) !== '') {
             $renderedMessage = $this->renderTemplate(trim($messageToSend), $chat, $node);
             if ($renderedMessage !== '') {
@@ -3393,6 +3698,13 @@ class WhatsAppController extends Controller
         }
 
         $this->setVars($chat, $resultVars);
+        $this->auditAlephooOperation(
+            $chat,
+            $node,
+            'appointment_cancel',
+            (string) $resultVars['turno_cancel_status'],
+            ['appointment_id' => $resultVars['turno_cancelado_id'] ?? ($appointmentId !== '' ? $appointmentId : null)],
+        );
         if (trim($messageToSend) !== '') {
             $renderedMessage = $this->renderTemplate($messageToSend, $chat, $node);
             if ($renderedMessage !== '') {
@@ -3401,6 +3713,39 @@ class WhatsAppController extends Controller
         }
 
         $node->next_node_id = $targetNextNodeId ? (int) $targetNextNodeId : null;
+    }
+
+    private function auditAlephooOperation(
+        Chat $chat,
+        BotNode $node,
+        string $operation,
+        string $status,
+        array $result = []
+    ): void {
+        $labels = [
+            'patient_create' => 'alta de paciente',
+            'appointment_create' => 'creacion de turno',
+            'appointment_cancel' => 'cancelacion de turno',
+        ];
+        $successfulStatuses = ['created', 'cancelled'];
+        $label = $labels[$operation] ?? 'operacion Alephoo';
+        $successful = in_array($status, $successfulStatuses, true);
+
+        $this->auditService->recordChatAction(
+            'alephoo_' . $operation . '_' . ($successful ? 'succeeded' : 'failed'),
+            ($successful ? 'Completo' : 'No pudo completar') . " {$label} desde el bot",
+            $chat,
+            null,
+            [
+                'meta' => array_filter([
+                    'operation' => $operation,
+                    'status' => $status,
+                    'node_id' => $node->id,
+                    'node_key' => $node->key,
+                    ...$result,
+                ], fn($value) => $value !== null && $value !== ''),
+            ],
+        );
     }
 
     private function appointmentSpecialtyFilter(array $settings, array $vars): ?string
@@ -3914,7 +4259,7 @@ class WhatsAppController extends Controller
             return false;
 
         // Ã¢Å“â€¦ text y person_lookup pueden ser terminales automÃƒÂ¡ticos
-        if (in_array($sentNode->type, ['text', 'person_lookup', 'appointment_lookup', 'appointment_create', 'appointment_cancel', 'image', 'document', 'video', 'audio', 'location'], true) && empty($sentNode->next_node_id)) {
+        if (in_array($sentNode->type, ['text', 'person_lookup', 'person_create', 'appointment_lookup', 'appointment_create', 'appointment_cancel', 'image', 'document', 'video', 'audio', 'location'], true) && empty($sentNode->next_node_id)) {
             $this->resetChatToStartFromFlow($chat, $flow, 'terminal_text');
             return true;
         }
@@ -3935,11 +4280,11 @@ class WhatsAppController extends Controller
             return false;
         }
 
-        if (in_array($node->type, ['person_lookup', 'appointment_lookup', 'appointment_create', 'appointment_cancel'], true)) {
+        if (in_array($node->type, ['person_lookup', 'person_create', 'appointment_lookup', 'appointment_create', 'appointment_cancel'], true)) {
             return true;
         }
 
-        if (in_array($node->type, ['specialty_search', 'doctor_select', 'availability_select'], true)) {
+        if (in_array($node->type, ['health_insurance_select', 'health_insurance_plan_select', 'specialty_search', 'doctor_select', 'availability_select'], true)) {
             return (bool) $node->getAttribute('runtime_branch_resolved');
         }
 
@@ -4318,6 +4663,13 @@ class WhatsAppController extends Controller
                             'integrations.alephoo.api_key',
                             'integrations.alephoo.timeout',
                             'integrations.alephoo.enabled_endpoints',
+                            'integrations.alephoo_v3.base_url',
+                            'integrations.alephoo_v3.username',
+                            'integrations.alephoo_v3.password',
+                            'integrations.alephoo_v3.timeout',
+                            'integrations.autogestion.base_url',
+                            'integrations.autogestion.token',
+                            'integrations.autogestion.timeout',
                             'bot.inactivity_timeout_minutes',
                             'bot.inactivity_timeout_message',
                         ])
@@ -4395,6 +4747,26 @@ class WhatsAppController extends Controller
         return max(1, min(300, $timeout));
     }
 
+    private function alephooV3BaseUrl(): string
+    {
+        return rtrim((string) $this->runtimeSetting('integrations.alephoo_v3.base_url', (string) config('services.alephoo_v3.base_url', '')), '/');
+    }
+
+    private function alephooV3Username(): string
+    {
+        return (string) $this->runtimeSetting('integrations.alephoo_v3.username', (string) config('services.alephoo_v3.username', ''));
+    }
+
+    private function alephooV3Password(): string
+    {
+        return (string) $this->runtimeSetting('integrations.alephoo_v3.password', (string) config('services.alephoo_v3.password', ''));
+    }
+
+    private function alephooV3Timeout(): int
+    {
+        return max(1, min(300, (int) $this->runtimeSetting('integrations.alephoo_v3.timeout', (string) config('services.alephoo_v3.timeout', 30))));
+    }
+
     private function alephooPersonLookupUrl(string $dni): string
     {
         $baseUrl = $this->alephooBaseUrl();
@@ -4421,9 +4793,9 @@ class WhatsAppController extends Controller
             return $this->turnosConfigurationCache;
         }
 
-        $url = trim((string) config('services.turnos_configuration.url', ''));
-        $token = trim((string) config('services.turnos_configuration.token', ''));
-        $timeout = max(1, min(60, (int) config('services.turnos_configuration.timeout', 15)));
+        $url = trim((string) $this->runtimeSetting('integrations.autogestion.base_url', (string) config('services.turnos_configuration.url', '')));
+        $token = trim((string) $this->runtimeSetting('integrations.autogestion.token', (string) config('services.turnos_configuration.token', '')));
+        $timeout = max(1, min(60, (int) $this->runtimeSetting('integrations.autogestion.timeout', (string) config('services.turnos_configuration.timeout', 15))));
 
         if ($url === '' || $token === '') {
             throw new \RuntimeException('La API de configuracion de turnos no esta configurada.');

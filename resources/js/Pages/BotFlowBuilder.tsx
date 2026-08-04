@@ -51,7 +51,7 @@ import {
 import { cn } from "shadcn/lib/utils"
 import { Badge } from "shadcn/components/ui/badge"
 
-type NodeType = "text" | "buttons" | "list" | "input" | "handoff" | "person_lookup" | "appointment_lookup" | "appointment_create" | "appointment_cancel" | "specialty_search" | "doctor_select" | "availability_select" | "image" | "document" | "video" | "audio" | "contact" | "location"
+type NodeType = "text" | "buttons" | "list" | "input" | "handoff" | "person_lookup" | "person_create" | "appointment_lookup" | "appointment_create" | "appointment_cancel" | "health_insurance_select" | "health_insurance_plan_select" | "specialty_search" | "doctor_select" | "availability_select" | "image" | "document" | "video" | "audio" | "contact" | "location"
 
 interface BotFlow {
   id: number
@@ -1073,6 +1073,8 @@ const getNodeTypeLabel = (type: NodeType) => {
       return "Capturar dato"
     case "person_lookup":
       return "Buscar datos personales"
+    case "person_create":
+      return "Dar de alta paciente"
     case "appointment_lookup":
       return "Consultar turnos activos"
     case "appointment_create":
@@ -1085,6 +1087,10 @@ const getNodeTypeLabel = (type: NodeType) => {
       return "Elegir profesional"
     case "availability_select":
       return "Elegir fecha y horario"
+    case "health_insurance_select":
+      return "Elegir obra social"
+    case "health_insurance_plan_select":
+      return "Elegir plan"
     case "image":
       return "Imagen"
     case "document":
@@ -1116,7 +1122,10 @@ const nodeTypeOptions: NodeType[] = [
   "list",
   "input",
   "person_lookup",
+  "person_create",
   "appointment_lookup",
+  "health_insurance_select",
+  "health_insurance_plan_select",
   "specialty_search",
   "doctor_select",
   "availability_select",
@@ -1126,7 +1135,7 @@ const nodeTypeOptions: NodeType[] = [
 ]
 
 function NodeTypeSelectItem({ type }: { type: NodeType }) {
-  if (type === "person_lookup" || type === "appointment_lookup" || type === "appointment_create" || type === "appointment_cancel" || type === "specialty_search" || type === "doctor_select" || type === "availability_select") {
+  if (isAlephooNodeType(type)) {
     return (
       <SelectItem value={type}>
         <div className="flex w-full items-center justify-between gap-2">
@@ -1143,15 +1152,15 @@ function NodeTypeSelectItem({ type }: { type: NodeType }) {
 }
 
 const isAlephooNodeType = (type: NodeType) => {
-  return type === "person_lookup" || type === "appointment_lookup" || type === "appointment_create" || type === "appointment_cancel" || isAlephooSelectionNodeType(type)
+  return type === "person_lookup" || type === "person_create" || type === "appointment_lookup" || type === "appointment_create" || type === "appointment_cancel" || isAlephooSelectionNodeType(type)
 }
 
 const isLookupNodeType = (type: NodeType) => {
-  return type === "person_lookup" || type === "appointment_lookup" || type === "appointment_create" || type === "appointment_cancel"
+  return type === "person_lookup" || type === "person_create" || type === "appointment_lookup" || type === "appointment_create" || type === "appointment_cancel"
 }
 
 const isAlephooSelectionNodeType = (type: NodeType) =>
-  type === "specialty_search" || type === "doctor_select" || type === "availability_select"
+  type === "health_insurance_select" || type === "health_insurance_plan_select" || type === "specialty_search" || type === "doctor_select" || type === "availability_select"
 
 const isAlephooBranchNodeType = (type: NodeType) =>
   isLookupNodeType(type) || isAlephooSelectionNodeType(type)
@@ -1159,14 +1168,16 @@ const isAlephooBranchNodeType = (type: NodeType) =>
 const lookupNotFoundSetting = (type: NodeType) =>
   isAlephooSelectionNodeType(type)
     ? "empty_next_node_id"
-    : type === "appointment_create" || type === "appointment_cancel"
+    : type === "person_create" || type === "appointment_create" || type === "appointment_cancel"
       ? "unavailable_next_node_id"
       : "not_found_next_node_id"
 
 const alephooSuccessLabel = (type: NodeType) =>
   isAlephooSelectionNodeType(type)
     ? "Seleccionado"
-    : type === "appointment_create" || type === "appointment_cancel"
+    : type === "person_create"
+      ? "Registrado"
+      : type === "appointment_create" || type === "appointment_cancel"
       ? type === "appointment_cancel" ? "Cancelado" : "Confirmado"
       : type === "appointment_lookup"
         ? "Turnos encontrados"
@@ -1175,7 +1186,9 @@ const alephooSuccessLabel = (type: NodeType) =>
 const alephooEmptyLabel = (type: NodeType) =>
   isAlephooSelectionNodeType(type)
     ? "Sin resultados"
-    : type === "appointment_create" || type === "appointment_cancel"
+    : type === "person_create"
+      ? "Ya existe / inválido"
+      : type === "appointment_create" || type === "appointment_cancel"
       ? "No disponible"
       : type === "appointment_lookup"
         ? "Sin turnos"
@@ -1347,6 +1360,21 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       { key: "persona_contacto_telefono", label: "persona_contacto_telefono", kind: "flow" },
       { key: "persona_contacto_telefono_2", label: "persona_contacto_telefono_2", kind: "flow" },
       { key: "persona_planes_activos", label: "persona_planes_activos", kind: "flow" },
+      { key: "persona_creada", label: "persona_creada", kind: "flow" },
+      { key: "persona_create_status", label: "persona_create_status", kind: "flow" },
+      { key: "persona_create_response", label: "persona_create_response", kind: "flow" },
+      { key: "registro_nombres", label: "registro_nombres", kind: "flow" },
+      { key: "registro_apellidos", label: "registro_apellidos", kind: "flow" },
+      { key: "registro_fecha_nacimiento", label: "registro_fecha_nacimiento", kind: "flow" },
+      { key: "registro_genero", label: "registro_genero", kind: "flow" },
+      { key: "registro_codigo_celular", label: "registro_codigo_celular", kind: "flow" },
+      { key: "registro_numero_celular", label: "registro_numero_celular", kind: "flow" },
+      { key: "registro_email", label: "registro_email", kind: "flow" },
+      { key: "obra_social_busqueda", label: "obra_social_busqueda", kind: "flow" },
+      { key: "registro_obra_social_id", label: "registro_obra_social_id", kind: "flow" },
+      { key: "registro_obra_social_nombre", label: "registro_obra_social_nombre", kind: "flow" },
+      { key: "registro_plan_id", label: "registro_plan_id", kind: "flow" },
+      { key: "registro_plan_nombre", label: "registro_plan_nombre", kind: "flow" },
       { key: "turnos_encontrados", label: "turnos_encontrados", kind: "flow" },
       { key: "turnos_lookup_status", label: "turnos_lookup_status", kind: "flow" },
       { key: "turnos_cantidad", label: "turnos_cantidad", kind: "flow" },
@@ -1832,6 +1860,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           if (variable) existingVariables.add(variable)
         }
         if (node.type === "person_lookup") existingVariables.add("persona_id")
+        if (node.type === "person_create") existingVariables.add("persona_id")
+        if (node.type === "health_insurance_select") existingVariables.add("registro_obra_social_id")
+        if (node.type === "health_insurance_plan_select") existingVariables.add("registro_plan_id")
         if (node.type === "appointment_lookup") existingVariables.add("turno_id")
         if (node.type === "specialty_search") existingVariables.add("especialidad_id")
         if (node.type === "doctor_select") {
@@ -1847,7 +1878,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       })
 
       const drafts: NodeDraft[] = []
-      const addInput = (variable: string, suffix: string, body: string) => {
+      const addInput = (variable: string, suffix: string, body: string, validationRegex = "", errorMessage = "Ingresa un valor valido.") => {
         if (existingVariables.has(variable)) return
         drafts.push({
           key: `${key}_${suffix}`,
@@ -1856,8 +1887,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           settings: {
             variable,
             response_mode: "text",
-            validation_regex: variable === "dni" ? "^[0-9]{7,9}$" : "",
-            error_message: variable === "dni" ? "Ingresa un DNI valido, sin puntos." : "Ingresa un valor valido.",
+            validation_regex: validationRegex || (variable === "dni" ? "^[0-9]{7,9}$" : ""),
+            error_message: variable === "dni" ? "Ingresa un DNI valido, sin puntos." : errorMessage,
           },
         })
         existingVariables.add(variable)
@@ -1869,8 +1900,44 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       }
 
       if (createAlephooDependencies && isAlephooNodeType(newNodeType)) {
-        if (["person_lookup", "appointment_lookup", "appointment_create", "appointment_cancel"].includes(newNodeType)) {
+        if (["person_lookup", "person_create", "appointment_lookup", "appointment_create", "appointment_cancel"].includes(newNodeType)) {
           addInput("dni", "capturar_dni", "Por favor, ingresa tu DNI sin puntos.")
+        }
+        if (newNodeType === "person_create") {
+          addInput("registro_nombres", "capturar_nombres", "Ingresa tus nombres.", "^.{2,100}$", "Ingresa al menos 2 caracteres.")
+          addInput("registro_apellidos", "capturar_apellidos", "Ingresa tus apellidos.", "^.{2,100}$", "Ingresa al menos 2 caracteres.")
+          addInput("registro_fecha_nacimiento", "capturar_nacimiento", "Ingresa tu fecha de nacimiento con formato DD/MM/AAAA.", "^\\d{2}/\\d{2}/\\d{4}$", "Usa el formato DD/MM/AAAA.")
+          addInput("registro_genero", "capturar_genero", "Ingresa M, F u O segun corresponda.", "^[mMfFoO]$", "Responde M, F u O.")
+          addInput("registro_codigo_celular", "capturar_codigo", "Ingresa el codigo de area de tu celular, sin 0.", "^[0-9]{2,5}$", "Ingresa un codigo de area valido.")
+          addInput("registro_numero_celular", "capturar_celular", "Ingresa el numero de celular, sin 15.", "^[0-9]{6,10}$", "Ingresa un numero de celular valido.")
+          addInput("registro_email", "capturar_email", "Ingresa tu correo electronico.", "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$", "Ingresa un correo electronico valido.")
+          addInput("obra_social_busqueda", "capturar_obra_social", "Escribi el nombre o parte de tu obra social.")
+          addDependency("registro_obra_social_id", {
+            key: `${key}_elegir_obra_social`,
+            type: "health_insurance_select",
+            body: "Selecciona tu obra social.",
+            settings: {
+              query_variable: "obra_social_busqueda",
+              button_text: "Ver obras sociales",
+              section_title: "Obras sociales",
+              empty_message: "No encontramos obras sociales disponibles.",
+              invalid_message: "Elegi una obra social de la lista.",
+              error_message: "No pudimos consultar las obras sociales en este momento.",
+            },
+          })
+          addDependency("registro_plan_id", {
+            key: `${key}_elegir_plan`,
+            type: "health_insurance_plan_select",
+            body: "Selecciona tu plan.",
+            settings: {
+              insurance_variable: "registro_obra_social_id",
+              button_text: "Ver planes",
+              section_title: "Planes",
+              empty_message: "No encontramos planes disponibles para esa obra social.",
+              invalid_message: "Elegi un plan de la lista.",
+              error_message: "No pudimos consultar los planes en este momento.",
+            },
+          })
         }
         if (["appointment_lookup", "appointment_create", "appointment_cancel"].includes(newNodeType)) {
           addDependency("persona_id", {
@@ -1945,7 +2012,26 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         }
       }
 
-      drafts.push({ key, type: newNodeType, body: "", settings: {} })
+      drafts.push({
+        key,
+        type: newNodeType,
+        body: newNodeType === "person_create" ? "Tus datos fueron registrados correctamente." : "",
+        settings: newNodeType === "person_create" ? {
+          dni_variable: "dni",
+          first_name_variable: "registro_nombres",
+          last_name_variable: "registro_apellidos",
+          birth_date_variable: "registro_fecha_nacimiento",
+          gender_variable: "registro_genero",
+          phone_code_variable: "registro_codigo_celular",
+          phone_variable: "registro_numero_celular",
+          email_variable: "registro_email",
+          insurance_variable: "registro_obra_social_id",
+          plan_variable: "registro_plan_id",
+          already_exists_message: "Ya existe un paciente registrado con ese DNI.",
+          invalid_message: "No pudimos registrar al paciente porque algunos datos no son validos.",
+          error_message: "No pudimos registrar al paciente en este momento.",
+        } : {},
+      })
       const createdNodes: BotNode[] = []
       for (const draft of drafts) {
         const res = await fetch(`${API_BASE}/api/bot/flows/${selectedFlowId}/nodes`, {
@@ -1960,9 +2046,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       }
 
       createdNodes.forEach((node, index) => {
-        if (node.type !== "specialty_search") return
+        if (node.type !== "specialty_search" && node.type !== "health_insurance_select") return
+        const searchVariable = node.type === "specialty_search" ? "especialidad_busqueda" : "obra_social_busqueda"
         const captureNode = [...createdNodes.slice(0, index)].reverse().find(
-          (candidate) => candidate.type === "input" && candidate.settings?.variable === "especialidad_busqueda",
+          (candidate) => candidate.type === "input" && candidate.settings?.variable === searchVariable,
         )
         if (captureNode) {
           node.settings = { ...(node.settings ?? {}), empty_next_node_id: captureNode.id }
@@ -1987,7 +2074,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         createdNodes[index] = await res.json()
       }
       const lastCreatedNode = createdNodes[createdNodes.length - 1]
-      if (lastCreatedNode?.type === "specialty_search" && lastCreatedNode.settings?.empty_next_node_id) {
+      if (
+        (lastCreatedNode?.type === "specialty_search" || lastCreatedNode?.type === "health_insurance_select")
+        && lastCreatedNode.settings?.empty_next_node_id
+      ) {
         const res = await fetch(`${API_BASE}/api/bot/nodes/${lastCreatedNode.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -2759,7 +2849,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     const producedVariables = (node: BotNode): string[] => {
       if (node.type === "input") return [String(node.settings?.variable ?? "").trim()].filter(Boolean)
       if (node.type === "person_lookup") return ["persona_id"]
+      if (node.type === "person_create") return ["persona_creada", "persona_create_status", "persona_id"]
       if (node.type === "appointment_lookup") return ["turnos", "turno_id"]
+      if (node.type === "health_insurance_select") return ["registro_obra_social_id", "registro_obra_social_nombre"]
+      if (node.type === "health_insurance_plan_select") return ["registro_plan_id", "registro_plan_nombre"]
       if (node.type === "specialty_search") return ["especialidad_id"]
       if (node.type === "doctor_select") return ["profesional_id"]
       if (node.type === "availability_select") return ["turno_agenda_id", "turno_fecha", "turno_hora", "turno_orden"]
@@ -2768,7 +2861,23 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     const requiredVariables = (node: BotNode): string[] => {
       const settings = node.settings ?? {}
       if (node.type === "person_lookup") return [settings.dni_variable ?? "dni"]
+      if (node.type === "person_create") {
+        return [
+          settings.dni_variable ?? "dni",
+          settings.first_name_variable ?? "registro_nombres",
+          settings.last_name_variable ?? "registro_apellidos",
+          settings.birth_date_variable ?? "registro_fecha_nacimiento",
+          settings.gender_variable ?? "registro_genero",
+          settings.phone_code_variable ?? "registro_codigo_celular",
+          settings.phone_variable ?? "registro_numero_celular",
+          settings.email_variable ?? "registro_email",
+          settings.insurance_variable ?? "registro_obra_social_id",
+          settings.plan_variable ?? "registro_plan_id",
+        ]
+      }
       if (node.type === "appointment_lookup") return [settings.person_variable ?? "persona_id"]
+      if (node.type === "health_insurance_select") return [settings.query_variable ?? "obra_social_busqueda"]
+      if (node.type === "health_insurance_plan_select") return [settings.insurance_variable ?? "registro_obra_social_id"]
       if (node.type === "specialty_search") return [settings.query_variable ?? "especialidad_busqueda"]
       if (node.type === "doctor_select") return [settings.specialty_variable ?? "especialidad_id"]
       if (node.type === "availability_select") return [settings.specialty_variable ?? "especialidad_id", settings.doctor_variable ?? "profesional_id"]
@@ -2825,7 +2934,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     const autoNode = (nodeId: number) => {
       const node = nodes.find((item) => item.id === nodeId)
       if (!node) return false
-      return ["person_lookup", "appointment_lookup", "appointment_create", "appointment_cancel"].includes(node.type)
+      return ["person_lookup", "person_create", "appointment_lookup", "appointment_create", "appointment_cancel"].includes(node.type)
         || Boolean(node.settings?.auto_advance)
     }
     const visiting = new Set<number>()
@@ -4717,7 +4826,29 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     }
 
     if (isAlephooSelectionNodeType(t)) {
-      const defaults = t === "specialty_search"
+      const defaults = t === "health_insurance_select"
+        ? {
+          query_variable: "obra_social_busqueda",
+          button_text: "Ver obras sociales",
+          section_title: "Obras sociales",
+          empty_message: "No encontramos obras sociales disponibles.",
+          invalid_message: "Elegi una obra social de la lista.",
+          empty_next_node_id: null,
+          error_message: "No pudimos consultar las obras sociales en este momento.",
+          error_next_node_id: null,
+        }
+        : t === "health_insurance_plan_select"
+          ? {
+            insurance_variable: "registro_obra_social_id",
+            button_text: "Ver planes",
+            section_title: "Planes",
+            empty_message: "No encontramos planes disponibles para esa obra social.",
+            invalid_message: "Elegi un plan de la lista.",
+            empty_next_node_id: null,
+            error_message: "No pudimos consultar los planes en este momento.",
+            error_next_node_id: null,
+          }
+        : t === "specialty_search"
         ? {
           query_variable: "especialidad_busqueda",
           button_text: "Ver especialidades",
@@ -4757,7 +4888,11 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       const update = (field: string, value: string | number) => {
         setEditNode((prev) => prev ? { ...prev, settings: { ...settings, [field]: value } } : prev)
       }
-      const variableFields = t === "specialty_search"
+      const variableFields = t === "health_insurance_select"
+        ? [["query_variable", "Variable con el texto buscado"]]
+        : t === "health_insurance_plan_select"
+          ? [["insurance_variable", "Variable con el ID de obra social"]]
+        : t === "specialty_search"
         ? [["query_variable", "Variable con el texto buscado"]]
         : t === "doctor_select"
           ? [["specialty_variable", "Variable con el ID de especialidad"]]
@@ -4771,7 +4906,11 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       return (
         <div className="space-y-3">
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
-            {t === "specialty_search"
+            {t === "health_insurance_select"
+              ? "Busca por nombre sin distinguir mayusculas ni acentos y muestra hasta 10 obras sociales habilitadas."
+              : t === "health_insurance_plan_select"
+                ? "Consulta los planes de la obra social elegida y aplica la configuracion de autogestion."
+              : t === "specialty_search"
               ? "Busca coincidencias sin distinguir mayusculas ni acentos y muestra hasta 10 resultados."
               : t === "doctor_select"
                 ? "Consulta los profesionales de la especialidad seleccionada y muestra hasta 10 opciones."
@@ -4792,7 +4931,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               </Select>
             </div>
           ))}
-          {t !== "specialty_search" ? (
+          {t === "doctor_select" || t === "availability_select" ? (
             <div>
               <label className="mb-1 block text-xs text-muted-foreground">Dias de agenda por defecto</label>
               <Input type="number" min={1} max={365} value={settings.days} onChange={(e) => update("days", Math.max(1, Math.min(365, Number(e.target.value) || 28)))} className="h-8 text-xs" />
@@ -4835,7 +4974,11 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             </Select>
           </div>
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-            {t === "specialty_search"
+            {t === "health_insurance_select"
+              ? "Guarda registro_obra_social_id y registro_obra_social_nombre."
+              : t === "health_insurance_plan_select"
+                ? "Guarda registro_plan_id y registro_plan_nombre."
+              : t === "specialty_search"
               ? "Guarda especialidad_id y especialidad_nombre."
               : t === "doctor_select"
                 ? "Guarda profesional_id, profesional_nombre y profesional_agenda_dias."
@@ -4896,6 +5039,86 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Finalizar flujo" /></SelectTrigger>
               <SelectContent><SelectItem value="none">Finalizar flujo</SelectItem>{nextNodeOptions.map((option) => <SelectItem key={option.id} value={String(option.id)}>{option.label}</SelectItem>)}</SelectContent>
             </Select>
+          </div>
+        </div>
+      )
+    }
+
+    if (t === "person_create") {
+      const settings = ensureSettings<any>({
+        dni_variable: "dni",
+        first_name_variable: "registro_nombres",
+        last_name_variable: "registro_apellidos",
+        birth_date_variable: "registro_fecha_nacimiento",
+        gender_variable: "registro_genero",
+        phone_code_variable: "registro_codigo_celular",
+        phone_variable: "registro_numero_celular",
+        email_variable: "registro_email",
+        insurance_variable: "registro_obra_social_id",
+        plan_variable: "registro_plan_id",
+        already_exists_message: "Ya existe un paciente registrado con ese DNI.",
+        invalid_message: "No pudimos registrar al paciente porque algunos datos no son validos.",
+        unavailable_next_node_id: null,
+        error_message: "No pudimos registrar al paciente en este momento.",
+        error_next_node_id: null,
+      })
+      const update = (field: string, value: string | number | null) => {
+        setEditNode((prev) => prev ? { ...prev, settings: { ...settings, [field]: value } } : prev)
+      }
+      const fields: Array<[string, string]> = [
+        ["dni_variable", "DNI"],
+        ["first_name_variable", "Nombres"],
+        ["last_name_variable", "Apellidos"],
+        ["birth_date_variable", "Nacimiento (DD/MM/AAAA)"],
+        ["gender_variable", "Genero (M/F/O)"],
+        ["phone_code_variable", "Codigo de area"],
+        ["phone_variable", "Numero de celular"],
+        ["email_variable", "Correo electronico"],
+        ["insurance_variable", "ID de obra social"],
+        ["plan_variable", "ID de plan"],
+      ]
+
+      return (
+        <div className="space-y-3">
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+            Valida los datos, comprueba que el DNI no exista y registra al paciente con la API de autogestion.
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {fields.map(([field, label]) => (
+              <div key={field}>
+                <label className="mb-1 block text-xs text-muted-foreground">{label}</label>
+                <Input value={String(settings[field] ?? "")} onChange={(e) => update(field, e.target.value.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 80))} className="h-8 text-xs" />
+              </div>
+            ))}
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Mensaje si el DNI ya existe</label>
+            <Textarea value={settings.already_exists_message} onChange={(e) => update("already_exists_message", e.target.value.slice(0, ERROR_MESSAGE_MAX))} rows={2} className="text-xs" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Mensaje si los datos son invalidos</label>
+            <Textarea value={settings.invalid_message} onChange={(e) => update("invalid_message", e.target.value.slice(0, ERROR_MESSAGE_MAX))} rows={2} className="text-xs" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Siguiente nodo si ya existe o los datos son invalidos</label>
+            <Select value={settings.unavailable_next_node_id ? String(settings.unavailable_next_node_id) : "none"} onValueChange={(value) => update("unavailable_next_node_id", value === "none" ? null : Number(value))}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Finalizar flujo" /></SelectTrigger>
+              <SelectContent><SelectItem value="none">Finalizar flujo</SelectItem>{nextNodeOptions.map((option) => <SelectItem key={option.id} value={String(option.id)}>{option.label}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Mensaje cuando hay error</label>
+            <Textarea value={settings.error_message} onChange={(e) => update("error_message", e.target.value.slice(0, ERROR_MESSAGE_MAX))} rows={2} className="text-xs" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">Siguiente nodo si hay error</label>
+            <Select value={settings.error_next_node_id ? String(settings.error_next_node_id) : "none"} onValueChange={(value) => update("error_next_node_id", value === "none" ? null : Number(value))}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Finalizar flujo" /></SelectTrigger>
+              <SelectContent><SelectItem value="none">Finalizar flujo</SelectItem>{nextNodeOptions.map((option) => <SelectItem key={option.id} value={String(option.id)}>{option.label}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+            Guarda persona_creada, persona_create_status, persona_id y las variables persona_*.
           </div>
         </div>
       )

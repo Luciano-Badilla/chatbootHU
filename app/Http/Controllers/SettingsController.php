@@ -11,6 +11,7 @@ use App\Services\AuditService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 
@@ -34,6 +35,13 @@ class SettingsController extends Controller
                 'integrations.alephoo.api_key',
                 'integrations.alephoo.timeout',
                 'integrations.alephoo.enabled_endpoints',
+                'integrations.alephoo_v3.base_url',
+                'integrations.alephoo_v3.username',
+                'integrations.alephoo_v3.password',
+                'integrations.alephoo_v3.timeout',
+                'integrations.autogestion.base_url',
+                'integrations.autogestion.token',
+                'integrations.autogestion.timeout',
                 'bot.inactivity_timeout_minutes',
                 'bot.inactivity_timeout_message',
             ])
@@ -66,10 +74,21 @@ class SettingsController extends Controller
                         'webhook_verify_token_configured' => $storedWhatsappVerifyToken !== '' || trim((string) env('WHATSAPP_VERIFY_TOKEN', '')) !== '',
                     ],
                     'alephoo' => [
-                        'base_url' => $settings['integrations.alephoo.base_url'] ?? '',
+                        'base_url' => ($settings['integrations.alephoo.base_url'] ?? '') ?: (string) env('HOSPITAL_PERSON_API_BASE', ''),
                         'api_key' => $settings['integrations.alephoo.api_key'] ?? '',
-                        'timeout' => $settings['integrations.alephoo.timeout'] ?? '30',
+                        'timeout' => ($settings['integrations.alephoo.timeout'] ?? '') ?: '30',
                         'enabled_endpoints' => $settings['integrations.alephoo.enabled_endpoints'] ?? '',
+                    ],
+                    'alephoo_v3' => [
+                        'base_url' => ($settings['integrations.alephoo_v3.base_url'] ?? '') ?: (string) config('services.alephoo_v3.base_url', ''),
+                        'username' => $settings['integrations.alephoo_v3.username'] ?? '',
+                        'password' => $settings['integrations.alephoo_v3.password'] ?? '',
+                        'timeout' => ($settings['integrations.alephoo_v3.timeout'] ?? '') ?: (string) config('services.alephoo_v3.timeout', 30),
+                    ],
+                    'autogestion' => [
+                        'base_url' => ($settings['integrations.autogestion.base_url'] ?? '') ?: (string) config('services.turnos_configuration.url', ''),
+                        'token' => $settings['integrations.autogestion.token'] ?? '',
+                        'timeout' => ($settings['integrations.autogestion.timeout'] ?? '') ?: (string) config('services.turnos_configuration.timeout', 15),
                     ],
                 ],
                 'bot' => [
@@ -168,6 +187,13 @@ class SettingsController extends Controller
             'alephoo.api_key' => ['nullable', 'string'],
             'alephoo.timeout' => ['required', 'integer', 'min:1', 'max:300'],
             'alephoo.enabled_endpoints' => ['nullable', 'string'],
+            'alephoo_v3.base_url' => ['nullable', 'url'],
+            'alephoo_v3.username' => ['nullable', 'string'],
+            'alephoo_v3.password' => ['nullable', 'string'],
+            'alephoo_v3.timeout' => ['required', 'integer', 'min:1', 'max:300'],
+            'autogestion.base_url' => ['nullable', 'url'],
+            'autogestion.token' => ['nullable', 'string'],
+            'autogestion.timeout' => ['required', 'integer', 'min:1', 'max:300'],
         ]);
 
         $before = [
@@ -182,6 +208,17 @@ class SettingsController extends Controller
                 'api_key' => $this->settingValue('integrations.alephoo.api_key', ''),
                 'timeout' => $this->settingValue('integrations.alephoo.timeout', '30'),
                 'enabled_endpoints' => $this->settingValue('integrations.alephoo.enabled_endpoints', ''),
+            ],
+            'alephoo_v3' => [
+                'base_url' => $this->settingValue('integrations.alephoo_v3.base_url', ''),
+                'username' => $this->settingValue('integrations.alephoo_v3.username', ''),
+                'password' => $this->settingValue('integrations.alephoo_v3.password', ''),
+                'timeout' => $this->settingValue('integrations.alephoo_v3.timeout', '30'),
+            ],
+            'autogestion' => [
+                'base_url' => $this->settingValue('integrations.autogestion.base_url', ''),
+                'token' => $this->settingValue('integrations.autogestion.token', ''),
+                'timeout' => $this->settingValue('integrations.autogestion.timeout', '15'),
             ],
         ];
 
@@ -217,6 +254,17 @@ class SettingsController extends Controller
             ['key' => 'integrations.alephoo.enabled_endpoints'],
             ['value' => $data['alephoo']['enabled_endpoints'] ?? ''],
         );
+        foreach ([
+            'integrations.alephoo_v3.base_url' => $data['alephoo_v3']['base_url'] ?? '',
+            'integrations.alephoo_v3.username' => $data['alephoo_v3']['username'] ?? '',
+            'integrations.alephoo_v3.password' => $data['alephoo_v3']['password'] ?? '',
+            'integrations.alephoo_v3.timeout' => (string) ($data['alephoo_v3']['timeout'] ?? 30),
+            'integrations.autogestion.base_url' => $data['autogestion']['base_url'] ?? '',
+            'integrations.autogestion.token' => $data['autogestion']['token'] ?? '',
+            'integrations.autogestion.timeout' => (string) ($data['autogestion']['timeout'] ?? 15),
+        ] as $settingKey => $settingValue) {
+            SystemSetting::updateOrCreate(['key' => $settingKey], ['value' => $settingValue]);
+        }
 
         $after = [
             'whatsapp' => [
@@ -230,6 +278,17 @@ class SettingsController extends Controller
                 'api_key' => $data['alephoo']['api_key'] ?? '',
                 'timeout' => (string) ($data['alephoo']['timeout'] ?? 30),
                 'enabled_endpoints' => $data['alephoo']['enabled_endpoints'] ?? '',
+            ],
+            'alephoo_v3' => [
+                'base_url' => $data['alephoo_v3']['base_url'] ?? '',
+                'username' => $data['alephoo_v3']['username'] ?? '',
+                'password' => $data['alephoo_v3']['password'] ?? '',
+                'timeout' => (string) ($data['alephoo_v3']['timeout'] ?? 30),
+            ],
+            'autogestion' => [
+                'base_url' => $data['autogestion']['base_url'] ?? '',
+                'token' => $data['autogestion']['token'] ?? '',
+                'timeout' => (string) ($data['autogestion']['timeout'] ?? 15),
             ],
         ];
 
@@ -251,8 +310,250 @@ class SettingsController extends Controller
                         'timeout' => (string) ($data['alephoo']['timeout'] ?? 30),
                         'enabled_endpoints' => $data['alephoo']['enabled_endpoints'] ?? '',
                     ],
+                    'alephoo_v3' => $after['alephoo_v3'],
+                    'autogestion' => $after['autogestion'],
                 ],
             ],
+        ]);
+    }
+
+    public function testAlephoo(Request $request)
+    {
+        $data = $request->validate([
+            'base_url' => ['nullable', 'url'],
+            'api_key' => ['nullable', 'string'],
+            'timeout' => ['required', 'integer', 'min:1', 'max:300'],
+            'enabled_endpoints' => ['nullable', 'string'],
+            'only_alephoo' => ['nullable', 'boolean'],
+            'integration' => ['nullable', 'in:alephoo,api_turnos,autogestion'],
+            'alephoo_v3.base_url' => ['nullable', 'url'],
+            'alephoo_v3.username' => ['nullable', 'string'],
+            'alephoo_v3.password' => ['nullable', 'string'],
+            'alephoo_v3.timeout' => ['nullable', 'integer', 'min:1', 'max:300'],
+            'autogestion.base_url' => ['nullable', 'url'],
+            'autogestion.token' => ['nullable', 'string'],
+            'autogestion.timeout' => ['nullable', 'integer', 'min:1', 'max:300'],
+        ]);
+
+        if (($data['integration'] ?? null) === 'autogestion') {
+            $configuration = $data['autogestion'] ?? [];
+            $url = trim((string) (($configuration['base_url'] ?? '') ?: $this->settingValue('integrations.autogestion.base_url', '') ?: config('services.turnos_configuration.url', '')));
+            $token = trim((string) (($configuration['token'] ?? '') ?: $this->settingValue('integrations.autogestion.token', '') ?: config('services.turnos_configuration.token', '')));
+            $timeout = max(1, min(300, (int) (($configuration['timeout'] ?? null) ?: $this->settingValue('integrations.autogestion.timeout', '') ?: config('services.turnos_configuration.timeout', 15))));
+            $startedAt = microtime(true);
+            try {
+                $response = Http::timeout($timeout)->acceptJson()->withToken($token)->get($url);
+                $status = $response->status();
+                $payload = $response->json();
+                $validStructure = is_array($payload)
+                    && is_array($payload['specialties'] ?? null)
+                    && is_array($payload['doctors_by_specialty'] ?? null)
+                    && is_array($payload['health_insurances'] ?? null);
+                $ok = $response->successful() && $validStructure;
+                $message = $ok
+                    ? 'Configuracion de autogestion valida.'
+                    : ($response->successful() ? 'La respuesta no tiene la estructura esperada.' : 'Autogestion rechazo la solicitud.');
+            } catch (\Throwable $e) {
+                $status = null;
+                $ok = false;
+                $message = $e->getMessage();
+            }
+            $result = [
+                'integration' => 'autogestion',
+                'endpoint' => '/api/configuration',
+                'method' => 'GET',
+                'ok' => $ok,
+                'status' => $status,
+                'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+                'message' => $message,
+            ];
+            $this->auditService->record('settings', 'autogestion_integration_tested', 'Probo la integracion de autogestion', $request->user(), null, ['meta' => ['passed' => $ok ? 1 : 0, 'total' => 1]]);
+
+            return response()->json([
+                'ok' => $ok,
+                'summary' => ['passed' => $ok ? 1 : 0, 'failed' => $ok ? 0 : 1, 'total' => 1],
+                'results' => [$result],
+            ]);
+        }
+
+        if (!empty($data['only_alephoo']) || ($data['integration'] ?? null) === 'alephoo') {
+            $startedAt = microtime(true);
+            try {
+                $testV3 = $data['alephoo_v3'] ?? [];
+                $response = Http::timeout(max(1, min(300, (int) (
+                    ($testV3['timeout'] ?? null)
+                    ?: $this->settingValue('integrations.alephoo_v3.timeout', '')
+                    ?: config('services.alephoo_v3.timeout', 30)
+                ))))
+                    ->accept('application/vnd.api+json')
+                    ->withBasicAuth(
+                        ($testV3['username'] ?? '') ?: $this->settingValue('integrations.alephoo_v3.username', '') ?: (string) config('services.alephoo_v3.username'),
+                        ($testV3['password'] ?? '') ?: $this->settingValue('integrations.alephoo_v3.password', '') ?: (string) config('services.alephoo_v3.password'),
+                    )
+                    ->get(rtrim(
+                        ($testV3['base_url'] ?? '') ?: $this->settingValue('integrations.alephoo_v3.base_url', '') ?: (string) config('services.alephoo_v3.base_url'),
+                        '/'
+                    ) . '/admision/turnos', [
+                        'filter[persona]' => 0,
+                        'filter[incluirAdHoc]' => 'false',
+                        'filter[nocancelado]' => 'true',
+                        'offset' => 0,
+                        'sort' => '-fecha,-hora',
+                        'limit' => 1,
+                    ]);
+                $status = $response->status();
+                $ok = $response->successful();
+                $message = $ok
+                    ? 'Alephoo respondio correctamente.'
+                    : (in_array($status, [401, 403], true) ? 'Alephoo rechazo las credenciales.' : 'Alephoo devolvio un error.');
+            } catch (\Throwable $e) {
+                $status = null;
+                $ok = false;
+                $message = $e->getMessage();
+            }
+
+            $result = [
+                'integration' => 'alephoo',
+                'endpoint' => '/admision/turnos',
+                'method' => 'GET',
+                'ok' => $ok,
+                'status' => $status,
+                'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+                'message' => $message,
+            ];
+            $this->auditService->record(
+                'settings',
+                'alephoo_integration_tested',
+                'Probo el endpoint de Alephoo',
+                $request->user(),
+                null,
+                ['meta' => ['passed' => $ok ? 1 : 0, 'total' => 1]],
+            );
+
+            return response()->json([
+                'ok' => $ok,
+                'summary' => ['passed' => $ok ? 1 : 0, 'failed' => $ok ? 0 : 1, 'total' => 1],
+                'results' => [$result],
+            ]);
+        }
+
+        $baseUrl = rtrim((string) ($data['base_url']
+            ?: $this->settingValue('integrations.alephoo.base_url', '')
+            ?: env('HOSPITAL_PERSON_API_BASE', '')), '/');
+        $apiKey = (string) ($data['api_key']
+            ?: $this->settingValue('integrations.alephoo.api_key', '')
+            ?: env('HOSPITAL_PERSON_API_KEY', ''));
+        $rawEndpoints = trim((string) ($data['enabled_endpoints'] ?? ''));
+        $endpoints = array_values(array_unique(array_filter(array_map(
+            fn ($line) => '/' . ltrim(trim(str_replace('\\', '/', $line)), '/'),
+            preg_split('/\r\n|\r|\n/', $rawEndpoints) ?: [],
+        ))));
+
+        if ($endpoints === []) {
+            $endpoints = [
+                '/personas/{dni}',
+                '/especialidades',
+                '/profesionales/{especialidad}',
+                '/turnos/{profesional}/{especialidad}/{dias}',
+                '/obrasocial',
+                '/planes/{id}',
+                '/crear/persona',
+                '/crear/turno',
+                '/cancelarTurnos/{turno}',
+            ];
+        }
+
+        $rootUrl = str_ends_with($baseUrl, '/personas') ? substr($baseUrl, 0, -9) : $baseUrl;
+        $results = [];
+        $sampleSpecialtyId = '0';
+        $sampleDoctorId = '0';
+        $sampleInsuranceId = '0';
+
+        try {
+            $probeClient = Http::timeout((int) $data['timeout'])
+                ->acceptJson()
+                ->withHeaders(['X-API-KEY' => $apiKey]);
+            $specialties = $probeClient->get($rootUrl . '/especialidades');
+            $specialtyItems = $specialties->successful() && is_array($specialties->json())
+                ? $specialties->json()
+                : [];
+            $sampleSpecialtyId = (string) data_get($specialtyItems, '0.id', '0');
+
+            $insurances = $probeClient->get($rootUrl . '/obrasocial');
+            $insuranceItems = $insurances->successful() && is_array($insurances->json())
+                ? $insurances->json()
+                : [];
+            $sampleInsuranceId = (string) data_get($insuranceItems, '0.id', '0');
+
+            if ($sampleSpecialtyId !== '0') {
+                $doctors = $probeClient->get($rootUrl . '/profesionales/' . rawurlencode($sampleSpecialtyId));
+                $doctorItems = $doctors->successful() && is_array($doctors->json())
+                    ? $doctors->json()
+                    : [];
+                $sampleDoctorId = (string) data_get($doctorItems, '0.id', '0');
+            }
+        } catch (\Throwable) {
+            // Las pruebas individuales mostraran el problema de conexion o autenticacion.
+        }
+
+        foreach ($endpoints as $endpoint) {
+            $path = str_replace(
+                ['{dni}', '{id}', '{obra_social}', '{especialidad}', '{profesional}', '{dias}', '{turno}'],
+                ['0', $sampleInsuranceId, $sampleInsuranceId, $sampleSpecialtyId, $sampleDoctorId, '1', '__integration_test__'],
+                $endpoint,
+            );
+            $isMutation = str_starts_with($endpoint, '/crear/')
+                || str_starts_with($endpoint, '/cancelarTurnos/');
+            $method = $isMutation ? 'OPTIONS' : 'GET';
+            $startedAt = microtime(true);
+
+            try {
+                $client = Http::timeout((int) $data['timeout'])
+                    ->acceptJson()
+                    ->withHeaders(['X-API-KEY' => $apiKey]);
+                $response = $isMutation
+                    ? $client->send('OPTIONS', $rootUrl . $path)
+                    : $client->get($rootUrl . $path);
+                $status = $response->status();
+                $ok = $status < 500 && !in_array($status, [401, 403], true);
+                $message = $isMutation
+                    ? 'Ruta verificada sin ejecutar la operacion destructiva.'
+                    : ($ok ? 'Endpoint accesible.' : 'El endpoint rechazo la solicitud.');
+            } catch (\Throwable $e) {
+                $status = null;
+                $ok = false;
+                $message = $e->getMessage();
+            }
+
+            $results[] = [
+                'integration' => 'api_turnos',
+                'endpoint' => $endpoint,
+                'method' => $method,
+                'ok' => $ok,
+                'status' => $status,
+                'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+                'message' => $message,
+            ];
+        }
+
+        $passed = count(array_filter($results, fn ($result) => $result['ok']));
+        $this->auditService->record(
+            'settings',
+            'api_turnos_integration_tested',
+            'Probo los endpoints de API Turnos',
+            $request->user(),
+            null,
+            ['meta' => ['passed' => $passed, 'total' => count($results)]],
+        );
+
+        return response()->json([
+            'ok' => $passed === count($results),
+            'summary' => [
+                'passed' => $passed,
+                'failed' => count($results) - $passed,
+                'total' => count($results),
+            ],
+            'results' => $results,
         ]);
     }
 

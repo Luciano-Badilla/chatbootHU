@@ -18,6 +18,10 @@ class BotInactivityService
 {
     private ?array $runtimeSettingsCache = null;
 
+    public function __construct(private readonly AuditService $auditService)
+    {
+    }
+
     public function processExpiredChat(Chat $chat, ?BotFlow $flow = null): bool
     {
         $flow = $flow ?? $this->getDefaultFlow();
@@ -35,6 +39,19 @@ class BotInactivityService
         }
 
         $this->resetChatToStartFromFlow($chat, $flow, $reason);
+        $this->auditService->recordChatAction(
+            'bot_inactivity_reset',
+            'Reinicio automaticamente el flujo del bot por inactividad',
+            $chat,
+            null,
+            [
+                'meta' => [
+                    'reason' => $reason,
+                    'flow_id' => $flow->id,
+                    'start_node_id' => $flow->start_node_id,
+                ],
+            ],
+        );
 
         return true;
     }

@@ -1,19 +1,26 @@
 import { useEffect } from 'react';
-import Checkbox from '@/Components/Checkbox';
-import GuestLayout from '@/Layouts/GuestLayout';
-import InputError from '@/Components/InputError';
-import InputLabel from '@/Components/InputLabel';
-import PrimaryButton from '@/Components/PrimaryButton';
-import TextInput from '@/Components/TextInput';
-import { Head, Link, useForm } from '@inertiajs/react';
+import { Head, useForm } from '@inertiajs/react';
+import { LockKeyhole, LogIn, UserRound } from 'lucide-react';
+import { Button } from 'shadcn/components/ui/button';
+import {
+    Field,
+    FieldError,
+    FieldGroup,
+    FieldLabel,
+} from 'shadcn/components/ui/field';
+import { Input } from 'shadcn/components/ui/input';
 import { route } from 'ziggy-js';
 
-export default function Login({ status, canResetPassword }) {
+export default function Login({ status }) {
+    const publicUrl = import.meta.env.VITE_APP_URL?.replace(/\/$/, '') ?? '';
+    const logoUrl = `${publicUrl}/images/hu_icon_new.png`;
+    const loginImageUrl = `${publicUrl}/images/login_image.jpg`;
+
     const { data, setData, post, processing, errors, reset } = useForm({
         email: '',
         password: '',
-        remember: false,
     });
+    const loginError = errors.email || errors.password;
 
     useEffect(() => {
         return () => {
@@ -21,91 +28,119 @@ export default function Login({ status, canResetPassword }) {
         };
     }, []);
 
-    const submit = (e) => {
-        e.preventDefault();
+    const submit = (event) => {
+        event.preventDefault();
         post(route('login'));
     };
 
     return (
-        <GuestLayout>
-            <Head title="Iniciar sesion" />
-            <div className="border-b border-[#dbe5ef] bg-[#013765] px-6 py-5 text-white">
-                <h1 className="text-2xl font-semibold">Iniciar sesion</h1>
-            </div>
+        <>
+            <Head title="Iniciar sesión" />
 
-            <div className="px-6 py-6">
-                {status && (
-                    <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-                        {status}
-                    </div>
-                )}
-
-                <form onSubmit={submit} className="space-y-5">
-                    <div>
-                        <InputLabel htmlFor="email" value="Correo electronico" />
-
-                        <TextInput
-                            id="email"
-                            type="email"
-                            name="email"
-                            value={data.email}
-                            className="mt-2 block h-11 w-full border border-[#dbe5ef] bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#2b5f90] focus:ring-[#2b5f90]"
-                            autoComplete="username"
-                            isFocused={true}
-                            placeholder="tu.usuario@hospital.com"
-                            onChange={(e) => setData('email', e.target.value)}
-                        />
-
-                        <InputError message={errors.email} className="mt-2" />
-                    </div>
-
-                    <div>
-                        <InputLabel htmlFor="password" value="Contrasena" />
-
-                        <TextInput
-                            id="password"
-                            type="password"
-                            name="password"
-                            value={data.password}
-                            className="mt-2 block h-11 w-full border border-[#dbe5ef] bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#2b5f90] focus:ring-[#2b5f90]"
-                            autoComplete="current-password"
-                            placeholder="Ingresa tu contrasena"
-                            onChange={(e) => setData('password', e.target.value)}
-                        />
-
-                        <InputError message={errors.password} className="mt-2" />
-                    </div>
-
-                    <div className="flex items-center justify-between gap-3">
-                        <label className="flex items-center">
-                            <Checkbox
-                                name="remember"
-                                checked={data.remember}
-                                onChange={(e) => setData('remember', e.target.checked)}
+            <main className="min-h-screen bg-white font-sans text-slate-950 lg:grid lg:grid-cols-2">
+                <section className="flex min-h-screen items-center justify-center bg-[#06436f] px-6 py-10 text-white lg:px-12">
+                    <div className="w-full max-w-md">
+                        <div className="mb-10">
+                            <img
+                                src={logoUrl}
+                                alt="Hospital Universitario"
+                                className="h-auto w-[285px] brightness-0 invert sm:w-[300px]"
                             />
-                            <span className="ms-2 text-sm text-slate-600">Recordarme</span>
-                        </label>
+                        </div>
 
-                        {canResetPassword && (
-                            <Link
-                                href={route('password.request')}
-                                className="text-sm font-medium text-[#013765] transition hover:text-[#024a8a]"
-                            >
-                                Olvide mi contrasena
-                            </Link>
+                        <div className="mb-8">
+                            <h2 className="text-3xl font-bold tracking-tight">Inicia sesión</h2>
+                            <div className="absolute top-0 left-0 right-0 p-12 text-white">
+                                <span className="inline-flex rounded-full bg-white/90 px-4 py-1 text-xs font-bold uppercase tracking-[0.14em] text-[#06436f]">
+                                    Chatbot WhatsApp HU
+                                </span>
+                            </div>
+                            <p className="mt-3 text-sm leading-6 text-blue-100">
+                                Accede con tus credenciales para administrar el sistema de turnos.
+                            </p>
+                        </div>
+
+                        {status && (
+                            <div className="mb-4 rounded-md border border-emerald-300/40 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
+                                {status}
+                            </div>
                         )}
-                    </div>
 
-                    <div className="pt-2">
-                        <PrimaryButton
-                            className="flex h-11 w-full items-center justify-center rounded-xl bg-[#013765] text-sm font-semibold normal-case tracking-normal hover:bg-[#024a8a] focus:bg-[#024a8a] active:bg-[#012e54]"
-                            disabled={processing}
-                        >
-                            {processing ? 'Ingresando...' : 'Iniciar sesion'}
-                        </PrimaryButton>
+                        {loginError && (
+                            <div className="mb-4 rounded-md border border-red-300/50 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                                {loginError}
+                            </div>
+                        )}
+
+                        <form onSubmit={submit}>
+                            <FieldGroup>
+                                <Field>
+                                    <FieldLabel htmlFor="email" className="text-white">
+                                        Email
+                                    </FieldLabel>
+                                    <div className="relative">
+                                        <UserRound className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                                        <Input
+                                            id="email"
+                                            type="email"
+                                            name="email"
+                                            value={data.email}
+                                            autoComplete="username"
+                                            autoFocus
+                                            onChange={(event) => setData('email', event.target.value)}
+                                            className="h-10 p-5 pl-12 text-sm bg-white text-black font-semibold"
+                                            placeholder="Correo electrónico"
+                                        />
+                                    </div>
+                                    <FieldError className="text-red-100">
+                                        {errors.email}
+                                    </FieldError>
+                                </Field>
+
+                                <Field>
+                                    <FieldLabel htmlFor="password" className="text-white">
+                                        Contraseña
+                                    </FieldLabel>
+                                    <div className="relative">
+                                        <LockKeyhole className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                                        <Input
+                                            id="password"
+                                            type="password"
+                                            name="password"
+                                            value={data.password}
+                                            autoComplete="current-password"
+                                            onChange={(event) => setData('password', event.target.value)}
+                                            className="h-10 p-5 pl-12 text-sm bg-white text-black font-semibold"
+                                            placeholder="Ingresa tu contraseña"
+                                        />
+                                    </div>
+                                    <FieldError className="text-red-100">{errors.password}</FieldError>
+                                </Field>
+
+                                <Field orientation="horizontal">
+                                    <Button
+                                        type="submit"
+                                        disabled={processing}
+                                        className="h-12 w-full bg-white px-4 text-sm font-bold text-[#06436f] shadow-sm hover:bg-slate-900 hover:text-white focus-visible:ring-4 focus-visible:ring-white/25 disabled:cursor-wait"
+                                    >
+                                        <LogIn className="h-4 w-4" />
+                                        {processing ? 'Ingresando...' : 'Iniciar sesión'}
+                                    </Button>
+                                </Field>
+                            </FieldGroup>
+                        </form>
                     </div>
-                </form>
-            </div>
-        </GuestLayout>
+                </section>
+
+                <section className="relative hidden min-h-screen overflow-hidden bg-slate-100 lg:block">
+                    <img
+                        src={loginImageUrl}
+                        alt="Autogestión de turnos"
+                        className="absolute inset-0 h-full w-full object-cover"
+                    />
+                    <div className="pointer-events-none absolute inset-0" />
+                </section>
+            </main>
+        </>
     );
 }

@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Models\User;
+use App\Services\AuditService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Password;
@@ -12,6 +14,10 @@ use Inertia\Response;
 
 class PasswordResetLinkController extends Controller
 {
+    public function __construct(private readonly AuditService $auditService)
+    {
+    }
+
     /**
      * Display the password reset link request view.
      */
@@ -41,6 +47,19 @@ class PasswordResetLinkController extends Controller
         );
 
         if ($status == Password::RESET_LINK_SENT) {
+            $user = User::query()->where('email', $request->string('email')->toString())->first();
+            $this->auditService->record(
+                'security',
+                'password_reset_link_requested',
+                'Solicito un enlace para restablecer la contraseña',
+                $user,
+                $user,
+                [
+                    'meta' => [
+                        'ip' => $request->ip(),
+                    ],
+                ],
+            );
             return back()->with('status', __($status));
         }
 

@@ -76,6 +76,8 @@ Route::middleware($sessionAuthenticated)->group(function () {
         Route::post('/settings/import', [SettingsController::class, 'importConfiguration']);
         Route::post('/settings/general', [SettingsController::class, 'saveGeneral']);
         Route::post('/settings/integrations', [SettingsController::class, 'saveIntegrations']);
+        Route::post('/settings/integrations/alephoo/test', [SettingsController::class, 'testAlephoo']);
+        Route::post('/settings/integrations/test', [SettingsController::class, 'testAlephoo']);
         Route::post('/settings/bot', [SettingsController::class, 'saveBot']);
     });
 
