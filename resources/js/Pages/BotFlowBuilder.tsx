@@ -5077,6 +5077,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         ["insurance_variable", "ID de obra social"],
         ["plan_variable", "ID de plan"],
       ]
+      const flowVariables = templateVariableOptions.filter((item) => item.kind === "flow")
 
       return (
         <div className="space-y-3">
@@ -5087,7 +5088,16 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             {fields.map(([field, label]) => (
               <div key={field}>
                 <label className="mb-1 block text-xs text-muted-foreground">{label}</label>
-                <Input value={String(settings[field] ?? "")} onChange={(e) => update(field, e.target.value.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 80))} className="h-8 text-xs" />
+                <Select value={String(settings[field] ?? "")} onValueChange={(value) => update(field, value)}>
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue placeholder="Selecciona una variable" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {flowVariables.map((option) => (
+                      <SelectItem key={option.key} value={option.key}>{option.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             ))}
           </div>
