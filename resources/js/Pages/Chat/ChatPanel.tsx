@@ -76,7 +76,10 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   const [panelMqttConnected, setPanelMqttConnected] = useState(false)
 
   // ID del chat seleccionado actualmente en la UI.
-  const [selectedChatId, setSelectedChatId] = useState<string>("")
+  const [selectedChatId, setSelectedChatId] = useState<string>(() => {
+    if (typeof window === "undefined") return ""
+    return new URLSearchParams(window.location.search).get("chat") || ""
+  })
   const previousSelectedChatIdRef = useRef<string>("")
   const selectedChatIdRef = useRef<string>("")
   const mqttClientRef = useRef<any>(null)

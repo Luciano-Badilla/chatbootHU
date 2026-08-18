@@ -15,7 +15,6 @@ use App\Services\BotInactivityService;
 use App\Services\CampaignMetricsService;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Request;
-use Illuminate\Support\Env;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -28,14 +27,13 @@ use PhpMqtt\Client\MqttClient;
 class WhatsAppController extends Controller
 {
     private ?array $runtimeSettingsCache = null;
+
     private ?array $turnosConfigurationCache = null;
 
     public function __construct(
         private readonly BotInactivityService $botInactivityService,
         private readonly AuditService $auditService,
-    )
-    {
-    }
+    ) {}
 
     public function verify(Request $request)
     {
@@ -69,7 +67,7 @@ class WhatsAppController extends Controller
             $whatsappMessageId = $statusData['id'] ?? null;
             $status = $statusData['status'] ?? null;
 
-            if (!$whatsappMessageId || !isset($priority[$status])) {
+            if (! $whatsappMessageId || ! isset($priority[$status])) {
                 continue;
             }
 
@@ -113,11 +111,12 @@ class WhatsAppController extends Controller
                 }
             }
 
-            if (!$message) {
+            if (! $message) {
                 Log::warning('Status recibido para mensaje no encontrado', [
                     'whatsapp_message_id' => $whatsappMessageId,
                     'status' => $status,
                 ]);
+
                 continue;
             }
 
@@ -144,17 +143,18 @@ class WhatsAppController extends Controller
     private function publishMessageStatus(Message $message, string $status): void
     {
         $host = env('MQTT_HOST') ?: env('VITE_MOSQUITTO_HOST');
-        if (!$host) {
+        if (! $host) {
             Log::warning('MQTT host not configured for message status publish.', [
                 'chat_id' => $message->chat_id,
                 'message_id' => $message->id,
                 'status' => $status,
             ]);
+
             return;
         }
 
         try {
-            $mqtt = new MqttClient((string) $host, 1883, 'laravel_msg_status_' . uniqid());
+            $mqtt = new MqttClient((string) $host, 1883, 'laravel_msg_status_'.uniqid());
             $mqtt->connect();
             $mqtt->publish("chat/{$message->chat_id}/status", json_encode([
                 'chat_id' => (int) $message->chat_id,
@@ -164,7 +164,7 @@ class WhatsAppController extends Controller
             ]), 0);
             $mqtt->disconnect();
         } catch (\Throwable $e) {
-            Log::error('MQTT Error (message status): ' . $e->getMessage());
+            Log::error('MQTT Error (message status): '.$e->getMessage());
         }
     }
 
@@ -175,15 +175,16 @@ class WhatsAppController extends Controller
     {
         $data = $request->all();
 
-        Log::info('Recibido mensaje de WhatsApp: ' . json_encode($data));
+        Log::info('Recibido mensaje de WhatsApp: '.json_encode($data));
 
         if (isset($data['entry'][0]['changes'][0]['value']['statuses'][0])) {
             $this->processMessageStatuses($data['entry'][0]['changes'][0]['value']['statuses']);
+
             return response('EVENT_RECEIVED', 200);
         }
 
         // 1) Verificamos si hay un mensaje
-        if (!isset($data['entry'][0]['changes'][0]['value']['messages'][0])) {
+        if (! isset($data['entry'][0]['changes'][0]['value']['messages'][0])) {
             return response('EVENT_RECEIVED', 200);
         }
 
@@ -310,7 +311,7 @@ class WhatsAppController extends Controller
 
             default:
                 $messageType = 'text';
-                $body = $body ?? ('[Mensaje tipo ' . $type . ']');
+                $body = $body ?? ('[Mensaje tipo '.$type.']');
                 break;
         }
 
@@ -322,7 +323,7 @@ class WhatsAppController extends Controller
         if ($contactData) {
             $contact = Contact::where('whatsapp_id', $contactData['wa_id'])->first();
 
-            if (!$contact) {
+            if (! $contact) {
                 $contact = Contact::create([
                     'whatsapp_id' => $contactData['wa_id'],
                     'name' => $contactData['profile']['name'] ?? null,
@@ -358,7 +359,7 @@ class WhatsAppController extends Controller
         // Ideal: lock para evitar doble webhook avanzando el puntero 2 veces
         $chat = Chat::where('contact_id', $contact->id)->lockForUpdate()->first();
 
-        if (!$chat) {
+        if (! $chat) {
             $chat = Chat::create([
                 'contact_id' => $contact->id,
                 'bot_flow_id' => $flow->id ?? null,
@@ -375,25 +376,23 @@ class WhatsAppController extends Controller
             // 2) Reset por timeout configurable (ANTES de procesar el bot)
             $this->botInactivityService->processExpiredChat($chat, $flow);
 
-
             // 3) Actualizar ÃƒÂºltima interacciÃƒÂ³n del usuario (entrante)
             $chat->last_user_message_at = now();
 
             // Si por algÃƒÂºn motivo quedÃƒÂ³ sin nodo, iniciamos
-            if (!$chat->bot_node_id) {
+            if (! $chat->bot_node_id) {
                 $chat->bot_node_id = $flow->start_node_id ?? null;
             }
 
             $chat->save();
         }
 
-
         // --------------------------------
         // 6) Descargar media (si hay) y generar URL pÃƒÂºblica
         // --------------------------------
         $publicMediaUrl = null;  // lo que va a la DB y al front
 
-        if (!$mediaUrl && $mediaId) {
+        if (! $mediaUrl && $mediaId) {
             $mediaUrl = $this->resolveWhatsAppMediaUrl($mediaId);
         }
 
@@ -411,7 +410,7 @@ class WhatsAppController extends Controller
                     }
 
                     // Si es audio y no vino mime, ponemos ogg como default
-                    if (!$ext && $messageType === 'audio') {
+                    if (! $ext && $messageType === 'audio') {
                         $ext = 'ogg';
                     }
 
@@ -419,23 +418,23 @@ class WhatsAppController extends Controller
                     $baseName = $mediaName ?? uniqid();
 
                     // Evitar duplicar extensiÃƒÂ³n si el nombre ya la trae (documentos)
-                    if ($ext && !str_contains($baseName, '.')) {
-                        $fileName = ($messageType ?: 'file') . '_' . $baseName . '.' . $ext;
+                    if ($ext && ! str_contains($baseName, '.')) {
+                        $fileName = ($messageType ?: 'file').'_'.$baseName.'.'.$ext;
                     } else {
-                        $fileName = ($messageType ?: 'file') . '_' . $baseName;
+                        $fileName = ($messageType ?: 'file').'_'.$baseName;
                     }
 
-                    $path = 'whatsapp/' . $chat->id . '/' . $fileName;
+                    $path = 'whatsapp/'.$chat->id.'/'.$fileName;
 
                     Storage::disk('public')->put($path, $fileResponse->body());
 
                     // URL pÃƒÂºblica relativa (requiere php artisan storage:link)
-                    $publicMediaUrl = '/storage/' . $path;
+                    $publicMediaUrl = '/storage/'.$path;
                 } else {
-                    Log::warning('No se pudo descargar el media: ' . $fileResponse->status());
+                    Log::warning('No se pudo descargar el media: '.$fileResponse->status());
                 }
             } catch (\Throwable $e) {
-                Log::error('Error descargando media: ' . $e->getMessage());
+                Log::error('Error descargando media: '.$e->getMessage());
             }
         }
 
@@ -477,7 +476,7 @@ class WhatsAppController extends Controller
         // 9) MQTT (mensaje entrante)
         // --------------------------------
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_recv_' . uniqid());
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_recv_'.uniqid());
             $mqtt->connect();
 
             // Sidebar
@@ -508,7 +507,7 @@ class WhatsAppController extends Controller
 
             $mqtt->disconnect();
         } catch (MqttClientException $e) {
-            Log::error('MQTT Error (receiveMessage): ' . $e->getMessage());
+            Log::error('MQTT Error (receiveMessage): '.$e->getMessage());
         }
 
         // --------------------------------
@@ -538,12 +537,11 @@ class WhatsAppController extends Controller
                 }
             }
         } catch (\Throwable $e) {
-            Log::error('Error en bot DB: ' . $e->getMessage());
+            Log::error('Error en bot DB: '.$e->getMessage());
         }
 
         return response('EVENT_RECEIVED', 200);
     }
-
 
     /**
      * Enviar mensaje a WhatsApp desde el operador (front).
@@ -577,6 +575,7 @@ class WhatsAppController extends Controller
                     ],
                 ],
             );
+
             return response()->json(['error' => $e->getMessage()], 500);
         }
 
@@ -625,7 +624,7 @@ class WhatsAppController extends Controller
         $contact = $chat->contact;
         $actor = $request->user();
 
-        if (!$contact || !$contact->whatsapp_id) {
+        if (! $contact || ! $contact->whatsapp_id) {
             $this->auditService->recordMessageAction(
                 'media_send_failed',
                 'Fallo al enviar archivo al chat',
@@ -638,6 +637,7 @@ class WhatsAppController extends Controller
                     ],
                 ],
             );
+
             return response()->json(['error' => 'Contacto sin whatsapp_id'], 422);
         }
 
@@ -647,7 +647,7 @@ class WhatsAppController extends Controller
         $clientMime = (string) ($file->getClientMimeType() ?? '');
         $messageType = $validated['media_kind'] ?? $this->resolveOutgoingMediaType($mime);
         $uploadMime = $this->normalizeWhatsAppUploadMime($mime, $messageType);
-        $originalName = (string) ($file->getClientOriginalName() ?? ('file_' . uniqid()));
+        $originalName = (string) ($file->getClientOriginalName() ?? ('file_'.uniqid()));
         $extension = strtolower((string) ($file->getClientOriginalExtension() ?: pathinfo($originalName, PATHINFO_EXTENSION)));
         $sniff = $this->sniffAudioContainer($file->getRealPath());
 
@@ -677,9 +677,9 @@ class WhatsAppController extends Controller
 
         if (
             $allowedMimes
-            && !in_array(strtolower($uploadMime), $allowedMimes, true)
-            && !in_array(strtolower($mime), $allowedMimes, true)
-            && !in_array($extension, $allowedExtensions, true)
+            && ! in_array(strtolower($uploadMime), $allowedMimes, true)
+            && ! in_array(strtolower($mime), $allowedMimes, true)
+            && ! in_array($extension, $allowedExtensions, true)
         ) {
             return response()->json([
                 'error' => match ($messageType) {
@@ -692,7 +692,7 @@ class WhatsAppController extends Controller
             ], 422);
         }
 
-        if ($allowedExtensions && $extension !== '' && !in_array($extension, $allowedExtensions, true)) {
+        if ($allowedExtensions && $extension !== '' && ! in_array($extension, $allowedExtensions, true)) {
             return response()->json([
                 'error' => match ($messageType) {
                     'image' => 'Formato de imagen no compatible con WhatsApp. UsÃƒÂ¡ JPG, PNG o WEBP.',
@@ -732,7 +732,7 @@ class WhatsAppController extends Controller
                 'audio/opus',
             ];
 
-            if (!in_array(strtolower($uploadMime), $allowedAudioMimes, true)) {
+            if (! in_array(strtolower($uploadMime), $allowedAudioMimes, true)) {
                 return response()->json([
                     'error' => "Audio no soportado para WhatsApp: {$mime} (uploadMime={$uploadMime}). SubÃƒÂ­ OGG/OPUS o MP3/M4A.",
                 ], 422);
@@ -781,7 +781,7 @@ class WhatsAppController extends Controller
                 ]);
 
             if ($uploadResponse->failed()) {
-                Log::error('API Error (sendMedia upload): ' . $uploadResponse->body());
+                Log::error('API Error (sendMedia upload): '.$uploadResponse->body());
                 $this->auditService->recordMessageAction(
                     'media_send_failed',
                     'Fallo al enviar archivo al chat',
@@ -796,11 +796,12 @@ class WhatsAppController extends Controller
                         ],
                     ],
                 );
+
                 return response()->json(['error' => 'Error subiendo media a WhatsApp'], 500);
             }
 
             $mediaId = $uploadResponse->json('id');
-            if (!$mediaId) {
+            if (! $mediaId) {
                 $this->auditService->recordMessageAction(
                     'media_send_failed',
                     'Fallo al enviar archivo al chat',
@@ -815,6 +816,7 @@ class WhatsAppController extends Controller
                         ],
                     ],
                 );
+
                 return response()->json(['error' => 'No se obtuvo media_id de WhatsApp'], 500);
             }
 
@@ -850,7 +852,7 @@ class WhatsAppController extends Controller
 
             $sendResponse = Http::withToken($accessToken)->post($sendUrl, $payload);
             if ($sendResponse->failed()) {
-                Log::error('API Error (sendMedia message): ' . $sendResponse->body());
+                Log::error('API Error (sendMedia message): '.$sendResponse->body());
                 $this->auditService->recordMessageAction(
                     'media_send_failed',
                     'Fallo al enviar archivo al chat',
@@ -865,14 +867,15 @@ class WhatsAppController extends Controller
                         ],
                     ],
                 );
+
                 return response()->json(['error' => 'Error enviando media a WhatsApp'], 500);
             }
 
             // 3) Guardar copia local para previsualizaciÃƒÂ³n en front
-            $storedName = uniqid($messageType . '_') . '_' . preg_replace('/[^A-Za-z0-9._-]/', '_', $originalName);
+            $storedName = uniqid($messageType.'_').'_'.preg_replace('/[^A-Za-z0-9._-]/', '_', $originalName);
             $localPath = "whatsapp/{$chat->id}/{$storedName}";
             Storage::disk('public')->put($localPath, file_get_contents($file->getRealPath()));
-            $publicMediaUrl = '/storage/' . $localPath;
+            $publicMediaUrl = '/storage/'.$localPath;
 
             // 4) Persistir mensaje
             $body = $caption !== '' ? $caption : null;
@@ -920,7 +923,7 @@ class WhatsAppController extends Controller
             }
 
             try {
-                $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_media_' . uniqid());
+                $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_media_'.uniqid());
                 $mqtt->connect();
 
                 $mqtt->publish('sidebar/chat', json_encode([
@@ -949,7 +952,7 @@ class WhatsAppController extends Controller
 
                 $mqtt->disconnect();
             } catch (\Throwable $e) {
-                Log::error('MQTT Error (sendMedia): ' . $e->getMessage());
+                Log::error('MQTT Error (sendMedia): '.$e->getMessage());
             }
 
             return response()->json([
@@ -968,7 +971,7 @@ class WhatsAppController extends Controller
                 ],
             ], 200);
         } catch (\Throwable $e) {
-            Log::error('Error sendMedia: ' . $e->getMessage());
+            Log::error('Error sendMedia: '.$e->getMessage());
             $this->auditService->recordMessageAction(
                 'media_send_failed',
                 'Fallo al enviar archivo al chat',
@@ -983,6 +986,7 @@ class WhatsAppController extends Controller
                     ],
                 ],
             );
+
             return response()->json(['error' => 'Error interno al enviar media'], 500);
         }
     }
@@ -1006,7 +1010,7 @@ class WhatsAppController extends Controller
         $contact = $chat->contact;
         $actor = $request->user();
 
-        if (!$contact || !$contact->whatsapp_id) {
+        if (! $contact || ! $contact->whatsapp_id) {
             return response()->json(['error' => 'Contacto sin whatsapp_id'], 422);
         }
 
@@ -1050,11 +1054,11 @@ class WhatsAppController extends Controller
             'contacts' => [$contactPayload],
         ];
 
-        $url = 'https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages';
+        $url = 'https://graph.facebook.com/v22.0/'.$this->whatsappPhoneId().'/messages';
         $response = Http::withToken($this->whatsappAccessToken())->post($url, $payload);
 
         if ($response->failed()) {
-            Log::error('API Error (sendContact): ' . $response->body(), [
+            Log::error('API Error (sendContact): '.$response->body(), [
                 'chat_id' => $chat->id,
                 'payload' => $payload,
             ]);
@@ -1112,7 +1116,7 @@ class WhatsAppController extends Controller
         );
 
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_contact_' . uniqid());
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_contact_'.uniqid());
             $mqtt->connect();
 
             $mqtt->publish('sidebar/chat', json_encode([
@@ -1141,7 +1145,7 @@ class WhatsAppController extends Controller
 
             $mqtt->disconnect();
         } catch (MqttClientException $e) {
-            Log::error('MQTT Error (sendContact): ' . $e->getMessage());
+            Log::error('MQTT Error (sendContact): '.$e->getMessage());
         }
 
         return response()->json(['ok' => true, 'message' => $message]);
@@ -1161,7 +1165,7 @@ class WhatsAppController extends Controller
         $contact = $chat->contact;
         $actor = $request->user();
 
-        if (!$contact || !$contact->whatsapp_id) {
+        if (! $contact || ! $contact->whatsapp_id) {
             return response()->json(['error' => 'Contacto sin whatsapp_id'], 422);
         }
 
@@ -1187,11 +1191,11 @@ class WhatsAppController extends Controller
             'location' => $location,
         ];
 
-        $url = 'https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages';
+        $url = 'https://graph.facebook.com/v22.0/'.$this->whatsappPhoneId().'/messages';
         $response = Http::withToken($this->whatsappAccessToken())->post($url, $payload);
 
         if ($response->failed()) {
-            Log::error('API Error (sendLocation): ' . $response->body(), [
+            Log::error('API Error (sendLocation): '.$response->body(), [
                 'chat_id' => $chat->id,
                 'payload' => $payload,
             ]);
@@ -1242,10 +1246,10 @@ class WhatsAppController extends Controller
             ],
         );
 
-        $previewText = '[Ubicacion] ' . ($name !== '' ? $name : ($address !== '' ? $address : "{$location['latitude']}, {$location['longitude']}"));
+        $previewText = '[Ubicacion] '.($name !== '' ? $name : ($address !== '' ? $address : "{$location['latitude']}, {$location['longitude']}"));
 
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_location_' . uniqid());
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_location_'.uniqid());
             $mqtt->connect();
 
             $mqtt->publish('sidebar/chat', json_encode([
@@ -1274,7 +1278,7 @@ class WhatsAppController extends Controller
 
             $mqtt->disconnect();
         } catch (MqttClientException $e) {
-            Log::error('MQTT Error (sendLocation): ' . $e->getMessage());
+            Log::error('MQTT Error (sendLocation): '.$e->getMessage());
         }
 
         return response()->json(['ok' => true, 'message' => $message]);
@@ -1285,6 +1289,7 @@ class WhatsAppController extends Controller
         if (strpos($number, '549') === 0) {
             $areaCode = substr($number, 3, 3);
             $localNumber = substr($number, 6);
+
             return "54{$areaCode}{$localNumber}";
         }
 
@@ -1302,6 +1307,7 @@ class WhatsAppController extends Controller
         if (str_starts_with($mime, 'audio/')) {
             return 'audio';
         }
+
         return 'document';
     }
 
@@ -1320,13 +1326,13 @@ class WhatsAppController extends Controller
     private function sniffAudioContainer(string $path): ?string
     {
         $fh = @fopen($path, 'rb');
-        if (!$fh) {
+        if (! $fh) {
             return null;
         }
         $head = fread($fh, 16);
         fclose($fh);
 
-        if (!$head) {
+        if (! $head) {
             return null;
         }
 
@@ -1357,7 +1363,6 @@ class WhatsAppController extends Controller
      * LÃƒÂ³gica del bot (mini "ÃƒÂ¡rbol" de estados) dentro del controlador.
      */
 
-
     /**
      * Enviar texto por WhatsApp, guardar mensaje y publicar por MQTT.
      * $sender = 'user' (desde tu sistema) o 'contact' si algÃƒÂºn dÃƒÂ­a hicieras eco, etc.
@@ -1373,12 +1378,12 @@ class WhatsAppController extends Controller
     ): Message {
         $contact = $chat->contact;
 
-        if (!$contact || !$contact->whatsapp_id) {
+        if (! $contact || ! $contact->whatsapp_id) {
             throw new \RuntimeException('Contacto sin whatsapp_id');
         }
 
         $accessToken = $this->whatsappAccessToken();
-        $url = 'https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages';
+        $url = 'https://graph.facebook.com/v22.0/'.$this->whatsappPhoneId().'/messages';
         Log::info($url);
 
         $phoneNumber = $this->formatPhoneNumber($contact->whatsapp_id);
@@ -1392,7 +1397,7 @@ class WhatsAppController extends Controller
         $response = Http::withToken($accessToken)->post($url, $data);
 
         if ($response->failed()) {
-            Log::error('API Error (sendWhatsAppText): ' . $response->body());
+            Log::error('API Error (sendWhatsAppText): '.$response->body());
             throw new \RuntimeException('Error enviando mensaje a WhatsApp');
         }
 
@@ -1411,7 +1416,7 @@ class WhatsAppController extends Controller
 
         // MQTT
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_' . uniqid());
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_'.uniqid());
             $mqtt->connect();
 
             // Sidebar
@@ -1442,7 +1447,7 @@ class WhatsAppController extends Controller
 
             $mqtt->disconnect();
         } catch (MqttClientException $e) {
-            Log::error('MQTT Error (sendWhatsAppText): ' . $e->getMessage());
+            Log::error('MQTT Error (sendWhatsAppText): '.$e->getMessage());
         }
 
         return $message;
@@ -1471,7 +1476,7 @@ class WhatsAppController extends Controller
 
         // MQTT
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_' . uniqid());
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_'.uniqid());
             $mqtt->connect();
 
             $mqtt->publish('sidebar/chat', json_encode([
@@ -1500,7 +1505,7 @@ class WhatsAppController extends Controller
 
             $mqtt->disconnect();
         } catch (MqttClientException $e) {
-            Log::error('MQTT Error (persistAndPublishOutgoing): ' . $e->getMessage());
+            Log::error('MQTT Error (persistAndPublishOutgoing): '.$e->getMessage());
         }
     }
 
@@ -1530,7 +1535,7 @@ class WhatsAppController extends Controller
         ]);
 
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_media_bot_' . uniqid());
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_media_bot_'.uniqid());
             $mqtt->connect();
 
             $mqtt->publish('sidebar/chat', json_encode([
@@ -1559,16 +1564,15 @@ class WhatsAppController extends Controller
 
             $mqtt->disconnect();
         } catch (MqttClientException $e) {
-            Log::error('MQTT Error (persistAndPublishOutgoingMedia): ' . $e->getMessage());
+            Log::error('MQTT Error (persistAndPublishOutgoingMedia): '.$e->getMessage());
         }
     }
-
 
     private function ensureChatUsesDefaultFlow(Chat $chat): ?BotFlow
     {
         $flow = $this->getDefaultFlow();
 
-        if (!$flow || !$flow->start_node_id) {
+        if (! $flow || ! $flow->start_node_id) {
             return null;
         }
 
@@ -1584,7 +1588,7 @@ class WhatsAppController extends Controller
         }
 
         // Si ya estÃƒÂ¡ en el default, pero no tiene nodo, lo inicializamos
-        if (!$chat->bot_node_id) {
+        if (! $chat->bot_node_id) {
             $chat->bot_node_id = $flow->start_node_id;
             $chat->bot_enabled = true;
             $chat->bot_state = $chat->bot_state ?? [];
@@ -1593,8 +1597,6 @@ class WhatsAppController extends Controller
 
         return $flow;
     }
-
-
 
     private function handleBotFromDb(Chat $chat, Message $incoming, ?string $interactiveReplyId = null): ?BotNode
     {
@@ -1607,7 +1609,7 @@ class WhatsAppController extends Controller
             if (in_array($responseMode, ['buttons', 'list'], true)) {
                 $option = $this->resolvePendingInputOption($pending, $interactiveReplyId, $value);
 
-                if (!$option) {
+                if (! $option) {
                     $state = $this->getState($chat);
                     $state['pending_input']['last_error'] = $pending['error_message'] ?? 'ElegÃƒÂ­ una opciÃƒÂ³n vÃƒÂ¡lida.';
                     $this->setState($chat, $state);
@@ -1630,18 +1632,17 @@ class WhatsAppController extends Controller
                 return BotNode::find($pending['node_id']);
             }
 
-
             $regex = trim((string) ($pending['validation_regex'] ?? ''));
 
             if ($regex !== '') {
                 $pattern = $regex;
                 $hasDelimiters = str_starts_with($pattern, '/') && strrpos($pattern, '/') !== 0;
 
-                if (!$hasDelimiters) {
-                    $pattern = '/' . str_replace('/', '\/', $pattern) . '/';
+                if (! $hasDelimiters) {
+                    $pattern = '/'.str_replace('/', '\/', $pattern).'/';
                 }
 
-                if (@preg_match($pattern, '') !== false && !preg_match($pattern, $value)) {
+                if (@preg_match($pattern, '') !== false && ! preg_match($pattern, $value)) {
                     $state = $this->getState($chat);
                     $state['pending_input']['last_error'] = $pending['error_message'] ?? 'Valor invÃƒÂ¡lido, intentÃƒÂ¡ de nuevo.';
                     $this->setState($chat, $state);
@@ -1662,11 +1663,12 @@ class WhatsAppController extends Controller
             $this->clearPendingInput($chat);
 
             // Ã¢Å“â€¦ CASO: finalizar flujo
-            if (!$nextId) {
+            if (! $nextId) {
                 $flow = $this->getDefaultFlow();
                 if ($flow) {
                     $this->resetChatToStartFromFlow($chat, $flow, 'input_terminal');
                 }
+
                 return null;
             }
 
@@ -1682,19 +1684,19 @@ class WhatsAppController extends Controller
         }
 
         // Ã¢Å“â€¦ 1) Si el bot estÃƒÂ¡ apagado, no respondemos
-        if (!$chat->bot_enabled) {
+        if (! $chat->bot_enabled) {
             return null;
         }
 
         $flow = $this->ensureChatUsesDefaultFlow($chat);
 
-        if (!$flow || !$chat->bot_node_id) {
+        if (! $flow || ! $chat->bot_node_id) {
             return null;
         }
 
         /** @var BotNode|null $currentNode */
         $currentNode = BotNode::find($chat->bot_node_id);
-        if (!$currentNode) {
+        if (! $currentNode) {
             return null;
         }
 
@@ -1704,8 +1706,9 @@ class WhatsAppController extends Controller
 
             case 'buttons':
             case 'list':
-                if (!$interactiveReplyId)
+                if (! $interactiveReplyId) {
                     return $currentNode;
+                }
 
                 $settings = $currentNode->settings ?? [];
                 $options = $settings['buttons'] ?? $settings['rows'] ?? [];
@@ -1718,21 +1721,22 @@ class WhatsAppController extends Controller
                     }
                 }
 
-                if (!$nextNodeId)
+                if (! $nextNodeId) {
                     return $currentNode;
+                }
 
                 $nextNode = BotNode::where('flow_id', $currentNode->flow_id)
                     ->where('id', $nextNodeId)
                     ->first();
 
-                if (!$nextNode)
+                if (! $nextNode) {
                     return null;
+                }
 
                 $chat->bot_node_id = $nextNode->id;
                 $chat->save();
 
                 return $nextNode;
-
 
             case 'input':
             case 'person_lookup':
@@ -1764,6 +1768,7 @@ class WhatsAppController extends Controller
                     if ($menuNode) {
                         $chat->bot_node_id = $menuNode->id;
                         $chat->save();
+
                         return $menuNode;
                     }
                 }
@@ -1778,7 +1783,6 @@ class WhatsAppController extends Controller
 
             case 'handoff':
                 return $currentNode;
-
 
             default:
                 return null;
@@ -1826,7 +1830,7 @@ class WhatsAppController extends Controller
             $chat->save();
 
             try {
-                $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_status_bot_' . uniqid());
+                $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_status_bot_'.uniqid());
                 $mqtt->connect();
 
                 $mqtt->publish("status_bot/chat/{$chat->id}", json_encode([
@@ -1836,7 +1840,7 @@ class WhatsAppController extends Controller
 
                 $mqtt->disconnect();
             } catch (\Throwable $e) {
-                Log::error('MQTT Error (handoff status_bot): ' . $e->getMessage());
+                Log::error('MQTT Error (handoff status_bot): '.$e->getMessage());
             }
 
             return;
@@ -1895,59 +1899,70 @@ class WhatsAppController extends Controller
                 $body = $this->renderTemplate($node->body, $chat, $node);
                 $this->sendWhatsAppText($chat, $body, 'user', 'bot', 'text');
             }
+
             return;
         }
 
         if (in_array($node->type, ['image', 'document', 'video', 'audio'], true)) {
             $this->sendBotMediaNode($chat, $node);
+
             return;
         }
 
         if ($node->type === 'contact') {
             $this->sendBotContactNode($chat, $node);
+
             return;
         }
 
         if ($node->type === 'location') {
             $this->sendBotLocationNode($chat, $node);
+
             return;
         }
 
         // buttons
         if ($node->type === 'buttons') {
             $this->sendWhatsAppButtons($chat, $node);
+
             return;
         }
 
         // list
         if ($node->type === 'list') {
             $this->sendWhatsAppList($chat, $node);
+
             return;
         }
 
         // person lookup
         if ($node->type === 'person_lookup') {
             $this->sendPersonLookupNode($chat, $node);
+
             return;
         }
 
         if ($node->type === 'person_create') {
             $this->sendPersonCreateNode($chat, $node);
+
             return;
         }
 
         if ($node->type === 'appointment_lookup') {
             $this->sendAppointmentLookupNode($chat, $node);
+
             return;
         }
 
         if ($node->type === 'appointment_create') {
             $this->sendAppointmentCreateNode($chat, $node);
+
             return;
         }
 
         if ($node->type === 'appointment_cancel') {
             $this->sendAppointmentCancelNode($chat, $node);
+
             return;
         }
 
@@ -1959,6 +1974,7 @@ class WhatsAppController extends Controller
             'health_insurance_plan_select',
         ], true)) {
             $this->sendAlephooSelectionNode($chat, $node);
+
             return;
         }
     }
@@ -1966,12 +1982,12 @@ class WhatsAppController extends Controller
     private function sendBotMediaNode(Chat $chat, BotNode $node): void
     {
         $contact = $chat->contact;
-        if (!$contact || !$contact->whatsapp_id) {
+        if (! $contact || ! $contact->whatsapp_id) {
             return;
         }
 
         $mediaType = (string) $node->type;
-        if (!in_array($mediaType, ['image', 'document', 'video', 'audio'], true)) {
+        if (! in_array($mediaType, ['image', 'document', 'video', 'audio'], true)) {
             return;
         }
 
@@ -1984,6 +2000,7 @@ class WhatsAppController extends Controller
                 'node_id' => $node->id,
                 'type' => $mediaType,
             ]);
+
             return;
         }
 
@@ -1994,7 +2011,7 @@ class WhatsAppController extends Controller
 
         $accessToken = $this->whatsappAccessToken();
         $phoneId = $this->whatsappPhoneId();
-        $url = 'https://graph.facebook.com/v22.0/' . $phoneId . '/messages';
+        $url = 'https://graph.facebook.com/v22.0/'.$phoneId.'/messages';
         $phoneNumber = $this->formatPhoneNumber($contact->whatsapp_id);
 
         $mediaReference = null;
@@ -2041,7 +2058,7 @@ class WhatsAppController extends Controller
 
         $response = Http::withToken($accessToken)->post($url, $payload);
         if ($response->failed()) {
-            Log::error('API Error (sendBotMediaNode): ' . $response->body(), [
+            Log::error('API Error (sendBotMediaNode): '.$response->body(), [
                 'chat_id' => $chat->id,
                 'node_id' => $node->id,
                 'type' => $mediaType,
@@ -2072,7 +2089,7 @@ class WhatsAppController extends Controller
     private function sendBotContactNode(Chat $chat, BotNode $node): void
     {
         $contact = $chat->contact;
-        if (!$contact || !$contact->whatsapp_id) {
+        if (! $contact || ! $contact->whatsapp_id) {
             return;
         }
 
@@ -2085,7 +2102,7 @@ class WhatsAppController extends Controller
         $title = trim($this->renderTemplate((string) ($settings['title'] ?? ''), $chat, $node));
 
         if ($formattedName === '') {
-            $formattedName = trim($firstName . ' ' . $lastName);
+            $formattedName = trim($firstName.' '.$lastName);
         }
 
         if ($firstName === '') {
@@ -2099,6 +2116,7 @@ class WhatsAppController extends Controller
                 'formatted_name' => $formattedName,
                 'phone' => $phone,
             ]);
+
             return;
         }
 
@@ -2131,11 +2149,11 @@ class WhatsAppController extends Controller
             'contacts' => [$contactPayload],
         ];
 
-        $url = 'https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages';
+        $url = 'https://graph.facebook.com/v22.0/'.$this->whatsappPhoneId().'/messages';
         $response = Http::withToken($this->whatsappAccessToken())->post($url, $payload);
 
         if ($response->failed()) {
-            Log::error('API Error (sendBotContactNode): ' . $response->body(), [
+            Log::error('API Error (sendBotContactNode): '.$response->body(), [
                 'chat_id' => $chat->id,
                 'node_id' => $node->id,
                 'payload' => $payload,
@@ -2163,7 +2181,7 @@ class WhatsAppController extends Controller
         ]);
 
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_contact_bot_' . uniqid());
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_contact_bot_'.uniqid());
             $mqtt->connect();
 
             $mqtt->publish('sidebar/chat', json_encode([
@@ -2191,14 +2209,14 @@ class WhatsAppController extends Controller
             ]), 0);
             $mqtt->disconnect();
         } catch (MqttClientException $e) {
-            Log::error('MQTT Error (sendBotContactNode): ' . $e->getMessage());
+            Log::error('MQTT Error (sendBotContactNode): '.$e->getMessage());
         }
     }
 
     private function sendBotLocationNode(Chat $chat, BotNode $node): void
     {
         $contact = $chat->contact;
-        if (!$contact || !$contact->whatsapp_id) {
+        if (! $contact || ! $contact->whatsapp_id) {
             return;
         }
 
@@ -2215,8 +2233,8 @@ class WhatsAppController extends Controller
         if (
             $latitudeRaw === ''
             || $longitudeRaw === ''
-            || !is_numeric($latitudeNormalized)
-            || !is_numeric($longitudeNormalized)
+            || ! is_numeric($latitudeNormalized)
+            || ! is_numeric($longitudeNormalized)
             || $latitude < -90
             || $latitude > 90
             || $longitude < -180
@@ -2228,6 +2246,7 @@ class WhatsAppController extends Controller
                 'latitude' => $latitudeRaw,
                 'longitude' => $longitudeRaw,
             ]);
+
             return;
         }
 
@@ -2251,11 +2270,11 @@ class WhatsAppController extends Controller
             'location' => $locationPayload,
         ];
 
-        $url = 'https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages';
+        $url = 'https://graph.facebook.com/v22.0/'.$this->whatsappPhoneId().'/messages';
         $response = Http::withToken($this->whatsappAccessToken())->post($url, $payload);
 
         if ($response->failed()) {
-            Log::error('API Error (sendBotLocationNode): ' . $response->body(), [
+            Log::error('API Error (sendBotLocationNode): '.$response->body(), [
                 'chat_id' => $chat->id,
                 'node_id' => $node->id,
                 'payload' => $payload,
@@ -2276,10 +2295,10 @@ class WhatsAppController extends Controller
             'whatsapp_message_id' => $response->json('messages.0.id'),
         ]);
 
-        $previewText = '[Ubicacion] ' . ($name !== '' ? $name : ($address !== '' ? $address : "{$latitude}, {$longitude}"));
+        $previewText = '[Ubicacion] '.($name !== '' ? $name : ($address !== '' ? $address : "{$latitude}, {$longitude}"));
 
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_location_bot_' . uniqid());
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_location_bot_'.uniqid());
             $mqtt->connect();
 
             $mqtt->publish('sidebar/chat', json_encode([
@@ -2308,7 +2327,7 @@ class WhatsAppController extends Controller
 
             $mqtt->disconnect();
         } catch (MqttClientException $e) {
-            Log::error('MQTT Error (sendBotLocationNode): ' . $e->getMessage());
+            Log::error('MQTT Error (sendBotLocationNode): '.$e->getMessage());
         }
     }
 
@@ -2318,13 +2337,13 @@ class WhatsAppController extends Controller
             return $source;
         }
 
-        return url('/' . ltrim($source, '/'));
+        return url('/'.ltrim($source, '/'));
     }
 
     private function uploadLocalBotMediaToWhatsApp(string $source, string $mediaType, string $filename, string $accessToken, string $phoneId): string|false|null
     {
         $localPath = $this->localPublicStoragePathFromSource($source);
-        if (!$localPath) {
+        if (! $localPath) {
             return null;
         }
 
@@ -2354,6 +2373,7 @@ class WhatsAppController extends Controller
                 'size' => $fileSize,
                 'max_size' => $maxSize,
             ]);
+
             return false;
         }
 
@@ -2368,13 +2388,14 @@ class WhatsAppController extends Controller
                 'audio/opus',
             ];
 
-            if (!in_array(strtolower($uploadMime), $allowedAudioMimes, true)) {
+            if (! in_array(strtolower($uploadMime), $allowedAudioMimes, true)) {
                 Log::error('sendBotMediaNode: audio no soportado para WhatsApp', [
                     'source' => $source,
                     'mime' => $mime,
                     'upload_mime' => $uploadMime,
                     'sniff' => $sniff,
                 ]);
+
                 return false;
             }
 
@@ -2385,6 +2406,7 @@ class WhatsAppController extends Controller
                     'upload_mime' => $uploadMime,
                     'sniff' => $sniff,
                 ]);
+
                 return false;
             }
             if ($uploadMime === 'audio/mpeg' && $sniff !== 'mp3') {
@@ -2394,6 +2416,7 @@ class WhatsAppController extends Controller
                     'upload_mime' => $uploadMime,
                     'sniff' => $sniff,
                 ]);
+
                 return false;
             }
             if (str_starts_with($uploadMime, 'audio/ogg') && $sniff !== 'ogg') {
@@ -2403,16 +2426,18 @@ class WhatsAppController extends Controller
                     'upload_mime' => $uploadMime,
                     'sniff' => $sniff,
                 ]);
+
                 return false;
             }
         }
 
         $handle = fopen($localPath, 'r');
-        if (!$handle) {
+        if (! $handle) {
             Log::error('sendBotMediaNode: no se pudo abrir archivo local', [
                 'source' => $source,
                 'path' => $localPath,
             ]);
+
             return false;
         }
 
@@ -2428,23 +2453,25 @@ class WhatsAppController extends Controller
         }
 
         if ($uploadResponse->failed()) {
-            Log::error('API Error (sendBotMediaNode upload): ' . $uploadResponse->body(), [
+            Log::error('API Error (sendBotMediaNode upload): '.$uploadResponse->body(), [
                 'source' => $source,
                 'path' => $localPath,
                 'type' => $mediaType,
                 'mime' => $mime,
                 'upload_mime' => $uploadMime,
             ]);
+
             return false;
         }
 
         $mediaId = $uploadResponse->json('id');
-        if (!$mediaId) {
+        if (! $mediaId) {
             Log::error('sendBotMediaNode upload: Meta no devolviÃƒÂ³ media_id', [
                 'source' => $source,
                 'path' => $localPath,
                 'type' => $mediaType,
             ]);
+
             return false;
         }
 
@@ -2478,7 +2505,7 @@ class WhatsAppController extends Controller
         }
 
         $relativePath = ltrim($relativePath, '/');
-        if ($relativePath === '' || !Storage::disk('public')->exists($relativePath)) {
+        if ($relativePath === '' || ! Storage::disk('public')->exists($relativePath)) {
             return null;
         }
 
@@ -2516,7 +2543,6 @@ class WhatsAppController extends Controller
         $messageToSend = null;
         $appointmentsToSend = [];
 
-
         if ($dni === '') {
             $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'missing_dni']));
             $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos porque falta el DNI.');
@@ -2525,7 +2551,7 @@ class WhatsAppController extends Controller
             $lookupUrl = $this->alephooPersonLookupUrl($dni);
             $apiKey = $this->alephooApiKey();
 
-            if (!$this->isAlephooEndpointEnabled('/personas/{dni}')) {
+            if (! $this->isAlephooEndpointEnabled('/personas/{dni}')) {
                 $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'endpoint_disabled']));
                 $messageToSend = (string) ($settings['error_message'] ?? 'La consulta de datos personales no esta habilitada en este momento.');
                 $targetNextNodeId = $settings['error_next_node_id'] ?? null;
@@ -2605,7 +2631,7 @@ class WhatsAppController extends Controller
                     $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos en este momento.');
                     $targetNextNodeId = $settings['error_next_node_id'] ?? null;
 
-                    Log::error('Hospital API person lookup failed: ' . $e->getMessage(), [
+                    Log::error('Hospital API person lookup failed: '.$e->getMessage(), [
                         'chat_id' => $chat->id,
                         'node_id' => $node->id,
                         'dni' => $dni,
@@ -2638,7 +2664,7 @@ class WhatsAppController extends Controller
             $this->setVars($chat, array_merge($baseVars, ['turnos_lookup_status' => 'missing_person']));
             $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus turnos porque falta identificar a la persona.');
             $targetNextNodeId = $settings['error_next_node_id'] ?? null;
-        } elseif (!$this->isAlephooEndpointEnabled('/admision/turnos')) {
+        } elseif (! $this->isAlephooEndpointEnabled('/admision/turnos')) {
             $this->setVars($chat, array_merge($baseVars, ['turnos_lookup_status' => 'endpoint_disabled']));
             $messageToSend = (string) ($settings['error_message'] ?? 'La consulta de turnos no esta habilitada en este momento.');
             $targetNextNodeId = $settings['error_next_node_id'] ?? null;
@@ -2658,7 +2684,7 @@ class WhatsAppController extends Controller
                     $now = new \DateTimeImmutable('now', $timezone);
                     $query = [
                         'filter[persona]' => $personId,
-                        'filter[incluirAdHoc]' => !empty($settings['include_ad_hoc']) ? 'true' : 'false',
+                        'filter[incluirAdHoc]' => ! empty($settings['include_ad_hoc']) ? 'true' : 'false',
                         'filter[nocancelado]' => 'true',
                         'offset' => 0,
                         // En Alephoo filter[fecha] es una igualdad, no un "desde".
@@ -2675,7 +2701,7 @@ class WhatsAppController extends Controller
                     $response = Http::timeout($timeout)
                         ->accept('application/vnd.api+json')
                         ->withBasicAuth($username, $password)
-                        ->get($baseUrl . '/admision/turnos', $query);
+                        ->get($baseUrl.'/admision/turnos', $query);
 
                     Log::info('Alephoo active appointments response', [
                         'chat_id' => $chat->id,
@@ -2689,7 +2715,7 @@ class WhatsAppController extends Controller
                         $appointments = $this->normalizeActiveAppointments(
                             is_array($response->json()) ? $response->json() : [],
                             $now,
-                            !array_key_exists('exclude_elapsed_today', $settings) || !empty($settings['exclude_elapsed_today'])
+                            ! array_key_exists('exclude_elapsed_today', $settings) || ! empty($settings['exclude_elapsed_today'])
                         );
 
                         if ($appointments !== []) {
@@ -2737,7 +2763,7 @@ class WhatsAppController extends Controller
                     $this->setVars($chat, array_merge($baseVars, ['turnos_lookup_status' => 'error']));
                     $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus turnos en este momento.');
                     $targetNextNodeId = $settings['error_next_node_id'] ?? null;
-                    Log::error('Alephoo active appointments lookup failed: ' . $e->getMessage(), [
+                    Log::error('Alephoo active appointments lookup failed: '.$e->getMessage(), [
                         'chat_id' => $chat->id,
                         'node_id' => $node->id,
                         'person_id' => $personId,
@@ -2760,7 +2786,7 @@ class WhatsAppController extends Controller
                 }
 
                 if ($selectionMode) {
-                    $replyId = 'cancel_appointment:' . (string) $appointment['id'];
+                    $replyId = 'cancel_appointment:'.(string) $appointment['id'];
                     $buttonTitle = trim((string) ($settings['cancel_button_text'] ?? 'Cancelar'));
                     $this->sendAppointmentCancelChoice(
                         $chat,
@@ -2837,7 +2863,7 @@ class WhatsAppController extends Controller
         string $buttonTitle
     ): void {
         $contact = $chat->contact;
-        if (!$contact || !$contact->whatsapp_id) {
+        if (! $contact || ! $contact->whatsapp_id) {
             return;
         }
 
@@ -2858,14 +2884,15 @@ class WhatsAppController extends Controller
         ];
 
         $response = Http::withToken($this->whatsappAccessToken())
-            ->post('https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages', $payload);
+            ->post('https://graph.facebook.com/v22.0/'.$this->whatsappPhoneId().'/messages', $payload);
 
         if ($response->failed()) {
-            Log::error('API Error (sendAppointmentCancelChoice): ' . $response->body(), [
+            Log::error('API Error (sendAppointmentCancelChoice): '.$response->body(), [
                 'chat_id' => $chat->id,
                 'node_id' => $node->id,
                 'reply_id' => $replyId,
             ]);
+
             return;
         }
 
@@ -2896,7 +2923,7 @@ class WhatsAppController extends Controller
 
             if ($node->type === 'health_insurance_select') {
                 $turnosConfiguration = $this->turnosConfiguration();
-                if (!$this->isAlephooEndpointEnabled('/obrasocial')) {
+                if (! $this->isAlephooEndpointEnabled('/obrasocial')) {
                     throw new \RuntimeException('El endpoint de obras sociales no esta habilitado.');
                 }
                 $queryVariable = trim((string) ($settings['query_variable'] ?? 'obra_social_busqueda'));
@@ -2905,20 +2932,19 @@ class WhatsAppController extends Controller
                     throw new \RuntimeException('Falta el texto de busqueda de obra social.');
                 }
 
-                $response = $client->get($baseUrl . '/obrasocial');
-                if (!$response->successful()) {
+                $response = $client->get($baseUrl.'/obrasocial');
+                if (! $response->successful()) {
                     throw new \RuntimeException("Alephoo respondio {$response->status()} al consultar obras sociales.");
                 }
 
                 $allowedInsuranceIds = array_map('strval', $turnosConfiguration['health_insurances'] ?? []);
                 $needle = mb_strtolower(Str::ascii($query));
                 $items = is_array($response->json()) ? $response->json() : [];
-                $items = array_values(array_filter($items, fn($item) =>
-                    is_array($item)
+                $items = array_values(array_filter($items, fn ($item) => is_array($item)
                     && in_array((string) ($item['id'] ?? ''), $allowedInsuranceIds, true)
                     && str_contains(mb_strtolower(Str::ascii((string) ($item['nombre'] ?? ''))), $needle)
                 ));
-                usort($items, fn($a, $b) => strcasecmp(
+                usort($items, fn ($a, $b) => strcasecmp(
                     (string) ($a['nombre'] ?? ''),
                     (string) ($b['nombre'] ?? '')
                 ));
@@ -2928,7 +2954,7 @@ class WhatsAppController extends Controller
                     $name = trim((string) ($item['nombre'] ?? ''));
                     if ($id !== '' && $name !== '') {
                         $rows[] = [
-                            'id' => 'insurance:' . $id,
+                            'id' => 'insurance:'.$id,
                             'title' => Str::limit($name, 24, ''),
                             'description' => '',
                             'vars' => [
@@ -2940,7 +2966,7 @@ class WhatsAppController extends Controller
                 }
             } elseif ($node->type === 'health_insurance_plan_select') {
                 $turnosConfiguration = $this->turnosConfiguration();
-                if (!$this->isAlephooEndpointEnabled('/planes/{id}')) {
+                if (! $this->isAlephooEndpointEnabled('/planes/{id}')) {
                     throw new \RuntimeException('El endpoint de planes no esta habilitado.');
                 }
 
@@ -2950,8 +2976,8 @@ class WhatsAppController extends Controller
                     throw new \RuntimeException('Falta el ID de obra social.');
                 }
 
-                $response = $client->get($baseUrl . '/planes/' . $insuranceId);
-                if (!$response->successful()) {
+                $response = $client->get($baseUrl.'/planes/'.$insuranceId);
+                if (! $response->successful()) {
                     throw new \RuntimeException("Alephoo respondio {$response->status()} al consultar planes.");
                 }
 
@@ -2960,11 +2986,10 @@ class WhatsAppController extends Controller
                     ?? [];
                 $allowedPlanIds = array_map('strval', is_array($configuredPlans) ? $configuredPlans : []);
                 $items = is_array($response->json()) ? $response->json() : [];
-                $items = array_values(array_filter($items, fn($item) =>
-                    is_array($item)
+                $items = array_values(array_filter($items, fn ($item) => is_array($item)
                     && in_array((string) ($item['id'] ?? ''), $allowedPlanIds, true)
                 ));
-                usort($items, fn($a, $b) => strcasecmp(
+                usort($items, fn ($a, $b) => strcasecmp(
                     (string) ($a['nombre'] ?? ''),
                     (string) ($b['nombre'] ?? '')
                 ));
@@ -2974,7 +2999,7 @@ class WhatsAppController extends Controller
                     $name = trim((string) ($item['nombre'] ?? ''));
                     if ($id !== '' && $name !== '') {
                         $rows[] = [
-                            'id' => 'plan:' . $id,
+                            'id' => 'plan:'.$id,
                             'title' => Str::limit($name, 24, ''),
                             'description' => '',
                             'vars' => [
@@ -2986,7 +3011,7 @@ class WhatsAppController extends Controller
                 }
             } elseif ($node->type === 'specialty_search') {
                 $turnosConfiguration = $this->turnosConfiguration();
-                if (!$this->isAlephooEndpointEnabled('/especialidades')) {
+                if (! $this->isAlephooEndpointEnabled('/especialidades')) {
                     throw new \RuntimeException('El endpoint de especialidades no esta habilitado.');
                 }
                 $queryVariable = trim((string) ($settings['query_variable'] ?? 'especialidad_busqueda'));
@@ -2994,25 +3019,24 @@ class WhatsAppController extends Controller
                 if ($query === '') {
                     throw new \RuntimeException('Falta el texto de busqueda de especialidad.');
                 }
-                $response = $client->get($baseUrl . '/especialidades');
-                if (!$response->successful()) {
+                $response = $client->get($baseUrl.'/especialidades');
+                if (! $response->successful()) {
                     throw new \RuntimeException("Alephoo respondio {$response->status()} al consultar especialidades.");
                 }
                 $items = $response->successful() && is_array($response->json()) ? $response->json() : [];
                 $allowedSpecialtyIds = array_map('strval', $turnosConfiguration['specialties']);
                 $needle = mb_strtolower(Str::ascii($query));
-                $items = array_values(array_filter($items, fn($item) =>
-                    is_array($item)
+                $items = array_values(array_filter($items, fn ($item) => is_array($item)
                     && in_array((string) ($item['id'] ?? ''), $allowedSpecialtyIds, true)
                     && str_contains(mb_strtolower(Str::ascii((string) ($item['nombre'] ?? ''))), $needle)
                 ));
-                usort($items, fn($a, $b) => strcasecmp((string) ($a['nombre'] ?? ''), (string) ($b['nombre'] ?? '')));
+                usort($items, fn ($a, $b) => strcasecmp((string) ($a['nombre'] ?? ''), (string) ($b['nombre'] ?? '')));
                 foreach (array_slice($items, 0, 10) as $item) {
                     $id = (string) ($item['id'] ?? '');
                     $name = trim((string) ($item['nombre'] ?? ''));
                     if ($id !== '' && $name !== '') {
                         $rows[] = [
-                            'id' => 'specialty:' . $id,
+                            'id' => 'specialty:'.$id,
                             'title' => Str::limit($name, 24, ''),
                             'description' => '',
                             'vars' => ['especialidad_id' => $id, 'especialidad_nombre' => $name],
@@ -3021,7 +3045,7 @@ class WhatsAppController extends Controller
                 }
             } elseif ($node->type === 'doctor_select') {
                 $turnosConfiguration = $this->turnosConfiguration();
-                if (!$this->isAlephooEndpointEnabled('/profesionales/{especialidad}')) {
+                if (! $this->isAlephooEndpointEnabled('/profesionales/{especialidad}')) {
                     throw new \RuntimeException('El endpoint de profesionales no esta habilitado.');
                 }
                 $specialtyVariable = trim((string) ($settings['specialty_variable'] ?? 'especialidad_id'));
@@ -3029,8 +3053,8 @@ class WhatsAppController extends Controller
                 if ($specialtyId === '') {
                     throw new \RuntimeException('Falta el ID de especialidad.');
                 }
-                $response = $client->get($baseUrl . '/profesionales/' . $specialtyId);
-                if (!$response->successful()) {
+                $response = $client->get($baseUrl.'/profesionales/'.$specialtyId);
+                if (! $response->successful()) {
                     throw new \RuntimeException("Alephoo respondio {$response->status()} al consultar profesionales.");
                 }
                 $items = $response->successful() && is_array($response->json()) ? $response->json() : [];
@@ -3038,8 +3062,7 @@ class WhatsAppController extends Controller
                     ?? $turnosConfiguration['doctors_by_specialty'][(int) $specialtyId]
                     ?? [];
                 $allowedDoctorIds = array_map('strval', is_array($configuredDoctors) ? $configuredDoctors : []);
-                $items = array_values(array_filter($items, fn($item) =>
-                    is_array($item)
+                $items = array_values(array_filter($items, fn ($item) => is_array($item)
                     && in_array((string) ($item['id'] ?? ''), $allowedDoctorIds, true)
                 ));
                 $agendaDaysByDoctor = is_array($turnosConfiguration['doctor_agenda_days'] ?? null)
@@ -3072,7 +3095,7 @@ class WhatsAppController extends Controller
                             ->timeout($this->alephooTimeout())
                             ->acceptJson()
                             ->withHeaders(['X-API-KEY' => $apiKey])
-                            ->get($baseUrl . "/turnos/{$doctorId}/{$specialtyId}/{$days}");
+                            ->get($baseUrl."/turnos/{$doctorId}/{$specialtyId}/{$days}");
                     }
 
                     return $requests;
@@ -3098,7 +3121,7 @@ class WhatsAppController extends Controller
                 }, $items);
                 $successfulAvailabilityQueries = count(array_filter(
                     $availabilityResponses,
-                    fn($response) => $response instanceof \Illuminate\Http\Client\Response
+                    fn ($response) => $response instanceof \Illuminate\Http\Client\Response
                         && $response->successful()
                         && is_array($response->json())
                 ));
@@ -3109,7 +3132,7 @@ class WhatsAppController extends Controller
 
                 $items = array_values(array_filter(
                     $items,
-                    fn($item) => (int) ($item['available_appointments'] ?? 0) > 0
+                    fn ($item) => (int) ($item['available_appointments'] ?? 0) > 0
                 ));
                 usort($items, function ($a, $b) {
                     $availabilityOrder = ((int) ($a['available_appointments'] ?? 0) > 0 ? 0 : 1)
@@ -3120,17 +3143,17 @@ class WhatsAppController extends Controller
                     }
 
                     return strcasecmp(
-                        trim((string) ($a['apellidos'] ?? '') . ' ' . (string) ($a['nombres'] ?? '')),
-                        trim((string) ($b['apellidos'] ?? '') . ' ' . (string) ($b['nombres'] ?? ''))
+                        trim((string) ($a['apellidos'] ?? '').' '.(string) ($a['nombres'] ?? '')),
+                        trim((string) ($b['apellidos'] ?? '').' '.(string) ($b['nombres'] ?? ''))
                     );
                 });
                 foreach (array_slice($items, 0, 10) as $item) {
                     $id = (string) ($item['id'] ?? '');
-                    $name = trim((string) ($item['nombres'] ?? '') . ' ' . (string) ($item['apellidos'] ?? ''));
+                    $name = trim((string) ($item['nombres'] ?? '').' '.(string) ($item['apellidos'] ?? ''));
                     if ($id !== '' && $name !== '') {
                         $availableAppointments = (int) ($item['available_appointments'] ?? 0);
                         $rows[] = [
-                            'id' => 'doctor:' . $id,
+                            'id' => 'doctor:'.$id,
                             'title' => Str::limit($name, 24, ''),
                             'description' => $availableAppointments === 1
                                 ? '1 turno disponible'
@@ -3144,7 +3167,7 @@ class WhatsAppController extends Controller
                     }
                 }
             } else {
-                if (!$this->isAlephooEndpointEnabled('/turnos/{profesional}/{especialidad}/{dias}')) {
+                if (! $this->isAlephooEndpointEnabled('/turnos/{profesional}/{especialidad}/{dias}')) {
                     throw new \RuntimeException('El endpoint de turnos disponibles no esta habilitado.');
                 }
                 $specialtyId = preg_replace('/\D+/u', '', (string) ($vars[trim((string) ($settings['specialty_variable'] ?? 'especialidad_id'))] ?? ''));
@@ -3154,14 +3177,14 @@ class WhatsAppController extends Controller
                 if ($specialtyId === '' || $doctorId === '') {
                     throw new \RuntimeException('Falta especialidad o profesional.');
                 }
-                $response = $client->get($baseUrl . "/turnos/{$doctorId}/{$specialtyId}/{$days}");
-                if (!$response->successful()) {
+                $response = $client->get($baseUrl."/turnos/{$doctorId}/{$specialtyId}/{$days}");
+                if (! $response->successful()) {
                     throw new \RuntimeException("Alephoo respondio {$response->status()} al consultar turnos.");
                 }
                 $items = $response->successful() && is_array($response->json()) ? $response->json() : [];
-                usort($items, fn($a, $b) => strcmp(
-                    (string) ($a['fecha'] ?? '') . ' ' . (string) ($a['hora'] ?? ''),
-                    (string) ($b['fecha'] ?? '') . ' ' . (string) ($b['hora'] ?? '')
+                usort($items, fn ($a, $b) => strcmp(
+                    (string) ($a['fecha'] ?? '').' '.(string) ($a['hora'] ?? ''),
+                    (string) ($b['fecha'] ?? '').' '.(string) ($b['hora'] ?? '')
                 ));
                 foreach (array_slice($items, 0, 10) as $index => $item) {
                     $date = (string) ($item['fecha'] ?? '');
@@ -3174,7 +3197,7 @@ class WhatsAppController extends Controller
                         $displayTime = $parsedTime ? $parsedTime->format('H:i') : $time;
 
                         $rows[] = [
-                            'id' => 'slot:' . $index . ':' . $agenda,
+                            'id' => 'slot:'.$index.':'.$agenda,
                             'title' => Str::limit($displayDate, 24, ''),
                             'description' => $displayTime,
                             'vars' => [
@@ -3189,7 +3212,7 @@ class WhatsAppController extends Controller
             }
         } catch (\Throwable $e) {
             $failed = true;
-            Log::error('Hospital API selection node failed: ' . $e->getMessage(), [
+            Log::error('Hospital API selection node failed: '.$e->getMessage(), [
                 'chat_id' => $chat->id,
                 'node_id' => $node->id,
                 'type' => $node->type,
@@ -3210,6 +3233,7 @@ class WhatsAppController extends Controller
                 $node->next_node_id = (int) $targetNextNodeId;
                 $node->setAttribute('runtime_branch_resolved', true);
             }
+
             return;
         }
 
@@ -3222,7 +3246,7 @@ class WhatsAppController extends Controller
             'error_message' => (string) ($settings['invalid_message'] ?? 'Elegi una opcion de la lista.'),
             'next_node_id' => $node->next_node_id,
             'response_mode' => 'list',
-            'options' => array_map(fn($row) => [
+            'options' => array_map(fn ($row) => [
                 'id' => $row['id'],
                 'label' => $row['title'],
                 'next_node_id' => $node->next_node_id,
@@ -3237,12 +3261,12 @@ class WhatsAppController extends Controller
     private function sendDynamicWhatsAppList(Chat $chat, BotNode $node, array $rows): void
     {
         $contact = $chat->contact;
-        if (!$contact || !$contact->whatsapp_id) {
+        if (! $contact || ! $contact->whatsapp_id) {
             return;
         }
         $settings = $this->nodeSettings($node);
         $body = $this->renderTemplate((string) ($node->body ?: 'Selecciona una opcion.'), $chat, $node);
-        $waRows = array_map(fn($row) => [
+        $waRows = array_map(fn ($row) => [
             'id' => (string) $row['id'],
             'title' => (string) $row['title'],
             'description' => $row['description'] !== '' ? (string) $row['description'] : null,
@@ -3264,12 +3288,13 @@ class WhatsAppController extends Controller
             ],
         ];
         $response = Http::withToken($this->whatsappAccessToken())
-            ->post('https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages', $payload);
+            ->post('https://graph.facebook.com/v22.0/'.$this->whatsappPhoneId().'/messages', $payload);
         if ($response->failed()) {
-            Log::error('API Error (sendDynamicWhatsAppList): ' . $response->body());
+            Log::error('API Error (sendDynamicWhatsAppList): '.$response->body());
+
             return;
         }
-        $interactiveOptions = array_map(fn($row) => [
+        $interactiveOptions = array_map(fn ($row) => [
             'id' => $row['id'],
             'label' => $row['title'],
             'description' => $row['description'] ?? '',
@@ -3282,8 +3307,7 @@ class WhatsAppController extends Controller
     {
         $settings = $this->nodeSettings($node);
         $vars = $this->getVars($chat);
-        $value = fn(string $setting, string $default) =>
-            $vars[trim((string) ($settings[$setting] ?? $default))] ?? null;
+        $value = fn (string $setting, string $default) => $vars[trim((string) ($settings[$setting] ?? $default))] ?? null;
 
         $dni = preg_replace('/\D+/u', '', (string) $value('dni_variable', 'dni'));
         $firstName = trim((string) $value('first_name_variable', 'registro_nombres'));
@@ -3317,12 +3341,12 @@ class WhatsAppController extends Controller
             || strlen($dni) > 9
             || mb_strlen($firstName) < 2
             || mb_strlen($lastName) < 2
-            || !$birthDate
+            || ! $birthDate
             || $birthDate > new \DateTimeImmutable('today')
-            || !in_array($gender, ['m', 'f', 'o'], true)
+            || ! in_array($gender, ['m', 'f', 'o'], true)
             || strlen($phoneCode) < 2
             || strlen($phone) < 6
-            || !filter_var($email, FILTER_VALIDATE_EMAIL)
+            || ! filter_var($email, FILTER_VALIDATE_EMAIL)
             || $insuranceId === ''
             || $planId === '';
 
@@ -3331,8 +3355,8 @@ class WhatsAppController extends Controller
             $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
             $messageToSend = (string) ($settings['invalid_message'] ?? 'Algunos datos del paciente no son validos.');
         } elseif (
-            !$this->isAlephooEndpointEnabled('/personas/{dni}')
-            || !$this->isAlephooEndpointEnabled('/crear/persona')
+            ! $this->isAlephooEndpointEnabled('/personas/{dni}')
+            || ! $this->isAlephooEndpointEnabled('/crear/persona')
         ) {
             $resultVars['persona_create_status'] = 'endpoint_disabled';
         } else {
@@ -3390,7 +3414,7 @@ class WhatsAppController extends Controller
                                 ],
                             ],
                         ];
-                        $response = $client->post($baseUrl . '/crear/persona', $payload);
+                        $response = $client->post($baseUrl.'/crear/persona', $payload);
                         $json = is_array($response->json()) ? $response->json() : [];
 
                         if ($response->successful()) {
@@ -3398,7 +3422,7 @@ class WhatsAppController extends Controller
                                 ?? data_get($json, 'data.id')
                                 ?? data_get($json, 'persona.data.id');
 
-                            if (!$personId) {
+                            if (! $personId) {
                                 throw new \RuntimeException('Alephoo no devolvio el ID de la persona creada.');
                             }
 
@@ -3418,7 +3442,7 @@ class WhatsAppController extends Controller
                                 'persona_obra_social_id' => (int) $insuranceId,
                                 'persona_plan_id' => (int) $planId,
                                 'persona_email' => $email,
-                                'persona_contacto_telefono' => $phoneCode . $phone,
+                                'persona_contacto_telefono' => $phoneCode.$phone,
                             ]);
                             $targetNextNodeId = $node->next_node_id;
                             $messageToSend = (string) ($node->body ?: 'Paciente registrado correctamente.');
@@ -3443,7 +3467,7 @@ class WhatsAppController extends Controller
                     }
                 } catch (\Throwable $e) {
                     $resultVars['persona_create_status'] = 'error';
-                    Log::error('Hospital API person create failed: ' . $e->getMessage(), [
+                    Log::error('Hospital API person create failed: '.$e->getMessage(), [
                         'chat_id' => $chat->id,
                         'node_id' => $node->id,
                     ]);
@@ -3476,7 +3500,7 @@ class WhatsAppController extends Controller
     {
         $settings = $this->nodeSettings($node);
         $vars = $this->getVars($chat);
-        $value = fn(string $setting, string $default) => $vars[trim((string) ($settings[$setting] ?? $default))] ?? null;
+        $value = fn (string $setting, string $default) => $vars[trim((string) ($settings[$setting] ?? $default))] ?? null;
 
         $personId = preg_replace('/\D+/u', '', (string) $value('person_variable', 'persona_id'));
         $specialtyId = preg_replace('/\D+/u', '', (string) $value('specialty_variable', 'especialidad_id'));
@@ -3507,19 +3531,19 @@ class WhatsAppController extends Controller
             $validDate = $candidateDate && $candidateDate->format('Y-m-d') === $date ? $candidateDate : null;
         }
         $validTime = \DateTimeImmutable::createFromFormat('!H:i', substr($time, 0, 5));
-        if (!$validTime || $validTime->format('H:i') !== substr($time, 0, 5)) {
+        if (! $validTime || $validTime->format('H:i') !== substr($time, 0, 5)) {
             $validTime = null;
         }
         $apiDate = $validDate ? $validDate->format('Y-m-d') : '';
         $apiTime = $validTime ? $validTime->format('H:i') : '';
         $missingData = $personId === '' || $specialtyId === '' || $doctorId === '' || $agendaId === ''
-            || !$validDate || !$validTime;
+            || ! $validDate || ! $validTime;
 
         if ($missingData) {
             $resultVars['turno_create_status'] = 'missing_data';
         } elseif (
-            !$this->isAlephooEndpointEnabled('/turnos/{profesional}/{especialidad}/{dias}')
-            || !$this->isAlephooEndpointEnabled('/crear/turno')
+            ! $this->isAlephooEndpointEnabled('/turnos/{profesional}/{especialidad}/{dias}')
+            || ! $this->isAlephooEndpointEnabled('/crear/turno')
         ) {
             $resultVars['turno_create_status'] = 'endpoint_disabled';
         } else {
@@ -3535,17 +3559,16 @@ class WhatsAppController extends Controller
                     $availability = Http::timeout($this->alephooTimeout())
                         ->acceptJson()
                         ->withHeaders(['X-API-KEY' => $apiKey])
-                        ->get($baseUrl . "/turnos/{$doctorId}/{$specialtyId}/{$days}");
+                        ->get($baseUrl."/turnos/{$doctorId}/{$specialtyId}/{$days}");
 
                     $slots = $availability->successful() && is_array($availability->json()) ? $availability->json() : [];
-                    $stillAvailable = collect($slots)->contains(fn($slot) =>
-                        is_array($slot)
+                    $stillAvailable = collect($slots)->contains(fn ($slot) => is_array($slot)
                         && substr((string) ($slot['fecha'] ?? ''), 0, 10) === $apiDate
                         && substr((string) ($slot['hora'] ?? ''), 0, 5) === $apiTime
                         && (string) ($slot['agenda'] ?? '') === $agendaId
                     );
 
-                    if (!$stillAvailable) {
+                    if (! $stillAvailable) {
                         $resultVars['turno_create_status'] = 'unavailable';
                         $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
                         $messageToSend = (string) ($settings['unavailable_message'] ?? 'El turno seleccionado ya no esta disponible.');
@@ -3564,7 +3587,7 @@ class WhatsAppController extends Controller
                         $response = Http::timeout($this->alephooTimeout())
                             ->acceptJson()
                             ->withHeaders(['X-API-KEY' => $apiKey])
-                            ->post($baseUrl . '/crear/turno', $payload);
+                            ->post($baseUrl.'/crear/turno', $payload);
 
                         if ($response->successful()) {
                             $json = is_array($response->json()) ? $response->json() : [];
@@ -3593,7 +3616,7 @@ class WhatsAppController extends Controller
                     }
                 } catch (\Throwable $e) {
                     $resultVars['turno_create_status'] = 'error';
-                    Log::error('Hospital API appointment create failed: ' . $e->getMessage(), [
+                    Log::error('Hospital API appointment create failed: '.$e->getMessage(), [
                         'chat_id' => $chat->id,
                         'node_id' => $node->id,
                     ]);
@@ -3626,7 +3649,7 @@ class WhatsAppController extends Controller
         $appointmentId = preg_replace('/\D+/u', '', (string) ($vars[$appointmentVariable] ?? ''));
         $knownAppointments = is_array($vars['turnos'] ?? null) ? $vars['turnos'] : [];
         $knownAppointmentIds = array_values(array_filter(array_map(
-            fn($appointment) => is_array($appointment) ? (string) ($appointment['id'] ?? '') : '',
+            fn ($appointment) => is_array($appointment) ? (string) ($appointment['id'] ?? '') : '',
             $knownAppointments
         )));
         $resultVars = [
@@ -3640,9 +3663,9 @@ class WhatsAppController extends Controller
 
         if ($appointmentId === '') {
             $resultVars['turno_cancel_status'] = 'missing_data';
-        } elseif ($knownAppointmentIds === [] || !in_array((string) $appointmentId, $knownAppointmentIds, true)) {
+        } elseif ($knownAppointmentIds === [] || ! in_array((string) $appointmentId, $knownAppointmentIds, true)) {
             $resultVars['turno_cancel_status'] = 'invalid_appointment';
-        } elseif (!$this->isAlephooEndpointEnabled('/cancelarTurnos/{turno}')) {
+        } elseif (! $this->isAlephooEndpointEnabled('/cancelarTurnos/{turno}')) {
             $resultVars['turno_cancel_status'] = 'endpoint_disabled';
         } else {
             $key = base64_decode((string) config('services.alephoo_cancel.key'), true);
@@ -3662,7 +3685,7 @@ class WhatsAppController extends Controller
                     $response = Http::timeout($this->alephooTimeout())
                         ->acceptJson()
                         ->withHeaders(['X-API-KEY' => $apiKey])
-                        ->put($baseUrl . '/cancelarTurnos/' . rawurlencode($encryptedId));
+                        ->put($baseUrl.'/cancelarTurnos/'.rawurlencode($encryptedId));
 
                     $resultVars['turno_cancel_response'] = $response->json() ?? $response->body();
 
@@ -3688,7 +3711,7 @@ class WhatsAppController extends Controller
                     }
                 } catch (\Throwable $e) {
                     $resultVars['turno_cancel_status'] = 'error';
-                    Log::error('Alephoo appointment cancellation failed: ' . $e->getMessage(), [
+                    Log::error('Alephoo appointment cancellation failed: '.$e->getMessage(), [
                         'chat_id' => $chat->id,
                         'node_id' => $node->id,
                         'appointment_id' => $appointmentId,
@@ -3732,8 +3755,8 @@ class WhatsAppController extends Controller
         $successful = in_array($status, $successfulStatuses, true);
 
         $this->auditService->recordChatAction(
-            'alephoo_' . $operation . '_' . ($successful ? 'succeeded' : 'failed'),
-            ($successful ? 'Completo' : 'No pudo completar') . " {$label} desde el bot",
+            'alephoo_'.$operation.'_'.($successful ? 'succeeded' : 'failed'),
+            ($successful ? 'Completo' : 'No pudo completar')." {$label} desde el bot",
             $chat,
             null,
             [
@@ -3743,7 +3766,7 @@ class WhatsAppController extends Controller
                     'node_id' => $node->id,
                     'node_key' => $node->key,
                     ...$result,
-                ], fn($value) => $value !== null && $value !== ''),
+                ], fn ($value) => $value !== null && $value !== ''),
             ],
         );
     }
@@ -3788,13 +3811,13 @@ class WhatsAppController extends Controller
         $included = [];
         foreach (($payload['included'] ?? []) as $resource) {
             if (is_array($resource) && isset($resource['type'], $resource['id'])) {
-                $included[(string) $resource['type'] . ':' . (string) $resource['id']] = $resource;
+                $included[(string) $resource['type'].':'.(string) $resource['id']] = $resource;
             }
         }
 
         $appointments = [];
         foreach (($payload['data'] ?? []) as $resource) {
-            if (!is_array($resource)) {
+            if (! is_array($resource)) {
                 continue;
             }
             $attributes = is_array($resource['attributes'] ?? null) ? $resource['attributes'] : [];
@@ -3802,10 +3825,10 @@ class WhatsAppController extends Controller
             $time = substr((string) ($attributes['hora'] ?? ''), 0, 5);
             $dateTime = \DateTimeImmutable::createFromFormat(
                 '!Y-m-d H:i',
-                $date . ' ' . $time,
+                $date.' '.$time,
                 $now->getTimezone()
             );
-            if (!$dateTime || $dateTime->format('Y-m-d') < $now->format('Y-m-d')) {
+            if (! $dateTime || $dateTime->format('Y-m-d') < $now->format('Y-m-d')) {
                 continue;
             }
             if ($excludeElapsedToday && $dateTime < $now) {
@@ -3858,26 +3881,24 @@ class WhatsAppController extends Controller
             ];
         }
 
-        usort($appointments, fn(array $a, array $b) => strcmp($a['fecha'] . ' ' . $a['hora'], $b['fecha'] . ' ' . $b['hora']));
+        usort($appointments, fn (array $a, array $b) => strcmp($a['fecha'].' '.$a['hora'], $b['fecha'].' '.$b['hora']));
 
         return $appointments;
     }
 
     private function includedResource(array $included, mixed $reference): array
     {
-        if (!is_array($reference) || !isset($reference['type'], $reference['id'])) {
+        if (! is_array($reference) || ! isset($reference['type'], $reference['id'])) {
             return [];
         }
 
-        return $included[(string) $reference['type'] . ':' . (string) $reference['id']] ?? [];
+        return $included[(string) $reference['type'].':'.(string) $reference['id']] ?? [];
     }
-
-
 
     private function sendWhatsAppButtons(Chat $chat, BotNode $node, string $botNodeType = 'buttons'): void
     {
         $contact = $chat->contact;
-        if (!$contact || !$contact->whatsapp_id) {
+        if (! $contact || ! $contact->whatsapp_id) {
             return;
         }
 
@@ -3887,11 +3908,12 @@ class WhatsAppController extends Controller
 
         if (empty($buttons)) {
             $this->sendWhatsAppText($chat, $bodyText, 'user', 'bot', $botNodeType, []);
+
             return;
         }
 
         $accessToken = $this->whatsappAccessToken();
-        $url = 'https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages';
+        $url = 'https://graph.facebook.com/v22.0/'.$this->whatsappPhoneId().'/messages';
         $phoneNumber = $this->formatPhoneNumber($contact->whatsapp_id);
 
         $waButtons = $this->normalizeWhatsAppReplyButtons($buttons, $chat, $node);
@@ -3904,6 +3926,7 @@ class WhatsAppController extends Controller
             ]);
 
             $this->sendWhatsAppText($chat, $bodyText, 'user', 'bot', $botNodeType, []);
+
             return;
         }
 
@@ -3939,12 +3962,13 @@ class WhatsAppController extends Controller
         $response = Http::withToken($accessToken)->post($url, $payload);
 
         if ($response->failed()) {
-            Log::error('API Error (sendWhatsAppButtons): ' . $response->body(), [
+            Log::error('API Error (sendWhatsAppButtons): '.$response->body(), [
                 'chat_id' => $chat->id,
                 'node_id' => $node->id,
                 'body_length' => mb_strlen($bodyText),
                 'payload' => $payload,
             ]);
+
             return;
         }
 
@@ -3965,7 +3989,7 @@ class WhatsAppController extends Controller
             $title = trim((string) $title);
 
             if ($title === '') {
-                $title = 'Opcion ' . ($index + 1);
+                $title = 'Opcion '.($index + 1);
             }
 
             $title = mb_substr($title, 0, 20);
@@ -3973,7 +3997,7 @@ class WhatsAppController extends Controller
             $titleSuffix = 2;
 
             while (isset($usedTitles[mb_strtolower($title)])) {
-                $title = mb_substr($baseTitle, 0, max(1, 20 - mb_strlen(' ' . $titleSuffix))) . ' ' . $titleSuffix;
+                $title = mb_substr($baseTitle, 0, max(1, 20 - mb_strlen(' '.$titleSuffix))).' '.$titleSuffix;
                 $titleSuffix++;
             }
 
@@ -3984,7 +4008,7 @@ class WhatsAppController extends Controller
             $id = trim((string) $rawId, '_');
 
             if ($id === '') {
-                $id = 'btn_' . ($index + 1);
+                $id = 'btn_'.($index + 1);
             }
 
             $id = mb_substr($id, 0, 256);
@@ -3992,7 +4016,7 @@ class WhatsAppController extends Controller
             $suffix = 2;
 
             while (isset($usedIds[$id])) {
-                $id = mb_substr($baseId . '_' . $suffix, 0, 256);
+                $id = mb_substr($baseId.'_'.$suffix, 0, 256);
                 $suffix++;
             }
 
@@ -4013,7 +4037,7 @@ class WhatsAppController extends Controller
     private function sendWhatsAppList(Chat $chat, BotNode $node, string $botNodeType = 'list'): void
     {
         $contact = $chat->contact;
-        if (!$contact || !$contact->whatsapp_id) {
+        if (! $contact || ! $contact->whatsapp_id) {
             return;
         }
 
@@ -4030,11 +4054,12 @@ class WhatsAppController extends Controller
 
         if (empty($rows)) {
             $this->sendWhatsAppText($chat, $bodyText, 'user', 'bot', $botNodeType, []);
+
             return;
         }
 
         $accessToken = $this->whatsappAccessToken();
-        $url = 'https://graph.facebook.com/v22.0/' . $this->whatsappPhoneId() . '/messages';
+        $url = 'https://graph.facebook.com/v22.0/'.$this->whatsappPhoneId().'/messages';
 
         $phoneNumber = $this->formatPhoneNumber($contact->whatsapp_id);
 
@@ -4082,7 +4107,8 @@ class WhatsAppController extends Controller
         $response = Http::withToken($accessToken)->post($url, $payload);
 
         if ($response->failed()) {
-            Log::error('API Error (sendWhatsAppList): ' . $response->body());
+            Log::error('API Error (sendWhatsAppList): '.$response->body());
+
             return;
         }
 
@@ -4091,7 +4117,6 @@ class WhatsAppController extends Controller
         // Ã¢Å“â€¦ persistimos el texto renderizado
         $this->persistAndPublishOutgoing($chat, $bodyText, $waMessageId, $botNodeType, $interactiveOptions);
     }
-
 
     public function updateBotStatus(Request $request, Chat $chat)
     {
@@ -4105,17 +4130,17 @@ class WhatsAppController extends Controller
             $chat->bot_enabled = $data['bot_enabled'];
             $chat->save();
 
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_status_bot_' . uniqid());
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_status_bot_'.uniqid());
             $mqtt->connect();
 
-            $mqtt->publish("status_bot/chat/" . $chat->id, json_encode([
+            $mqtt->publish('status_bot/chat/'.$chat->id, json_encode([
                 'chat_id' => $chat->id,
                 'status' => $chat->bot_enabled ? 'enabled' : 'disabled',
             ]), 0);
 
             $mqtt->disconnect();
         } catch (\Throwable $e) {
-            Log::error('MQTT Error (setVar vars): ' . $e->getMessage());
+            Log::error('MQTT Error (setVar vars): '.$e->getMessage());
         }
 
         $this->auditService->recordChatAction(
@@ -4143,7 +4168,7 @@ class WhatsAppController extends Controller
     {
         $flow = $this->getDefaultFlow();
 
-        if (!$flow || !$flow->start_node_id) {
+        if (! $flow || ! $flow->start_node_id) {
             return response()->json([
                 'ok' => false,
                 'message' => 'No hay un flujo activo con nodo inicial configurado.',
@@ -4166,16 +4191,16 @@ class WhatsAppController extends Controller
         $chat->save();
 
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_reset_bot_' . uniqid());
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_reset_bot_'.uniqid());
             $mqtt->connect();
-            $mqtt->publish("status_bot/chat/" . $chat->id, json_encode([
+            $mqtt->publish('status_bot/chat/'.$chat->id, json_encode([
                 'chat_id' => $chat->id,
                 'status' => 'enabled',
                 'reset' => true,
             ]), 0);
             $mqtt->disconnect();
         } catch (\Throwable $e) {
-            Log::error('MQTT Error (resetBotFlow): ' . $e->getMessage());
+            Log::error('MQTT Error (resetBotFlow): '.$e->getMessage());
         }
 
         $this->auditService->recordChatAction(
@@ -4212,7 +4237,7 @@ class WhatsAppController extends Controller
     private function resetChatToStart(Chat $chat): void
     {
         $flow = $this->getDefaultFlow();
-        if (!$flow || !$flow->start_node_id) {
+        if (! $flow || ! $flow->start_node_id) {
             return;
         }
 
@@ -4225,10 +4250,11 @@ class WhatsAppController extends Controller
         $chat->save();
     }
 
-    private function resetChatToStartFromFlow(Chat $chat, BotFlow $flow, string $reason = null): void
+    private function resetChatToStartFromFlow(Chat $chat, BotFlow $flow, ?string $reason = null): void
     {
-        if (!$flow->start_node_id)
+        if (! $flow->start_node_id) {
             return;
+        }
 
         // Ã¢Å“â€¦ preservar variables ya capturadas
         $state = $this->getState($chat);
@@ -4252,15 +4278,16 @@ class WhatsAppController extends Controller
         Log::info("Chat {$chat->id} reset to start_node_id={$flow->start_node_id}. reason={$reason}");
     }
 
-
     private function maybeResetAfterSendingNode(Chat $chat, BotFlow $flow, BotNode $sentNode): bool
     {
-        if (!$chat->bot_enabled)
+        if (! $chat->bot_enabled) {
             return false;
+        }
 
         // Ã¢Å“â€¦ text y person_lookup pueden ser terminales automÃƒÂ¡ticos
         if (in_array($sentNode->type, ['text', 'person_lookup', 'person_create', 'appointment_lookup', 'appointment_create', 'appointment_cancel', 'image', 'document', 'video', 'audio', 'location'], true) && empty($sentNode->next_node_id)) {
             $this->resetChatToStartFromFlow($chat, $flow, 'terminal_text');
+
             return true;
         }
 
@@ -4271,6 +4298,7 @@ class WhatsAppController extends Controller
     {
         // settings puede venir como array o como Collection, lo normalizamos
         $s = $node->settings ?? [];
+
         return is_array($s) ? $s : (array) $s;
     }
 
@@ -4289,13 +4317,15 @@ class WhatsAppController extends Controller
         }
 
         $s = $this->nodeSettings($node);
-        return !empty($s['auto_advance']);
+
+        return ! empty($s['auto_advance']);
     }
 
     private function autoAdvanceDelayMs(BotNode $node): int
     {
         $s = $this->nodeSettings($node);
         $ms = (int) ($s['auto_advance_delay_ms'] ?? 0);
+
         return max(0, min($ms, 5000)); // clamp 0..5000 para no colgar workers
     }
 
@@ -4303,6 +4333,7 @@ class WhatsAppController extends Controller
     {
         $s = $this->nodeSettings($node);
         $hops = (int) ($s['auto_advance_max_hops'] ?? 5);
+
         return max(1, min($hops, 15)); // clamp razonable
     }
 
@@ -4319,14 +4350,17 @@ class WhatsAppController extends Controller
             'should_auto_advance' => $this->shouldAutoAdvance($justSent),
         ]);
 
-        if (!$chat->bot_enabled)
+        if (! $chat->bot_enabled) {
             return;
+        }
 
         // Solo si el nodo reciÃƒÂ©n enviado tiene next_node_id y auto_advance activo
-        if (!$this->shouldAutoAdvance($justSent))
+        if (! $this->shouldAutoAdvance($justSent)) {
             return;
-        if (!$justSent->next_node_id)
+        }
+        if (! $justSent->next_node_id) {
             return;
+        }
 
         $maxHops = $this->autoAdvanceMaxHops($justSent);
         $visited = [];
@@ -4335,8 +4369,9 @@ class WhatsAppController extends Controller
         for ($i = 0; $i < $maxHops; $i++) {
 
             $nextId = $current->next_node_id;
-            if (!$nextId)
+            if (! $nextId) {
                 break;
+            }
 
             // anti-loop por id
             if (isset($visited[$nextId])) {
@@ -4347,8 +4382,9 @@ class WhatsAppController extends Controller
 
             /** @var BotNode|null $nextNode */
             $nextNode = BotNode::where('flow_id', $flow->id)->where('id', $nextId)->first();
-            if (!$nextNode)
+            if (! $nextNode) {
                 break;
+            }
 
             // actualizamos puntero ANTES de enviar (por consistencia)
             $chat->bot_node_id = $nextNode->id;
@@ -4356,8 +4392,9 @@ class WhatsAppController extends Controller
 
             // delay opcional
             $delay = $this->autoAdvanceDelayMs($current);
-            if ($delay > 0)
+            if ($delay > 0) {
                 usleep($delay * 1000);
+            }
 
             // enviamos el nodo
             $this->sendBotNode($chat, $nextNode);
@@ -4368,7 +4405,7 @@ class WhatsAppController extends Controller
             }
 
             // Ã¢Å“â€¦ si el nodo apagÃƒÂ³ el bot (handoff), cortar acÃƒÂ¡
-            if (!$chat->bot_enabled) {
+            if (! $chat->bot_enabled) {
                 break;
             }
 
@@ -4380,7 +4417,7 @@ class WhatsAppController extends Controller
 
             // Si el siguiente nodo tambiÃƒÂ©n tiene auto_advance, seguimos.
             // Si no, cortamos (la conversaciÃƒÂ³n queda esperando input).
-            if (!$this->shouldAutoAdvance($nextNode)) {
+            if (! $this->shouldAutoAdvance($nextNode)) {
                 break;
             }
 
@@ -4399,10 +4436,10 @@ class WhatsAppController extends Controller
         $chat->save();
     }
 
-
     private function getVars(Chat $chat): array
     {
         $state = $this->getState($chat);
+
         return is_array($state['vars'] ?? null) ? $state['vars'] : [];
     }
 
@@ -4434,7 +4471,7 @@ class WhatsAppController extends Controller
         $chat->save();
 
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_vars_batch_' . uniqid());
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_vars_batch_'.uniqid());
             $mqtt->connect();
 
             $mqtt->publish("chat/{$chat->id}/vars", json_encode([
@@ -4447,7 +4484,7 @@ class WhatsAppController extends Controller
 
             $mqtt->disconnect();
         } catch (\Throwable $e) {
-            Log::error('MQTT Error (setVars vars): ' . $e->getMessage());
+            Log::error('MQTT Error (setVars vars): '.$e->getMessage());
         }
     }
 
@@ -4455,8 +4492,6 @@ class WhatsAppController extends Controller
     {
         $this->setVars($chat, [$key => $value]);
     }
-
-
 
     private function setPendingInput(Chat $chat, BotNode $node): void
     {
@@ -4484,12 +4519,12 @@ class WhatsAppController extends Controller
             ? ($settings['buttons'] ?? [])
             : ($responseMode === 'list' ? ($settings['rows'] ?? []) : []);
 
-        if (!is_array($items)) {
+        if (! is_array($items)) {
             return [];
         }
 
         return array_values(array_filter(array_map(function ($item) use ($chat, $node) {
-            if (!is_array($item)) {
+            if (! is_array($item)) {
                 return null;
             }
 
@@ -4550,6 +4585,7 @@ class WhatsAppController extends Controller
     {
         $state = $this->getState($chat);
         $pending = $state['pending_input'] ?? null;
+
         return is_array($pending) ? $pending : null;
     }
 
@@ -4560,8 +4596,9 @@ class WhatsAppController extends Controller
 
     private function renderTemplate(?string $text, Chat $chat, ?BotNode $node = null): string
     {
-        if ($text === null || $text === '')
+        if ($text === null || $text === '') {
             return (string) $text;
+        }
 
         $vars = $this->getVars($chat);
 
@@ -4615,8 +4652,9 @@ class WhatsAppController extends Controller
 
             // pipes (a partir del 2do si usamos default, o del 2do siempre si no)
             $pipeStart = 1;
-            if ($default !== null)
+            if ($default !== null) {
                 $pipeStart = 2;
+            }
 
             for ($i = $pipeStart; $i < count($parts); $i++) {
                 $pipe = strtolower(trim($parts[$i]));
@@ -4634,7 +4672,8 @@ class WhatsAppController extends Controller
         // cualquier texto que no sea un pipe conocido lo tratamos como default
         // (si querÃƒÂ©s, podÃƒÂ©s hacerlo mÃƒÂ¡s estricto)
         $pipes = ['upper', 'lower', 'trim'];
-        return !in_array(strtolower(trim($s)), $pipes, true);
+
+        return ! in_array(strtolower(trim($s)), $pipes, true);
     }
 
     private function applyPipe(string $value, string $pipe): string
@@ -4714,12 +4753,12 @@ class WhatsAppController extends Controller
                 return $response->json('url');
             }
 
-            Log::warning('No se pudo resolver URL de media WhatsApp: ' . $response->status(), [
+            Log::warning('No se pudo resolver URL de media WhatsApp: '.$response->status(), [
                 'media_id' => $mediaId,
                 'response' => $response->body(),
             ]);
         } catch (\Throwable $e) {
-            Log::error('Error resolviendo URL de media WhatsApp: ' . $e->getMessage(), [
+            Log::error('Error resolviendo URL de media WhatsApp: '.$e->getMessage(), [
                 'media_id' => $mediaId,
             ]);
         }
@@ -4775,15 +4814,16 @@ class WhatsAppController extends Controller
         }
 
         if (str_ends_with($baseUrl, '/personas')) {
-            return $baseUrl . '/' . urlencode($dni);
+            return $baseUrl.'/'.urlencode($dni);
         }
 
-        return $baseUrl . '/personas/' . urlencode($dni);
+        return $baseUrl.'/personas/'.urlencode($dni);
     }
 
     private function alephooApiRootUrl(): string
     {
         $baseUrl = $this->alephooBaseUrl();
+
         return str_ends_with($baseUrl, '/personas') ? substr($baseUrl, 0, -9) : $baseUrl;
     }
 
@@ -4806,7 +4846,7 @@ class WhatsAppController extends Controller
             ->withToken($token)
             ->get($url);
 
-        if (!$response->successful()) {
+        if (! $response->successful()) {
             throw new \RuntimeException(
                 "La API de configuracion de turnos respondio {$response->status()}."
             );
@@ -4814,9 +4854,9 @@ class WhatsAppController extends Controller
 
         $configuration = $response->json();
         if (
-            !is_array($configuration)
-            || !is_array($configuration['specialties'] ?? null)
-            || !is_array($configuration['doctors_by_specialty'] ?? null)
+            ! is_array($configuration)
+            || ! is_array($configuration['specialties'] ?? null)
+            || ! is_array($configuration['doctors_by_specialty'] ?? null)
         ) {
             throw new \RuntimeException('La API de configuracion de turnos devolvio una respuesta invalida.');
         }
@@ -4830,7 +4870,7 @@ class WhatsAppController extends Controller
     {
         $raw = (string) $this->runtimeSetting('integrations.alephoo.enabled_endpoints', '');
         $lines = array_values(array_filter(array_map(
-            fn($line) => trim(str_replace('\\', '/', (string) $line)),
+            fn ($line) => trim(str_replace('\\', '/', (string) $line)),
             preg_split('/\r\n|\r|\n/', $raw) ?: []
         )));
 
@@ -4838,10 +4878,10 @@ class WhatsAppController extends Controller
             return true;
         }
 
-        $normalizedEndpoint = '/' . ltrim(str_replace('\\', '/', trim($endpoint)), '/');
+        $normalizedEndpoint = '/'.ltrim(str_replace('\\', '/', trim($endpoint)), '/');
 
         foreach ($lines as $line) {
-            $normalizedLine = '/' . ltrim($line, '/');
+            $normalizedLine = '/'.ltrim($line, '/');
 
             if ($normalizedLine === $normalizedEndpoint) {
                 return true;

@@ -17,9 +17,7 @@ class ChatController extends Controller
     public function __construct(
         private readonly AuditService $auditService,
         private readonly BotInactivityService $botInactivityService,
-    )
-    {
-    }
+    ) {}
 
     public function index()
     {
@@ -37,7 +35,7 @@ class ChatController extends Controller
                 return [
                     'id' => (int) ($chat?->id ?? 0),
                     'name' => $contact->name ?? $contact->whatsapp_id,
-                    'number' => '+' . $contact->whatsapp_id,
+                    'number' => '+'.$contact->whatsapp_id,
                     'lastMessage' => $lastMessage?->body ?? '',
                     'timestamp' => $lastMessage?->created_at,
                     'unread' => $chat
@@ -135,7 +133,7 @@ class ChatController extends Controller
         $beforeOperatorName = $chat->operator?->name ?? null;
 
         if ($data['active']) {
-            if (!$operatorId) {
+            if (! $operatorId) {
                 return response()->json([
                     'ok' => false,
                     'message' => 'No operator id available.',
@@ -165,6 +163,7 @@ class ChatController extends Controller
                         ],
                     ],
                 );
+
                 return response()->json([
                     'ok' => false,
                     'conflict' => true,
@@ -225,7 +224,7 @@ class ChatController extends Controller
         $actor = $request->user();
         $actorId = (int) ($actor?->id ?? 0);
 
-        if (!$actorId || (int) ($chat->operator_id ?? 0) !== $actorId) {
+        if (! $actorId || (int) ($chat->operator_id ?? 0) !== $actorId) {
             return response()->json([
                 'ok' => false,
                 'message' => 'Solo el operador asignado puede finalizar la atencion.',
@@ -241,7 +240,7 @@ class ChatController extends Controller
         ];
 
         $flow = $this->botInactivityService->getDefaultFlow();
-        if (!$flow || !$flow->start_node_id) {
+        if (! $flow || ! $flow->start_node_id) {
             return response()->json([
                 'ok' => false,
                 'message' => 'No hay un flujo activo para reiniciar el bot.',
@@ -292,6 +291,7 @@ class ChatController extends Controller
     public function getMessages($chatId)
     {
         $messages = Message::where('chat_id', $chatId)->get();
+
         return $messages;
     }
 
@@ -318,31 +318,33 @@ class ChatController extends Controller
     private function publishOperatorStatus(int $chatId, array $payload): void
     {
         $host = env('MQTT_HOST') ?: env('VITE_MOSQUITTO_HOST');
-        if (!$host) {
+        if (! $host) {
             Log::warning('MQTT host not configured for operator status publish.');
+
             return;
         }
 
         try {
-            $mqtt = new MqttClient((string) $host, 1883, 'laravel_operator_' . uniqid());
+            $mqtt = new MqttClient((string) $host, 1883, 'laravel_operator_'.uniqid());
             $mqtt->connect();
             $mqtt->publish("operator/chat/{$chatId}", json_encode($payload), 0);
             $mqtt->disconnect();
         } catch (\Throwable $e) {
-            Log::error('MQTT Error (operator status): ' . $e->getMessage());
+            Log::error('MQTT Error (operator status): '.$e->getMessage());
         }
     }
 
     private function publishBotStatus(int $chatId, bool $enabled): void
     {
         $host = env('MQTT_HOST') ?: env('VITE_MOSQUITTO_HOST');
-        if (!$host) {
+        if (! $host) {
             Log::warning('MQTT host not configured for bot status publish.');
+
             return;
         }
 
         try {
-            $mqtt = new MqttClient((string) $host, 1883, 'laravel_status_bot_' . uniqid());
+            $mqtt = new MqttClient((string) $host, 1883, 'laravel_status_bot_'.uniqid());
             $mqtt->connect();
             $mqtt->publish("status_bot/chat/{$chatId}", json_encode([
                 'chat_id' => $chatId,
@@ -350,7 +352,7 @@ class ChatController extends Controller
             ]), 0);
             $mqtt->disconnect();
         } catch (\Throwable $e) {
-            Log::error('MQTT Error (bot status): ' . $e->getMessage());
+            Log::error('MQTT Error (bot status): '.$e->getMessage());
         }
     }
 }

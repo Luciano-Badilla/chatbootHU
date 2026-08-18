@@ -3546,13 +3546,6 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     void persistNodePatch(sourceId, patch)
   }
 
-  const handleCanvasEdgeClick = (_event: unknown, edge: Edge) => {
-    if (isReadOnly) return
-    const sourceId = Number(edge.source)
-    if (!sourceId) return
-    handleCanvasDisconnect(sourceId, edge.sourceHandle ?? "next")
-  }
-
   const canvasNodeTypes = useMemo(
     () => ({
       botNode: CanvasBotNode,
@@ -6396,7 +6389,6 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     elementsSelectable
                     onNodesChange={handleCanvasNodesChange}
                     onConnect={handleCanvasConnect}
-                    onEdgeClick={handleCanvasEdgeClick}
                     onNodeDragStop={handleCanvasNodeDragStop}
                     onPaneClick={requestCloseNodePanel}
                     proOptions={{ hideAttribution: true }}

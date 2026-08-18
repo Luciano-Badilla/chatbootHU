@@ -35,7 +35,7 @@ const HOSPITAL_LOGO_URL = `${APP_URL}/storage/images/hu_icon_new.png`
 const HOSPITAL_FAVICON_URL = `${APP_URL}/favicon-48x48.png`
 
 const navigationItems: Array<{ label: string; href: string; icon: LucideIcon; permission?: string }> = [
-  { label: "Dashboard", href: `${APP_URL}/dashboard`, icon: LayoutDashboard },
+  { label: "Inicio", href: `${APP_URL}/dashboard`, icon: LayoutDashboard },
   { label: "Mensajes", href: `${APP_URL}/chat-panel`, icon: MessageSquare },
   { label: "Agenda", href: `${APP_URL}/agenda-panel`, icon: Contact },
   { label: "Campañas", href: `${APP_URL}/campaigns-panel`, icon: Megaphone, permission: "can_manage_campaigns" },
