@@ -392,7 +392,7 @@ export default function ChatInfo({
     let cancelled = false
     setTotalMessages(null)
 
-    fetch(`${API_BASE}/api/chat/messages/${chat.id}`)
+    fetch(`${API_BASE}/api/chat/messages/${chat.id}?limit=10`)
       .then((r) => (r.ok ? r.json() : Promise.reject(r)))
       .then((data) => {
         const list = Array.isArray(data) ? data : (data?.messages ?? [])
@@ -401,7 +401,7 @@ export default function ChatInfo({
           if (m?.id !== undefined && m?.id !== null) ids.add(String(m.id))
         }
         knownMessageIdsRef.current = ids
-        if (!cancelled) setTotalMessages(Array.isArray(list) ? list.length : 0)
+        if (!cancelled) setTotalMessages(Number(data?.total ?? list.length))
       })
       .catch(() => {
         if (!cancelled) setTotalMessages(0)

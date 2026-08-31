@@ -7,6 +7,7 @@ use App\Http\Controllers\CampaignController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\QuickReplyController;
 use App\Http\Controllers\SettingsController;
 use App\Models\Chat;
 use App\Models\Message;
@@ -39,6 +40,7 @@ Route::middleware('auth')->group(function () {
 
     Route::get('/chat-panel', [ChatController::class, 'index']);
     Route::get('/agenda-panel', [AgendaContactController::class, 'index']);
+    Route::get('/quick-replies-panel', [QuickReplyController::class, 'index']);
     Route::get('/campaigns-panel', [CampaignController::class, 'index'])->middleware('permission:can_manage_campaigns');
 
     Route::get('/bot/flows', [BotFlowController::class, 'index'])->middleware('permission:can_view_flows');

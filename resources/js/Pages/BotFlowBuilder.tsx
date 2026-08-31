@@ -1878,7 +1878,14 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       })
 
       const drafts: NodeDraft[] = []
-      const addInput = (variable: string, suffix: string, body: string, validationRegex = "", errorMessage = "Ingresa un valor valido.") => {
+      const addInput = (
+        variable: string,
+        suffix: string,
+        body: string,
+        validationRegex = "",
+        errorMessage = "Ingresa un valor valido.",
+        settingsOverrides: Record<string, any> = {},
+      ) => {
         if (existingVariables.has(variable)) return
         drafts.push({
           key: `${key}_${suffix}`,
@@ -1889,6 +1896,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             response_mode: "text",
             validation_regex: validationRegex || (variable === "dni" ? "^[0-9]{7,9}$" : ""),
             error_message: variable === "dni" ? "Ingresa un DNI valido, sin puntos." : errorMessage,
+            ...settingsOverrides,
           },
         })
         existingVariables.add(variable)
@@ -1907,7 +1915,21 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           addInput("registro_nombres", "capturar_nombres", "Ingresa tus nombres.", "^.{2,100}$", "Ingresa al menos 2 caracteres.")
           addInput("registro_apellidos", "capturar_apellidos", "Ingresa tus apellidos.", "^.{2,100}$", "Ingresa al menos 2 caracteres.")
           addInput("registro_fecha_nacimiento", "capturar_nacimiento", "Ingresa tu fecha de nacimiento con formato DD/MM/AAAA.", "^\\d{2}/\\d{2}/\\d{4}$", "Usa el formato DD/MM/AAAA.")
-          addInput("registro_genero", "capturar_genero", "Ingresa M, F u O segun corresponda.", "^[mMfFoO]$", "Responde M, F u O.")
+          addInput(
+            "registro_genero",
+            "capturar_genero",
+            "Selecciona tu genero.",
+            "^[mMfFoO]$",
+            "Selecciona M, F u O.",
+            {
+              response_mode: "buttons",
+              buttons: [
+                { id: "genero_m", title: "M", next_node_id: null },
+                { id: "genero_f", title: "F", next_node_id: null },
+                { id: "genero_o", title: "O", next_node_id: null },
+              ],
+            },
+          )
           addInput("registro_codigo_celular", "capturar_codigo", "Ingresa el codigo de area de tu celular, sin 0.", "^[0-9]{2,5}$", "Ingresa un codigo de area valido.")
           addInput("registro_numero_celular", "capturar_celular", "Ingresa el numero de celular, sin 15.", "^[0-9]{6,10}$", "Ingresa un numero de celular valido.")
           addInput("registro_email", "capturar_email", "Ingresa tu correo electronico.", "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$", "Ingresa un correo electronico valido.")

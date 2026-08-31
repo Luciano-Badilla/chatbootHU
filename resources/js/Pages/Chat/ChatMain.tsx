@@ -3,7 +3,7 @@
 import type React from "react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
-import { AudioLines, Bot, Check, CheckCheck, ChevronDown, ChevronUp, Contact, ExternalLink, FileText, Headset, ImageIcon, MapPin, Mic, Play, Plus, Search, Send, Square, User, Video, X } from "lucide-react"
+import { AudioLines, Bot, Check, CheckCheck, ChevronDown, ChevronUp, Contact, ExternalLink, FileText, Headset, ImageIcon, MapPin, MessageSquareText, Mic, Play, Plus, Search, Send, Square, User, Video, X } from "lucide-react"
 import { Button } from "shadcn/components/ui/button"
 import { Input } from "shadcn/components/ui/input"
 import { Avatar } from "shadcn/components/ui/avatar"
@@ -14,6 +14,9 @@ import mqtt from "mqtt"
 import { toast } from "sonner"
 import { format, isToday, isYesterday, parseISO } from "date-fns"
 import { es } from "date-fns/locale"
+import nspell from "nspell"
+import spanishAffUrl from "../../../../node_modules/dictionary-es/index.aff?url"
+import spanishDicUrl from "../../../../node_modules/dictionary-es/index.dic?url"
 
 interface ChatMainProps {
   chat?: Chat
@@ -94,6 +97,34 @@ const emptyLocationDraft: LocationDraft = {
 }
 
 const LOCATION_HISTORY_KEY = "chat.locationHistory"
+
+type QuickReply = {
+  id: number
+  title: string
+  body: string
+}
+
+type SpellingMatch = {
+  word: string
+  start: number
+  end: number
+  suggestions: string[]
+}
+
+const mapApiMessage = (message: any): Message => ({
+  id: message.id,
+  sender: message.sender === "user" ? "user" : "contact",
+  sender_subtype: message.sender_subtype ?? (message.sender === "contact" ? "contact" : "operator"),
+  operator_name: message.operator_name ?? null,
+  bot_node_type: message.bot_node_type ?? null,
+  interactive_options: Array.isArray(message.interactive_options) ? message.interactive_options : null,
+  body: message.body,
+  timestamp: message.timestamp ?? message.created_at ?? new Date().toISOString(),
+  status: message.status ?? null,
+  message_type: message.message_type ?? "text",
+  media_url: message.media_url ?? null,
+  media_name: message.media_name ?? null,
+})
 
 const normalizeContactPhone = (phone: string) => phone.replace(/[^\d+]/g, "")
 
@@ -191,6 +222,8 @@ export default function ChatMain({
   const [messages, setMessages] = useState<Message[]>([])
   const [loading, setLoading] = useState(false)
   const [sending, setSending] = useState(false)
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false)
+  const [hasOlderMessages, setHasOlderMessages] = useState(false)
   const [preview, setPreview] = useState<PreviewMedia | null>(null)
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
   const [highlightBlinkOn, setHighlightBlinkOn] = useState(true)
@@ -205,6 +238,13 @@ export default function ChatMain({
   const [activeSearchIndex, setActiveSearchIndex] = useState(0)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false)
+  const [quickRepliesOpen, setQuickRepliesOpen] = useState(false)
+  const [quickReplies, setQuickReplies] = useState<QuickReply[]>([])
+  const [quickRepliesLoading, setQuickRepliesLoading] = useState(false)
+  const [spellChecker, setSpellChecker] = useState<ReturnType<typeof nspell> | null>(null)
+  const [spellingMatches, setSpellingMatches] = useState<SpellingMatch[]>([])
+  const [activeSpellingMatch, setActiveSpellingMatch] = useState<SpellingMatch | null>(null)
+  const [dismissedSpellingKey, setDismissedSpellingKey] = useState<string | null>(null)
   const [contactModalOpen, setContactModalOpen] = useState(false)
   const [agendaContacts, setAgendaContacts] = useState<AgendaContact[]>([])
   const [agendaSearch, setAgendaSearch] = useState("")
@@ -239,6 +279,9 @@ export default function ChatMain({
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const previousSearchQueryRef = useRef("")
   const attachmentMenuRef = useRef<HTMLDivElement | null>(null)
+  const quickRepliesMenuRef = useRef<HTMLDivElement | null>(null)
+  const messageInputRef = useRef<HTMLInputElement | null>(null)
+  const prependingMessagesRef = useRef(false)
   const locationMapRef = useRef<HTMLDivElement | null>(null)
   const leafletMapRef = useRef<any | null>(null)
   const locationPinRef = useRef<HTMLSpanElement | null>(null)
@@ -251,6 +294,102 @@ export default function ChatMain({
     setSaveContactPromptOpen(false)
     setLastSentContactDraft(null)
     setAttachmentMenuOpen(false)
+    setQuickRepliesOpen(false)
+  }
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadSpellChecker = async () => {
+      try {
+        const [affResponse, dicResponse] = await Promise.all([fetch(spanishAffUrl), fetch(spanishDicUrl)])
+        if (!affResponse.ok || !dicResponse.ok) throw new Error("No se pudo descargar el diccionario")
+        const [aff, dic] = await Promise.all([affResponse.text(), dicResponse.text()])
+        if (!cancelled) setSpellChecker(nspell(aff, dic))
+      } catch (error) {
+        console.error("Error cargando el corrector ortográfico:", error)
+      }
+    }
+
+    void loadSpellChecker()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!spellChecker || !newMessage.trim()) {
+      setSpellingMatches([])
+      setActiveSpellingMatch(null)
+      return
+    }
+
+    const timeout = setTimeout(() => {
+      const matches: SpellingMatch[] = []
+      const words = newMessage.matchAll(/[\p{L}]+/gu)
+
+      for (const match of words) {
+        const word = match[0]
+        const start = match.index ?? 0
+        if (word.length < 2 || word === word.toUpperCase() || spellChecker.correct(word)) continue
+        matches.push({
+          word,
+          start,
+          end: start + word.length,
+          suggestions: spellChecker.suggest(word).slice(0, 5),
+        })
+      }
+
+      setSpellingMatches(matches)
+      setDismissedSpellingKey(null)
+
+      const caret = messageInputRef.current?.selectionStart ?? newMessage.length
+      const closest = matches.find((item) => caret >= item.start && caret <= item.end + 1) ?? matches[0] ?? null
+      setActiveSpellingMatch(closest)
+    }, 450)
+
+    return () => clearTimeout(timeout)
+  }, [newMessage, spellChecker])
+
+  const replaceSpellingMatch = (match: SpellingMatch, replacement: string) => {
+    const nextMessage = `${newMessage.slice(0, match.start)}${replacement}${newMessage.slice(match.end)}`
+    const nextCaret = match.start + replacement.length
+    setNewMessage(nextMessage)
+    setActiveSpellingMatch(null)
+    requestAnimationFrame(() => {
+      messageInputRef.current?.focus()
+      messageInputRef.current?.setSelectionRange(nextCaret, nextCaret)
+    })
+  }
+
+  const activateSpellingMatchAtCaret = () => {
+    const caret = messageInputRef.current?.selectionStart ?? 0
+    const match = spellingMatches.find((item) => caret >= item.start && caret <= item.end)
+    if (match) {
+      setActiveSpellingMatch(match)
+      setDismissedSpellingKey(null)
+    }
+  }
+
+  const renderSpellingOverlay = () => {
+    if (!newMessage || spellingMatches.length === 0) return newMessage
+
+    const parts: React.ReactNode[] = []
+    let cursor = 0
+    spellingMatches.forEach((match) => {
+      parts.push(newMessage.slice(cursor, match.start))
+      parts.push(
+        <span
+          key={`${match.start}-${match.word}`}
+          className="decoration-red-500 decoration-wavy underline decoration-1 underline-offset-4"
+        >
+          {newMessage.slice(match.start, match.end)}
+        </span>,
+      )
+      cursor = match.end
+    })
+    parts.push(newMessage.slice(cursor))
+    return parts
   }
 
   const loadOpusMediaRecorder = async () => {
@@ -308,6 +447,7 @@ export default function ChatMain({
 
     if (!chat) {
       setMessages([])
+      setHasOlderMessages(false)
       return
     }
 
@@ -316,7 +456,7 @@ export default function ChatMain({
         setLoading(true)
 
         const res = await fetch(
-          `${import.meta.env.VITE_APP_URL}/api/chat/messages/${chat.id}`,
+          `${import.meta.env.VITE_APP_URL}/api/chat/messages/${chat.id}?limit=50`,
         )
 
         if (!res.ok) {
@@ -326,24 +466,11 @@ export default function ChatMain({
 
         const data = await res.json()
 
-        const msgs: Message[] = (Array.isArray(data) ? data : data.messages).map(
-          (m: any) => ({
-            id: m.id,
-            sender: m.sender === "user" ? "user" : "contact",
-            sender_subtype: m.sender_subtype ?? (m.sender === "contact" ? "contact" : "operator"),
-            operator_name: m.operator_name ?? null,
-            bot_node_type: m.bot_node_type ?? null,
-            interactive_options: Array.isArray(m.interactive_options) ? m.interactive_options : null,
-            body: m.body,
-            timestamp: m.timestamp ?? m.created_at ?? new Date().toISOString(),
-            status: m.status ?? null,
-            message_type: m.message_type ?? "text",
-            media_url: m.media_url ?? null,
-            media_name: m.media_name ?? null,
-          }),
-        )
+        const rows = Array.isArray(data) ? data : data.messages
+        const msgs: Message[] = rows.map(mapApiMessage)
 
         setMessages(msgs)
+        setHasOlderMessages(Boolean(data?.has_more))
       } catch (err) {
         console.error("Error de red al cargar mensajes:", err)
       } finally {
@@ -353,6 +480,48 @@ export default function ChatMain({
 
     fetchMessages()
   }, [chat?.id])
+
+  const loadOlderMessages = async () => {
+    if (!chat || loading || loadingOlderMessages || !hasOlderMessages) return
+
+    const oldestId = messages
+      .map((message) => Number(message.id))
+      .filter((id) => Number.isFinite(id))
+      .sort((a, b) => a - b)[0]
+    if (!oldestId) return
+
+    const container = messagesContainerRef.current
+    const previousScrollHeight = container?.scrollHeight ?? 0
+    setLoadingOlderMessages(true)
+    prependingMessagesRef.current = true
+
+    try {
+      const response = await fetch(
+        `${import.meta.env.VITE_APP_URL}/api/chat/messages/${chat.id}?limit=50&before_id=${oldestId}`,
+      )
+      if (!response.ok) throw new Error(await response.text())
+      const data = await response.json()
+      const olderMessages: Message[] = (Array.isArray(data) ? data : data.messages).map(mapApiMessage)
+
+      setMessages((current) => {
+        const existingIds = new Set(current.map((message) => String(message.id)))
+        return [...olderMessages.filter((message) => !existingIds.has(String(message.id))), ...current]
+      })
+      setHasOlderMessages(Boolean(data?.has_more))
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (container) container.scrollTop += container.scrollHeight - previousScrollHeight
+        })
+      })
+    } catch (error) {
+      prependingMessagesRef.current = false
+      console.error("Error cargando mensajes anteriores:", error)
+      toast.error("No se pudieron cargar los mensajes anteriores")
+    } finally {
+      setLoadingOlderMessages(false)
+    }
+  }
 
   // 🔹 MQTT: escuchar mensajes en tiempo real del chat actual
   useEffect(() => {
@@ -449,7 +618,7 @@ export default function ChatMain({
 
     const syncMessageStatuses = async () => {
       try {
-        const res = await fetch(`${import.meta.env.VITE_APP_URL}/api/chat/messages/${chat.id}`)
+        const res = await fetch(`${import.meta.env.VITE_APP_URL}/api/chat/messages/${chat.id}?limit=50`)
         if (!res.ok || cancelled) return
 
         const data = await res.json()
@@ -490,6 +659,10 @@ export default function ChatMain({
 
   useEffect(() => {
     if (searchOpen && searchQuery.trim()) return
+    if (prependingMessagesRef.current) {
+      prependingMessagesRef.current = false
+      return
+    }
     if (!messagesEndRef.current) return
     messagesEndRef.current.scrollIntoView({ behavior: "smooth" })
   }, [messages.length, chat?.id, searchOpen, searchQuery])
@@ -501,13 +674,14 @@ export default function ChatMain({
     const updateVisibility = () => {
       const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight
       setShowScrollToBottom(distanceToBottom > 220)
+      if (container.scrollTop <= 80) void loadOlderMessages()
     }
 
     updateVisibility()
     container.addEventListener("scroll", updateVisibility)
 
   return () => container.removeEventListener("scroll", updateVisibility)
-  }, [chat?.id, messages.length])
+  }, [chat?.id, messages.length, hasOlderMessages, loadingOlderMessages])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -1111,6 +1285,54 @@ export default function ChatMain({
     document.addEventListener("mousedown", handleClickOutside)
     return () => document.removeEventListener("mousedown", handleClickOutside)
   }, [attachmentMenuOpen])
+
+  useEffect(() => {
+    if (!quickRepliesOpen) return
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!quickRepliesMenuRef.current?.contains(event.target as Node)) {
+        setQuickRepliesOpen(false)
+      }
+    }
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setQuickRepliesOpen(false)
+    }
+
+    document.addEventListener("mousedown", handleClickOutside)
+    document.addEventListener("keydown", handleEscape)
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside)
+      document.removeEventListener("keydown", handleEscape)
+    }
+  }, [quickRepliesOpen])
+
+  useEffect(() => {
+    if (!quickRepliesOpen) return
+
+    const loadQuickReplies = async () => {
+      setQuickRepliesLoading(true)
+      try {
+        const response = await fetch(`${import.meta.env.VITE_APP_URL}/api/quick-replies`)
+        if (!response.ok) throw new Error(await response.text())
+        const data = await response.json()
+        setQuickReplies(Array.isArray(data.quick_replies) ? data.quick_replies : [])
+      } catch (error) {
+        console.error("Error cargando respuestas rápidas:", error)
+        toast.error("No se pudieron cargar las respuestas rápidas")
+      } finally {
+        setQuickRepliesLoading(false)
+      }
+    }
+
+    void loadQuickReplies()
+  }, [quickRepliesOpen])
+
+  const selectQuickReply = (text: string) => {
+    setNewMessage(text)
+    setQuickRepliesOpen(false)
+    requestAnimationFrame(() => messageInputRef.current?.focus())
+  }
 
   const loadAgendaContacts = async () => {
     try {
@@ -2393,6 +2615,14 @@ export default function ChatMain({
           <ChatMessagesLoader />
         ) : (
           <div className="space-y-4">
+            {loadingOlderMessages && (
+              <div className="flex justify-center py-2">
+                <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-500 shadow-sm">
+                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#013765] border-t-transparent" />
+                  Cargando mensajes anteriores
+                </span>
+              </div>
+            )}
             {messages.map((message, index) => {
               const messageId = String(message.id)
               const prev = index > 0 ? messages[index - 1] : null
@@ -2660,7 +2890,93 @@ export default function ChatMain({
             )}
           </div>
 
+          <div ref={quickRepliesMenuRef} className="relative">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={sending || !chat || recordingAudio || readOnly}
+              aria-label="Abrir respuestas rápidas"
+              aria-expanded={quickRepliesOpen}
+              onClick={() => {
+                setQuickRepliesOpen((open) => !open)
+                setAttachmentMenuOpen(false)
+              }}
+              className={cn(
+                "h-11 w-11 border-gray-300 p-0",
+                quickRepliesOpen && "border-[#013765] bg-[#013765] text-white hover:bg-[#012e54]",
+              )}
+              title="Respuestas rápidas"
+            >
+              <MessageSquareText className="h-5 w-5" />
+            </Button>
+
+            {quickRepliesOpen && !readOnly && chat && (
+              <div className="absolute bottom-14 left-0 z-[9997] w-80 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+                <div className="border-b border-slate-100 px-4 py-3">
+                  <p className="text-sm font-semibold text-slate-900">Respuestas rápidas</p>
+                  <p className="mt-0.5 text-xs text-slate-500">Elegí una para cargarla en el mensaje.</p>
+                </div>
+                <div className="max-h-80 space-y-1 overflow-y-auto p-2 custom-scrollbar">
+                  {quickRepliesLoading ? (
+                    <div className="py-6 text-center text-xs text-slate-500">Cargando respuestas...</div>
+                  ) : quickReplies.length === 0 ? (
+                    <div className="py-6 text-center text-xs text-slate-500">No hay respuestas guardadas.</div>
+                  ) : quickReplies.map((reply) => (
+                    <button
+                      key={reply.id}
+                      type="button"
+                      onClick={() => selectQuickReply(reply.body)}
+                      className="block w-full rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-[#013765]/30"
+                    >
+                      <span className="block text-xs font-semibold text-[#013765]">{reply.title}</span>
+                      <span className="mt-1 block text-xs leading-5 text-slate-600">{reply.body}</span>
+                    </button>
+                  ))}
+                </div>
+                <a
+                  href={`${import.meta.env.VITE_APP_URL}/quick-replies-panel`}
+                  className="flex items-center justify-center gap-2 border-t border-slate-100 px-4 py-2.5 text-xs font-semibold text-[#013765] transition-colors hover:bg-slate-50"
+                >
+                  Administrar respuestas
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+              </div>
+            )}
+          </div>
+
           <div className="flex-1 min-w-0 relative">
+            {activeSpellingMatch &&
+              dismissedSpellingKey !== `${activeSpellingMatch.start}-${activeSpellingMatch.word}` && (
+                <div className="absolute bottom-full left-2 z-[9996] mb-2 w-max max-w-[min(360px,calc(100vw-32px))] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+                  <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2">
+                    <span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-800">{activeSpellingMatch.word}</span>
+                    <button
+                      type="button"
+                      className="flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                      onClick={() => setDismissedSpellingKey(`${activeSpellingMatch.start}-${activeSpellingMatch.word}`)}
+                      aria-label="Ocultar sugerencias"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  {activeSpellingMatch.suggestions.length > 0 ? (
+                    <div className="flex max-w-full flex-wrap gap-1.5 p-2">
+                      {activeSpellingMatch.suggestions.map((suggestion) => (
+                        <button
+                          key={suggestion}
+                          type="button"
+                          className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-[#013765] hover:border-[#013765]/40 hover:bg-[#013765]/5"
+                          onClick={() => replaceSpellingMatch(activeSpellingMatch, suggestion)}
+                        >
+                          {suggestion}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="px-3 py-2 text-xs text-slate-500">No encontramos una corrección sugerida.</p>
+                  )}
+                </div>
+              )}
             {hasInputStatus && (
               <div
                 className={cn(
@@ -2673,20 +2989,42 @@ export default function ChatMain({
                 <span className="truncate">{inputStatusMessage}</span>
               </div>
             )}
-            <Input
-              value={newMessage}
-              onChange={(e) => setNewMessage(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={
-                readOnly
-                  ? readOnlyReason === "bot"
-                    ? "Solo lectura: bot activo"
-                    : "Solo lectura: chat atendido por otro operador"
-                  : "Escribe un mensaje..."
-              }
-              disabled={readOnly}
-              className="pr-20 min-h-[44px] resize-none bg-muted/50 border-gray-300"
-            />
+            <div className="relative h-11">
+              {newMessage && (
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 z-0 flex items-center overflow-hidden whitespace-pre px-3 pr-20 text-sm text-slate-900"
+                >
+                  {renderSpellingOverlay()}
+                </div>
+              )}
+              <Input
+                ref={messageInputRef}
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onClick={activateSpellingMatchAtCaret}
+                onKeyUp={(event) => {
+                  if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) activateSpellingMatchAtCaret()
+                }}
+                lang="es-AR"
+                spellCheck={false}
+                autoCorrect="off"
+                autoCapitalize="sentences"
+                placeholder={
+                  readOnly
+                    ? readOnlyReason === "bot"
+                      ? "Solo lectura: bot activo"
+                      : "Solo lectura: chat atendido por otro operador"
+                    : "Escribe un mensaje..."
+                }
+                disabled={readOnly}
+                className={cn(
+                  "relative z-10 min-h-[44px] resize-none border-gray-300 bg-transparent pr-20",
+                  newMessage && "text-transparent caret-slate-900 selection:bg-blue-200/70",
+                )}
+              />
+            </div>
             {pendingMediaList.length > 0 && (
               <div className="mt-2 rounded-lg border border-gray-300 bg-white p-2">
                 <div className="text-xs text-muted-foreground mb-2">

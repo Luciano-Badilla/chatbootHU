@@ -8,6 +8,7 @@ import {
   LogOut,
   Megaphone,
   MessageSquare,
+  MessageSquareText,
   Settings,
   ShieldCheck,
   UserCircle2,
@@ -37,6 +38,7 @@ const HOSPITAL_FAVICON_URL = `${APP_URL}/favicon-48x48.png`
 const navigationItems: Array<{ label: string; href: string; icon: LucideIcon; permission?: string }> = [
   { label: "Inicio", href: `${APP_URL}/dashboard`, icon: LayoutDashboard },
   { label: "Mensajes", href: `${APP_URL}/chat-panel`, icon: MessageSquare },
+  { label: "Respuestas rapidas", href: `${APP_URL}/quick-replies-panel`, icon: MessageSquareText },
   { label: "Agenda", href: `${APP_URL}/agenda-panel`, icon: Contact },
   { label: "Campañas", href: `${APP_URL}/campaigns-panel`, icon: Megaphone, permission: "can_manage_campaigns" },
   { label: "Flujos", href: `${APP_URL}/bot/flows`, icon: GitBranch },

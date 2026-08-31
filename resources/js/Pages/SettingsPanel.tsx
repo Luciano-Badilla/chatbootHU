@@ -12,6 +12,7 @@ import {
   EyeOff,
   ExternalLink,
   Loader2,
+  MessageSquareText,
   Upload,
   XCircle,
 } from "lucide-react"
@@ -865,6 +866,16 @@ export default function SettingsPanel({
           >
             <Contact className="mr-2 h-4 w-4" />
             Ver agenda
+          </Button>
+          <Button
+            variant="outline"
+            className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white"
+            onClick={() => {
+              window.location.href = `${APP_URL}/quick-replies-panel`
+            }}
+          >
+            <MessageSquareText className="mr-2 h-4 w-4" />
+            Ver mensajes rapidos
           </Button>
           <Button
             variant="outline"

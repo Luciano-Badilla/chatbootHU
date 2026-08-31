@@ -288,11 +288,28 @@ class ChatController extends Controller
         ]);
     }
 
-    public function getMessages($chatId)
+    public function getMessages(Request $request, $chatId)
     {
-        $messages = Message::where('chat_id', $chatId)->get();
+        $limit = max(10, min((int) $request->query('limit', 50), 100));
+        $beforeId = $request->integer('before_id');
 
-        return $messages;
+        $query = Message::query()
+            ->where('chat_id', $chatId)
+            ->when($beforeId > 0, fn ($builder) => $builder->where('id', '<', $beforeId));
+
+        $messages = $query
+            ->orderByDesc('id')
+            ->limit($limit + 1)
+            ->get();
+
+        $hasMore = $messages->count() > $limit;
+        $messages = $messages->take($limit)->reverse()->values();
+
+        return response()->json([
+            'messages' => $messages,
+            'has_more' => $hasMore,
+            'total' => Message::where('chat_id', $chatId)->count(),
+        ]);
     }
 
     public function snapshot()

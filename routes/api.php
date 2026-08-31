@@ -7,6 +7,7 @@ use App\Http\Controllers\CampaignController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\ChatMediaController;
 use App\Http\Controllers\LocationController;
+use App\Http\Controllers\QuickReplyController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\WhatsAppController;
 use App\Http\Controllers\WhatsAppTemplateController;
@@ -56,6 +57,10 @@ Route::middleware($sessionAuthenticated)->group(function () {
     Route::delete('/agenda/contacts/{agendaContact}', [AgendaContactController::class, 'destroy']);
     Route::post('/agenda/contacts/{id}/restore', [AgendaContactController::class, 'restore']);
     Route::delete('/agenda/contacts/{id}/force', [AgendaContactController::class, 'forceDestroy']);
+    Route::get('/quick-replies', [QuickReplyController::class, 'apiIndex']);
+    Route::post('/quick-replies', [QuickReplyController::class, 'store']);
+    Route::put('/quick-replies/{quickReply}', [QuickReplyController::class, 'update']);
+    Route::delete('/quick-replies/{quickReply}', [QuickReplyController::class, 'destroy']);
 
     Route::middleware('permission:can_manage_campaigns')->group(function () {
         Route::get('/campaigns', [CampaignController::class, 'apiIndex']);
