@@ -292,7 +292,7 @@ export default function AgendaPanel() {
                   <Loader2 className="h-5 w-5 animate-spin" />
                 </div>
               ) : contacts.length === 0 ? (
-                <p className="rounded-xl border border-dashed border-slate-200 p-4 text-center text-sm text-slate-500">
+                <p className="surface-nested rounded-xl border-dashed p-4 text-center text-sm text-slate-500">
                   No hay contactos para mostrar.
                 </p>
               ) : (
@@ -301,7 +301,7 @@ export default function AgendaPanel() {
                     key={contact.id}
                     className={cn(
                       "flex w-full items-center gap-3 rounded-xl border px-3 py-2 transition-colors",
-                      selected.id === contact.id ? "border-[#013765] bg-[#013765]/5" : "border-slate-200 hover:bg-slate-50",
+                      selected.id === contact.id ? "border-[#013765] bg-[#013765]/5" : "interactive-row",
                     )}
                   >
                     <button

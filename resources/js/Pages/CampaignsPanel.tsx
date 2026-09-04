@@ -547,7 +547,7 @@ export default function CampaignsPanel({
               <SummaryStat label="Con errores" value={campaignsWithErrors} />
             </div>
 
-            <div className="overflow-hidden rounded-xl border border-[#dbe5ef]">
+            <div className="surface-nested overflow-hidden rounded-xl border border-[#cbd8e5] bg-white shadow-sm">
               <div className="grid grid-cols-1 gap-3 border-b border-[#dbe5ef] bg-slate-50 px-4 py-3 md:grid-cols-[minmax(0,1fr)_190px]">
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#013765]/45" />
@@ -672,7 +672,7 @@ export default function CampaignsPanel({
             </div>
           </CardHeader>
           <CardContent>
-            <div className="overflow-hidden rounded-xl border border-[#dbe5ef]">
+            <div className="surface-nested overflow-hidden rounded-xl border border-[#cbd8e5] bg-white shadow-sm">
               <div className="border-b border-[#dbe5ef] bg-slate-50 px-4 py-3">
                 <div className="relative max-w-xl">
                   <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#013765]/45" />

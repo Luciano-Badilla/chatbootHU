@@ -1363,10 +1363,14 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       { key: "persona_creada", label: "persona_creada", kind: "flow" },
       { key: "persona_create_status", label: "persona_create_status", kind: "flow" },
       { key: "persona_create_response", label: "persona_create_response", kind: "flow" },
+      { key: "persona_domicilio_calle", label: "persona_domicilio_calle", kind: "flow" },
+      { key: "persona_domicilio_numero", label: "persona_domicilio_numero", kind: "flow" },
       { key: "registro_nombres", label: "registro_nombres", kind: "flow" },
       { key: "registro_apellidos", label: "registro_apellidos", kind: "flow" },
       { key: "registro_fecha_nacimiento", label: "registro_fecha_nacimiento", kind: "flow" },
       { key: "registro_genero", label: "registro_genero", kind: "flow" },
+      { key: "registro_domicilio_calle", label: "registro_domicilio_calle", kind: "flow" },
+      { key: "registro_domicilio_numero", label: "registro_domicilio_numero", kind: "flow" },
       { key: "registro_codigo_celular", label: "registro_codigo_celular", kind: "flow" },
       { key: "registro_numero_celular", label: "registro_numero_celular", kind: "flow" },
       { key: "registro_email", label: "registro_email", kind: "flow" },
@@ -1930,6 +1934,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               ],
             },
           )
+          addInput("registro_domicilio_calle", "capturar_domicilio_calle", "Ingresa la calle de tu domicilio.", "^.{2,120}$", "Ingresa una calle valida.")
+          addInput("registro_domicilio_numero", "capturar_domicilio_numero", "Ingresa el numero de tu domicilio.", "^.{1,20}$", "Ingresa un numero de domicilio valido.")
           addInput("registro_codigo_celular", "capturar_codigo", "Ingresa el codigo de area de tu celular, sin 0.", "^[0-9]{2,5}$", "Ingresa un codigo de area valido.")
           addInput("registro_numero_celular", "capturar_celular", "Ingresa el numero de celular, sin 15.", "^[0-9]{6,10}$", "Ingresa un numero de celular valido.")
           addInput("registro_email", "capturar_email", "Ingresa tu correo electronico.", "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$", "Ingresa un correo electronico valido.")
@@ -2044,6 +2050,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           last_name_variable: "registro_apellidos",
           birth_date_variable: "registro_fecha_nacimiento",
           gender_variable: "registro_genero",
+          street_variable: "registro_domicilio_calle",
+          street_number_variable: "registro_domicilio_numero",
           phone_code_variable: "registro_codigo_celular",
           phone_variable: "registro_numero_celular",
           email_variable: "registro_email",
@@ -2871,7 +2879,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     const producedVariables = (node: BotNode): string[] => {
       if (node.type === "input") return [String(node.settings?.variable ?? "").trim()].filter(Boolean)
       if (node.type === "person_lookup") return ["persona_id"]
-      if (node.type === "person_create") return ["persona_creada", "persona_create_status", "persona_id"]
+      if (node.type === "person_create") return ["persona_creada", "persona_create_status", "persona_id", "persona_domicilio_calle", "persona_domicilio_numero"]
       if (node.type === "appointment_lookup") return ["turnos", "turno_id"]
       if (node.type === "health_insurance_select") return ["registro_obra_social_id", "registro_obra_social_nombre"]
       if (node.type === "health_insurance_plan_select") return ["registro_plan_id", "registro_plan_nombre"]
@@ -2890,6 +2898,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           settings.last_name_variable ?? "registro_apellidos",
           settings.birth_date_variable ?? "registro_fecha_nacimiento",
           settings.gender_variable ?? "registro_genero",
+          settings.street_variable ?? "registro_domicilio_calle",
+          settings.street_number_variable ?? "registro_domicilio_numero",
           settings.phone_code_variable ?? "registro_codigo_celular",
           settings.phone_variable ?? "registro_numero_celular",
           settings.email_variable ?? "registro_email",
@@ -5066,6 +5076,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         last_name_variable: "registro_apellidos",
         birth_date_variable: "registro_fecha_nacimiento",
         gender_variable: "registro_genero",
+        street_variable: "registro_domicilio_calle",
+        street_number_variable: "registro_domicilio_numero",
         phone_code_variable: "registro_codigo_celular",
         phone_variable: "registro_numero_celular",
         email_variable: "registro_email",
@@ -5086,6 +5098,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         ["last_name_variable", "Apellidos"],
         ["birth_date_variable", "Nacimiento (DD/MM/AAAA)"],
         ["gender_variable", "Genero (M/F/O)"],
+        ["street_variable", "Calle del domicilio"],
+        ["street_number_variable", "Numero del domicilio"],
         ["phone_code_variable", "Codigo de area"],
         ["phone_variable", "Numero de celular"],
         ["email_variable", "Correo electronico"],
@@ -5097,7 +5111,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       return (
         <div className="space-y-3">
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
-            Valida los datos, comprueba que el DNI no exista y registra al paciente con la API de autogestion.
+            Valida los datos y registra al paciente directamente en Alephoo V3. La API rechaza documentos duplicados.
           </div>
           <div className="grid grid-cols-2 gap-2">
             {fields.map(([field, label]) => (

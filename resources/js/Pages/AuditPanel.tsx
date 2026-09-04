@@ -452,7 +452,7 @@ export default function AuditPanel({
               </div>
             </CardHeader>
             <CardContent className="space-y-5">
-              <div className="rounded-xl border border-[#dbe5ef] overflow-hidden">
+              <div className="surface-nested overflow-hidden rounded-xl border border-[#cbd8e5] bg-white shadow-sm">
                 <div className="grid grid-cols-1 gap-3 border-b border-[#dbe5ef] bg-slate-50 px-4 py-3 md:grid-cols-[minmax(0,1fr)_180px]">
                   <Input
                     value={auditSearch}

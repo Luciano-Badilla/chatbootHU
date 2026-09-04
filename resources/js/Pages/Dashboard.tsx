@@ -333,7 +333,7 @@ export default function Dashboard() {
             ].map(([label, value, color, Icon]) => {
               const MetricIcon = Icon as typeof Bot
               return (
-                <div key={String(label)} className="rounded-xl border border-slate-200 p-3">
+                <div key={String(label)} className="surface-nested rounded-xl p-3">
                   <MetricIcon className={`h-4 w-4 ${color}`} />
                   <p className="mt-3 text-2xl font-bold text-[#013765]">{value as number}</p>
                   <p className="text-xs text-slate-500">{label as string}</p>
@@ -419,7 +419,7 @@ export default function Dashboard() {
                 const Icon = service.status === "ok" ? CheckCircle2 : service.status === "warning" ? CircleAlert : Activity
                 const tone = service.status === "ok" ? "text-emerald-600 bg-emerald-50" : service.status === "warning" ? "text-amber-700 bg-amber-50" : "text-slate-500 bg-slate-100"
                 return (
-                  <div key={service.key} className="flex items-center gap-3 rounded-xl border border-slate-200 p-3">
+                  <div key={service.key} className="surface-nested flex items-center gap-3 rounded-xl p-3">
                     <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${tone}`}><Icon className="h-4 w-4" /></div>
                     <div><p className="text-sm font-semibold text-[#013765]">{service.label}</p><p className="text-xs text-slate-500">{service.detail}</p></div>
                   </div>

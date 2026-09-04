@@ -3314,6 +3314,8 @@ class WhatsAppController extends Controller
         $lastName = trim((string) $value('last_name_variable', 'registro_apellidos'));
         $birthDateInput = trim((string) $value('birth_date_variable', 'registro_fecha_nacimiento'));
         $gender = mb_strtolower(trim((string) $value('gender_variable', 'registro_genero')));
+        $street = trim((string) $value('street_variable', 'registro_domicilio_calle'));
+        $streetNumber = trim((string) $value('street_number_variable', 'registro_domicilio_numero'));
         $phoneCode = preg_replace('/\D+/u', '', (string) $value('phone_code_variable', 'registro_codigo_celular'));
         $phone = preg_replace('/\D+/u', '', (string) $value('phone_variable', 'registro_numero_celular'));
         $email = mb_strtolower(trim((string) $value('email_variable', 'registro_email')));
@@ -3344,6 +3346,10 @@ class WhatsAppController extends Controller
             || ! $birthDate
             || $birthDate > new \DateTimeImmutable('today')
             || ! in_array($gender, ['m', 'f', 'o'], true)
+            || mb_strlen($street) < 2
+            || mb_strlen($street) > 120
+            || mb_strlen($streetNumber) < 1
+            || mb_strlen($streetNumber) > 20
             || strlen($phoneCode) < 2
             || strlen($phone) < 6
             || ! filter_var($email, FILTER_VALIDATE_EMAIL)
@@ -3354,120 +3360,83 @@ class WhatsAppController extends Controller
             $resultVars['persona_create_status'] = 'invalid_data';
             $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
             $messageToSend = (string) ($settings['invalid_message'] ?? 'Algunos datos del paciente no son validos.');
-        } elseif (
-            ! $this->isAlephooEndpointEnabled('/personas/{dni}')
-            || ! $this->isAlephooEndpointEnabled('/crear/persona')
-        ) {
-            $resultVars['persona_create_status'] = 'endpoint_disabled';
         } else {
-            $baseUrl = $this->alephooApiRootUrl();
-            $apiKey = $this->alephooApiKey();
+            $baseUrl = $this->alephooV3BaseUrl();
+            $username = $this->alephooV3Username();
+            $password = $this->alephooV3Password();
 
-            if ($baseUrl === '' || $apiKey === '') {
+            if ($baseUrl === '' || $username === '' || $password === '') {
                 $resultVars['persona_create_status'] = 'misconfigured';
             } else {
                 try {
-                    $client = Http::timeout($this->alephooTimeout())
-                        ->acceptJson()
-                        ->withHeaders(['X-API-KEY' => $apiKey]);
-                    $lookupResponse = $client->get($this->alephooPersonLookupUrl($dni));
-                    $existingPayload = $lookupResponse->successful() ? $lookupResponse->json() : [];
-                    $existingPerson = is_array($existingPayload)
-                        && isset($existingPayload[0])
-                        && is_array($existingPayload[0])
-                            ? $existingPayload[0]
-                            : null;
+                    $payload = $this->buildAlephooV3PersonPayload([
+                        'last_name' => $lastName,
+                        'first_name' => $firstName,
+                        'dni' => $dni,
+                        'birth_date' => $birthDate->format('Y-m-d'),
+                        'gender' => mb_strtoupper($gender),
+                        'street' => $street,
+                        'street_number' => $streetNumber,
+                        'email' => $email,
+                        'phone_code' => $phoneCode,
+                        'phone' => $phone,
+                        'plan_id' => (int) $planId,
+                    ]);
+                    $response = Http::timeout($this->alephooV3Timeout())
+                        ->accept('application/vnd.api+json')
+                        ->withBasicAuth($username, $password)
+                        ->withHeaders(['Content-Type' => 'application/vnd.api+json'])
+                        ->post($baseUrl.'/admin/personas', $payload);
+                    $json = is_array($response->json()) ? $response->json() : [];
+                    $resultVars['persona_create_response'] = $json;
 
-                    if ($existingPerson) {
+                    if ($response->successful()) {
+                        $personId = data_get($json, 'data.id');
+
+                        if (! $personId) {
+                            throw new \RuntimeException('Alephoo V3 no devolvio el ID de la persona creada.');
+                        }
+
                         $resultVars = array_merge($resultVars, [
-                            'persona_create_status' => 'already_exists',
-                            'persona_id' => $existingPerson['id'] ?? null,
-                            'persona_nombres' => $existingPerson['nombres'] ?? null,
-                            'persona_apellidos' => $existingPerson['apellidos'] ?? null,
-                            'persona_documento' => $existingPerson['documento'] ?? $dni,
-                            'persona_fecha_nacimiento' => $existingPerson['fecha_nacimiento'] ?? null,
-                            'persona_genero' => $existingPerson['genero'] ?? null,
-                            'persona_obra_social' => $existingPerson['obra_social'] ?? null,
-                            'persona_obra_social_id' => $existingPerson['obra_social_id'] ?? null,
-                            'persona_plan_id' => $existingPerson['plan_id'] ?? null,
-                            'persona_email' => $existingPerson['email'] ?? null,
-                            'persona_contacto_telefono' => $existingPerson['contacto_telefono'] ?? null,
+                            'persona_creada' => true,
+                            'persona_create_status' => 'created',
+                            'persona_create_response' => $json,
+                            'persona_encontrada' => true,
+                            'persona_lookup_status' => 'found',
+                            'persona_id' => $personId,
+                            'persona_nombres' => $firstName,
+                            'persona_apellidos' => $lastName,
+                            'persona_documento' => $dni,
+                            'persona_fecha_nacimiento' => $birthDate->format('d/m/Y'),
+                            'persona_genero' => $gender,
+                            'persona_domicilio_calle' => $street,
+                            'persona_domicilio_numero' => $streetNumber,
+                            'persona_obra_social' => $vars['registro_obra_social_nombre'] ?? null,
+                            'persona_obra_social_id' => (int) $insuranceId,
+                            'persona_plan_id' => (int) $planId,
+                            'persona_email' => $email,
+                            'persona_contacto_telefono' => $phoneCode.$phone,
                         ]);
+                        $targetNextNodeId = $node->next_node_id;
+                        $messageToSend = (string) ($node->body ?: 'Paciente registrado correctamente.');
+                    } elseif ($response->status() === 409) {
+                        $resultVars['persona_create_status'] = 'already_exists';
                         $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
                         $messageToSend = (string) ($settings['already_exists_message'] ?? 'El paciente ya se encuentra registrado.');
+                    } elseif (in_array($response->status(), [400, 422], true)) {
+                        $resultVars['persona_create_status'] = 'invalid_data';
+                        $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
+                        $messageToSend = (string) ($settings['invalid_message'] ?? 'Algunos datos del paciente no son validos.');
                     } else {
-                        $payload = [
-                            'data' => [
-                                'attributes' => [
-                                    'nombres' => $firstName,
-                                    'apellidos' => $lastName,
-                                    'nacimiento' => $birthDate->format('Y-m-d'),
-                                    'documento' => $dni,
-                                    'género' => $gender,
-                                    'celulares' => [
-                                        'codigoCelular' => $phoneCode,
-                                        'numCelular' => $phone,
-                                    ],
-                                    'email' => $email,
-                                    'obraSocialSelectedId' => (int) $insuranceId,
-                                    'planSelectedId' => (int) $planId,
-                                ],
-                            ],
-                        ];
-                        $response = $client->post($baseUrl.'/crear/persona', $payload);
-                        $json = is_array($response->json()) ? $response->json() : [];
-
-                        if ($response->successful()) {
-                            $personId = data_get($json, 'respuesta.data.id')
-                                ?? data_get($json, 'data.id')
-                                ?? data_get($json, 'persona.data.id');
-
-                            if (! $personId) {
-                                throw new \RuntimeException('Alephoo no devolvio el ID de la persona creada.');
-                            }
-
-                            $resultVars = array_merge($resultVars, [
-                                'persona_creada' => true,
-                                'persona_create_status' => 'created',
-                                'persona_create_response' => $json,
-                                'persona_encontrada' => true,
-                                'persona_lookup_status' => 'found',
-                                'persona_id' => $personId,
-                                'persona_nombres' => $firstName,
-                                'persona_apellidos' => $lastName,
-                                'persona_documento' => $dni,
-                                'persona_fecha_nacimiento' => $birthDate->format('d/m/Y'),
-                                'persona_genero' => $gender,
-                                'persona_obra_social' => $vars['registro_obra_social_nombre'] ?? null,
-                                'persona_obra_social_id' => (int) $insuranceId,
-                                'persona_plan_id' => (int) $planId,
-                                'persona_email' => $email,
-                                'persona_contacto_telefono' => $phoneCode.$phone,
-                            ]);
-                            $targetNextNodeId = $node->next_node_id;
-                            $messageToSend = (string) ($node->body ?: 'Paciente registrado correctamente.');
-                        } elseif ($response->status() === 409) {
-                            $resultVars['persona_create_status'] = 'already_exists';
-                            $resultVars['persona_create_response'] = $json;
-                            $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
-                            $messageToSend = (string) ($settings['already_exists_message'] ?? 'El paciente ya se encuentra registrado.');
-                        } elseif ($response->status() === 422) {
-                            $resultVars['persona_create_status'] = 'invalid_data';
-                            $resultVars['persona_create_response'] = $json;
-                            $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
-                            $messageToSend = (string) ($settings['invalid_message'] ?? 'Algunos datos del paciente no son validos.');
-                        } else {
-                            $resultVars['persona_create_response'] = $json;
-                            Log::warning('Hospital API person create error response', [
-                                'chat_id' => $chat->id,
-                                'node_id' => $node->id,
-                                'status' => $response->status(),
-                            ]);
-                        }
+                        Log::warning('Alephoo V3 person create error response', [
+                            'chat_id' => $chat->id,
+                            'node_id' => $node->id,
+                            'status' => $response->status(),
+                        ]);
                     }
                 } catch (\Throwable $e) {
                     $resultVars['persona_create_status'] = 'error';
-                    Log::error('Hospital API person create failed: '.$e->getMessage(), [
+                    Log::error('Alephoo V3 person create failed: '.$e->getMessage(), [
                         'chat_id' => $chat->id,
                         'node_id' => $node->id,
                     ]);
@@ -3494,6 +3463,41 @@ class WhatsAppController extends Controller
         }
 
         $node->next_node_id = $targetNextNodeId ? (int) $targetNextNodeId : null;
+    }
+
+    private function buildAlephooV3PersonPayload(array $values): array
+    {
+        return [
+            'data' => [
+                'type' => 'Admin\\Persona',
+                'attributes' => [
+                    'apellidos' => $values['last_name'],
+                    'nombres' => $values['first_name'],
+                    'tipoDocumento' => 1,
+                    'documento' => $values['dni'],
+                    'nacimiento' => $values['birth_date'],
+                    'sexo' => $values['gender'],
+                    'generoDocumento' => $values['gender'],
+                    'calle' => $values['street'],
+                    'numero' => $values['street_number'],
+                    'email' => $values['email'],
+                    'celulares' => [[
+                        'paisCelularSelected' => [
+                            'attributes' => ['codigo' => 'AR', 'prefijoTelefonico' => '54'],
+                        ],
+                        'codigoCelular' => $values['phone_code'],
+                        'numCelular' => $values['phone'],
+                    ]],
+                    'coberturaMedica' => [[
+                        'planSelected' => ['id' => $values['plan_id']],
+                        'ppd' => true,
+                        'nroBeneficiario' => '',
+                    ]],
+                    'educacion' => false,
+                    'trabajo' => false,
+                ],
+            ],
+        ];
     }
 
     private function sendAppointmentCreateNode(Chat $chat, BotNode $node): void

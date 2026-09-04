@@ -955,7 +955,7 @@ export default function SettingsPanel({
                 </SelectContent>
               </Select>
             </div>
-            <div className="rounded-xl border border-[#dbe5ef]">
+            <div className="surface-nested overflow-hidden rounded-xl border border-[#cbd8e5] bg-white shadow-sm">
               <div className="hidden gap-3 border-b border-[#dbe5ef] bg-[#013765]/[0.03] px-4 py-3 text-xs font-medium text-[#013765]/70 md:grid md:grid-cols-[minmax(0,1.4fr)_150px_130px_210px]">
                 <span>Usuario</span>
                 <span>Rol</span>
@@ -1225,7 +1225,7 @@ export default function SettingsPanel({
             </div>
           </CardHeader>
           <CardContent className="space-y-6">
-            <div className="rounded-xl border border-[#dbe5ef] p-4">
+            <div className="surface-nested rounded-xl p-4">
               <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-semibold text-[#013765]">WhatsApp</h3>
@@ -1320,7 +1320,7 @@ export default function SettingsPanel({
               </div>
             </div>
 
-            <div className="rounded-xl border border-[#dbe5ef] p-4">
+            <div className="surface-nested rounded-xl p-4">
               <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-semibold text-[#013765]">API intermedia (la que usa Autogestion)</h3>
@@ -1388,7 +1388,7 @@ export default function SettingsPanel({
               </div>
             </div>
 
-            <div className="rounded-xl border border-[#dbe5ef] p-4">
+            <div className="surface-nested rounded-xl p-4">
               <div className="mb-4">
                 <h3 className="text-sm font-semibold text-[#013765]">Alephoo</h3>
                 <p className="text-xs text-[#013765]/65">
@@ -1474,7 +1474,7 @@ export default function SettingsPanel({
               </div>
             </div>
 
-            <div className="rounded-xl border border-[#dbe5ef] p-4">
+            <div className="surface-nested rounded-xl p-4">
               <div className="mb-4">
                 <h3 className="text-sm font-semibold text-[#013765]">Autogestion</h3>
                 <p className="text-xs text-[#013765]/65">

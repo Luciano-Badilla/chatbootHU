@@ -129,9 +129,9 @@ export default function QuickRepliesPanel() {
               {loading ? (
                 <div className="flex justify-center py-10"><Loader2 className="h-5 w-5 animate-spin text-slate-500" /></div>
               ) : replies.length === 0 ? (
-                <p className="rounded-xl border border-dashed p-6 text-center text-sm text-slate-500">No hay respuestas para mostrar.</p>
+                <p className="surface-nested rounded-xl border-dashed p-6 text-center text-sm text-slate-500">No hay respuestas para mostrar.</p>
               ) : replies.map((reply) => (
-                <div key={reply.id} className="flex items-center gap-3 rounded-xl border border-slate-200 p-3">
+                <div key={reply.id} className="interactive-row flex items-center gap-3 rounded-xl p-3">
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-[#013765]">
                     <MessageSquareText className="h-5 w-5" />
                   </div>
