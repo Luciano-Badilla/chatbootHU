@@ -41,9 +41,9 @@ const navigationItems: Array<{ label: string; href: string; icon: LucideIcon; pe
   { label: "Respuestas rapidas", href: `${APP_URL}/quick-replies-panel`, icon: MessageSquareText },
   { label: "Agenda", href: `${APP_URL}/agenda-panel`, icon: Contact },
   { label: "Campañas", href: `${APP_URL}/campaigns-panel`, icon: Megaphone, permission: "can_manage_campaigns" },
-  { label: "Flujos", href: `${APP_URL}/bot/flows`, icon: GitBranch },
-  { label: "Configuracion", href: `${APP_URL}/settings-panel`, icon: Settings },
-  { label: "Auditoria", href: `${APP_URL}/audit-panel`, icon: ShieldCheck },
+  { label: "Flujos", href: `${APP_URL}/bot/flows`, icon: GitBranch, permission: "can_view_flows" },
+  { label: "Configuracion", href: `${APP_URL}/settings-panel`, icon: Settings, permission: "can_manage_settings" },
+  { label: "Auditoria", href: `${APP_URL}/audit-panel`, icon: ShieldCheck, permission: "can_view_audit" },
 ]
 
 function navigateTo(href: string) {

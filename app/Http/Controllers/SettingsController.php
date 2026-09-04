@@ -12,6 +12,10 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\Rules\Password;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 
@@ -114,17 +118,8 @@ class SettingsController extends Controller
             'users' => User::query()
                 ->with('role')
                 ->orderBy('name')
-                ->get(['id', 'name', 'email', 'validated', 'requestsPassword', 'role_id'])
-                ->map(fn (User $user) => [
-                    'id' => $user->id,
-                    'name' => $user->name,
-                    'email' => $user->email,
-                    'validated' => (bool) $user->validated,
-                    'requests_password' => (bool) $user->requestsPassword,
-                    'role_id' => (int) $user->role_id,
-                    'role_name' => $user->roleName(),
-                    'role_label' => $user->roleLabel(),
-                ])
+                ->get(['id', 'name', 'email', 'validated', 'requestsPassword', 'role_id', 'is_active', 'deactivated_at', 'created_at'])
+                ->map(fn (User $user) => $this->userPayload($user))
                 ->values(),
             'currentUserId' => $this->resolveCurrentUserId(request()),
             'timezoneOptions' => collect(\DateTimeZone::listIdentifiers())
@@ -643,7 +638,7 @@ class SettingsController extends Controller
         $targetRoleLabel = $targetRole->displayName();
 
         if ($currentRoleName === 'admin' && $targetRoleName !== 'admin') {
-            $adminCount = User::query()
+            $adminCount = User::query()->where('is_active', true)
                 ->with('role')
                 ->get(['id', 'role_id'])
                 ->filter(fn (User $candidate) => $candidate->roleName() === 'admin')
@@ -672,17 +667,118 @@ class SettingsController extends Controller
 
         return response()->json([
             'ok' => true,
-            'user' => [
-                'id' => $user->id,
-                'name' => $user->name,
-                'email' => $user->email,
-                'validated' => (bool) $user->validated,
-                'requests_password' => (bool) $user->requestsPassword,
-                'role_id' => (int) $user->role_id,
-                'role_name' => $user->roleName(),
-                'role_label' => $user->roleLabel(),
-            ],
+            'user' => $this->userPayload($user),
         ]);
+    }
+
+    public function storeUser(Request $request)
+    {
+        $data = $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'string', 'lowercase', 'email', 'max:255', 'unique:users,email'],
+            'role_id' => ['required', 'integer', 'exists:roles,id'],
+            'password' => ['required', 'confirmed', Password::defaults()],
+        ]);
+
+        $user = User::create([
+            'name' => trim($data['name']),
+            'email' => strtolower(trim($data['email'])),
+            'role_id' => $data['role_id'],
+            'password' => Hash::make($data['password']),
+            'validated' => true,
+            'requestsPassword' => true,
+            'is_active' => true,
+        ])->load('role');
+
+        $this->auditService->record('users', 'created', "Creo el usuario {$user->name}", $request->user(), $user, [
+            'target_user' => $user->only(['id', 'name', 'email']),
+            'after' => ['role' => $user->roleLabel(), 'status' => 'Activo'],
+        ]);
+
+        return response()->json(['ok' => true, 'user' => $this->userPayload($user)], 201);
+    }
+
+    public function updateUser(Request $request, User $user)
+    {
+        $data = $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'string', 'lowercase', 'email', 'max:255', Rule::unique('users', 'email')->ignore($user->id)],
+            'role_id' => ['required', 'integer', 'exists:roles,id'],
+        ]);
+
+        if ((int) $request->user()->id === (int) $user->id && (int) $data['role_id'] !== (int) $user->role_id) {
+            return response()->json(['message' => 'No podes cambiar tu propio rol desde este modulo.'], 422);
+        }
+
+        $targetRole = Role::query()->findOrFail($data['role_id']);
+        if ($user->is_active && $user->roleName() === 'admin' && $targetRole->normalizedName() !== 'admin' && $this->activeAdminCount() <= 1) {
+            return response()->json(['message' => 'No podes quitar el ultimo administrador activo del sistema.'], 422);
+        }
+
+        $before = ['name' => $user->name, 'email' => $user->email, 'role' => $user->roleLabel()];
+        $user->update(['name' => trim($data['name']), 'email' => strtolower(trim($data['email'])), 'role_id' => $targetRole->id]);
+        $user->load('role');
+        $after = ['name' => $user->name, 'email' => $user->email, 'role' => $user->roleLabel()];
+
+        if ($before !== $after) {
+            $this->auditService->record('users', 'updated', "Actualizo el usuario {$user->name}", $request->user(), $user, [
+                'target_user' => $user->only(['id', 'name', 'email']), 'before' => $before, 'after' => $after,
+            ]);
+        }
+
+        return response()->json(['ok' => true, 'user' => $this->userPayload($user)]);
+    }
+
+    public function updateUserStatus(Request $request, User $user)
+    {
+        $data = $request->validate(['is_active' => ['required', 'boolean']]);
+        $activate = (bool) $data['is_active'];
+
+        if (! $activate && (int) $request->user()->id === (int) $user->id) {
+            return response()->json(['message' => 'No podes dar de baja tu propio usuario.'], 422);
+        }
+        if (! $activate && $user->is_active && $user->roleName() === 'admin' && $this->activeAdminCount() <= 1) {
+            return response()->json(['message' => 'No podes dar de baja al ultimo administrador activo.'], 422);
+        }
+
+        $previous = (bool) $user->is_active;
+        $user->update(['is_active' => $activate, 'deactivated_at' => $activate ? null : now(), 'deactivated_by' => $activate ? null : $request->user()->id]);
+
+        if (! $activate && Schema::hasTable('sessions')) {
+            DB::table('sessions')->where('user_id', $user->id)->delete();
+        }
+
+        if ($previous !== $activate) {
+            $event = $activate ? 'reactivated' : 'deactivated';
+            $verb = $activate ? 'Reactivo' : 'Dio de baja';
+            $this->auditService->record('users', $event, "{$verb} al usuario {$user->name}", $request->user(), $user, [
+                'target_user' => $user->only(['id', 'name', 'email']),
+                'before' => ['status' => $previous ? 'Activo' : 'Inactivo'],
+                'after' => ['status' => $activate ? 'Activo' : 'Inactivo'],
+            ]);
+        }
+
+        return response()->json(['ok' => true, 'user' => $this->userPayload($user->load('role'))]);
+    }
+
+    public function resetUserPassword(Request $request, User $user)
+    {
+        if ((int) $request->user()->id === (int) $user->id) {
+            return response()->json(['message' => 'Cambia tu propia contraseña desde la pantalla de perfil.'], 422);
+        }
+
+        $data = $request->validate(['password' => ['required', 'confirmed', Password::defaults()]]);
+        $user->update(['password' => Hash::make($data['password']), 'requestsPassword' => true]);
+
+        if (Schema::hasTable('sessions')) {
+            DB::table('sessions')->where('user_id', $user->id)->delete();
+        }
+
+        $this->auditService->record('security', 'password_reset_by_admin', "Restablecio la contrasena de {$user->name}", $request->user(), $user, [
+            'target_user' => $user->only(['id', 'name', 'email']),
+        ]);
+
+        return response()->json(['ok' => true, 'user' => $this->userPayload($user->load('role'))]);
     }
 
     public function exportConfiguration(Request $request)
@@ -746,6 +842,23 @@ class SettingsController extends Controller
     protected function resolveCurrentUserId(Request $request): ?int
     {
         return $request->user()?->id ? (int) $request->user()->id : null;
+    }
+
+    protected function activeAdminCount(): int
+    {
+        return User::query()->where('is_active', true)->with('role')->get(['id', 'role_id'])
+            ->filter(fn (User $candidate) => $candidate->roleName() === 'admin')->count();
+    }
+
+    protected function userPayload(User $user): array
+    {
+        return [
+            'id' => $user->id, 'name' => $user->name, 'email' => $user->email,
+            'validated' => (bool) $user->validated, 'requests_password' => (bool) $user->requestsPassword,
+            'role_id' => (int) $user->role_id, 'role_name' => $user->roleName(), 'role_label' => $user->roleLabel(),
+            'is_active' => (bool) $user->is_active, 'deactivated_at' => $user->deactivated_at?->toIso8601String(),
+            'created_at' => $user->created_at?->toIso8601String(),
+        ];
     }
 
     protected function configurationExportPayload(Request $request): array

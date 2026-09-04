@@ -35,7 +35,7 @@ Route::get('/', function () {
     return redirect('/dashboard');
 });
 
-Route::middleware('auth')->group(function () {
+Route::middleware(['auth', 'active'])->group(function () {
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
     Route::get('/chat-panel', [ChatController::class, 'index']);

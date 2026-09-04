@@ -12,8 +12,14 @@ import {
   EyeOff,
   ExternalLink,
   Loader2,
+  KeyRound,
   MessageSquareText,
+  Pencil,
+  Plus,
+  Search,
   Upload,
+  UserCheck,
+  UserX,
   XCircle,
 } from "lucide-react"
 import { Badge } from "shadcn/components/ui/badge"
@@ -93,6 +99,9 @@ interface SettingsPanelProps {
     role_id: number
     role_name: string
     role_label?: string
+    is_active: boolean
+    deactivated_at?: string | null
+    created_at?: string | null
   }>
   currentUserId?: number | null
   timezoneOptions?: Array<{
@@ -105,7 +114,8 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || ""
 const APP_URL = import.meta.env.VITE_APP_URL || ""
 
 function getErrorMessage(payload: any, fallback: string): string {
-  return payload?.errors?.file?.[0] ?? payload?.message ?? fallback
+  const firstError = payload?.errors ? Object.values(payload.errors).flat()[0] : null
+  return String(firstError ?? payload?.message ?? fallback)
 }
 
 export default function SettingsPanel({
@@ -202,9 +212,17 @@ export default function SettingsPanel({
   const [integrationsSaved, setIntegrationsSaved] = useState(false)
   const [timezoneOpen, setTimezoneOpen] = useState(false)
   const [usersState, setUsersState] = useState(users)
-  const [savedUsersState, setSavedUsersState] = useState(users)
   const [savingUserId, setSavingUserId] = useState<number | null>(null)
-  const [savedUserId, setSavedUserId] = useState<number | null>(null)
+  const [userSearch, setUserSearch] = useState("")
+  const [userStatusFilter, setUserStatusFilter] = useState("all")
+  const [userRoleFilter, setUserRoleFilter] = useState("all")
+  const [userDialogOpen, setUserDialogOpen] = useState(false)
+  const [editingUserId, setEditingUserId] = useState<number | null>(null)
+  const [userForm, setUserForm] = useState({ name: "", email: "", role_id: "3", password: "", password_confirmation: "" })
+  const [savingUser, setSavingUser] = useState(false)
+  const [passwordDialogUserId, setPasswordDialogUserId] = useState<number | null>(null)
+  const [passwordForm, setPasswordForm] = useState({ password: "", password_confirmation: "" })
+  const [deactivationUserId, setDeactivationUserId] = useState<number | null>(null)
   const [exportingConfig, setExportingConfig] = useState(false)
   const [importingConfig, setImportingConfig] = useState(false)
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
@@ -240,7 +258,6 @@ export default function SettingsPanel({
     setSavedInactivityTimeoutMinutes(initialInactivityTimeoutMinutes)
     setSavedInactivityTimeoutMessage(initialInactivityTimeoutMessage)
     setUsersState(users)
-    setSavedUsersState(users)
   }, [
     initialTimezone,
     initialLanguage,
@@ -692,84 +709,90 @@ export default function SettingsPanel({
     }
   }
 
-  const handleUserRoleChange = (userId: number, roleId: number) => {
-    setSavedUserId(null)
-    setUsersState((prev) =>
-      prev.map((user) => {
-        if (user.id !== userId) return user
+  const filteredUsers = useMemo(() => {
+    const query = userSearch.trim().toLowerCase()
+    return usersState.filter((user) => {
+      const matchesQuery = !query || user.name.toLowerCase().includes(query) || user.email.toLowerCase().includes(query)
+      const matchesStatus = userStatusFilter === "all" || (userStatusFilter === "active" ? user.is_active : !user.is_active)
+      const matchesRole = userRoleFilter === "all" || String(user.role_id) === userRoleFilter
+      return matchesQuery && matchesStatus && matchesRole
+    })
+  }, [usersState, userSearch, userStatusFilter, userRoleFilter])
 
-        const nextRole = roles.find((role) => role.id === roleId)
-
-        return {
-          ...user,
-          role_id: roleId,
-          role_name:
-            roleId === 1
-              ? "admin"
-              : roleId === 2
-                ? "supervisor"
-                : "operator",
-          role_label: nextRole?.name ?? user.role_label,
-        }
-      }),
-    )
+  const userRequest = async (path: string, method: string, body: unknown) => {
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content")
+    const response = await fetch(`${API_BASE}${path}`, {
+      method,
+      headers: { "Content-Type": "application/json", Accept: "application/json", ...(csrfToken ? { "X-CSRF-TOKEN": csrfToken } : {}) },
+      body: JSON.stringify(body),
+    })
+    const payload = await response.json().catch(() => null)
+    if (!response.ok) throw new Error(getErrorMessage(payload, "No se pudo completar la operacion."))
+    return payload
   }
 
-  const handleSaveUserRole = async (userId: number) => {
-    const targetUser = usersState.find((user) => user.id === userId)
-    if (!targetUser) return
+  const openCreateUser = () => {
+    setEditingUserId(null)
+    setUserForm({ name: "", email: "", role_id: String(roles[roles.length - 1]?.id ?? 3), password: "", password_confirmation: "" })
+    setUserDialogOpen(true)
+  }
 
-    setSavingUserId(userId)
-    setSavedUserId(null)
+  const openEditUser = (user: typeof usersState[number]) => {
+    setEditingUserId(user.id)
+    setUserForm({ name: user.name, email: user.email, role_id: String(user.role_id), password: "", password_confirmation: "" })
+    setUserDialogOpen(true)
+  }
 
+  const handleSaveUser = async () => {
+    setSavingUser(true)
     try {
-      const csrfToken = document
-        .querySelector('meta[name="csrf-token"]')
-        ?.getAttribute("content")
-
-      const res = await fetch(`${API_BASE}/api/settings/users/${userId}/role`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          ...(csrfToken ? { "X-CSRF-TOKEN": csrfToken } : {}),
-        },
-        body: JSON.stringify({
-          role_id: targetUser.role_id,
-        }),
+      const path = editingUserId ? `/api/settings/users/${editingUserId}` : "/api/settings/users"
+      const payload = await userRequest(path, editingUserId ? "PUT" : "POST", {
+        name: userForm.name, email: userForm.email, role_id: Number(userForm.role_id),
+        ...(!editingUserId ? { password: userForm.password, password_confirmation: userForm.password_confirmation } : {}),
       })
-
-      if (!res.ok) {
-        const payload = await res.json().catch(() => null)
-        console.error("Error guardando rol de usuario", payload)
-        setUsersState(users)
-        setSavedUsersState(users)
-        toast.error("No se pudo actualizar el rol", {
-          description: getErrorMessage(payload, "Intenta nuevamente con otro rol o recarga la pantalla."),
-        })
-        return
-      }
-
-      const payload = await res.json()
-      setUsersState((prev) =>
-        prev.map((user) => (user.id === userId ? payload.user : user)),
-      )
-      setSavedUsersState((prev) =>
-        prev.map((user) => (user.id === userId ? payload.user : user)),
-      )
-      setSavedUserId(userId)
-      toast.success("Rol actualizado", {
-        description: `El usuario ${payload.user?.name ?? "seleccionado"} ya tiene el nuevo rol aplicado.`,
+      setUsersState((current) => editingUserId
+        ? current.map((user) => user.id === editingUserId ? payload.user : user)
+        : [...current, payload.user].sort((a, b) => a.name.localeCompare(b.name)))
+      setUserDialogOpen(false)
+      toast.success(editingUserId ? "Usuario actualizado" : "Usuario creado", {
+        description: editingUserId ? "Los datos se guardaron correctamente." : "Debera cambiar la contraseña provisoria al ingresar.",
       })
-    } catch (err) {
-      console.error("Error de red guardando rol de usuario:", err)
-      setUsersState(users)
-      setSavedUsersState(users)
-      toast.error("Error de red", {
-        description: "No se pudo actualizar el rol del usuario.",
-      })
+    } catch (error) {
+      toast.error("No se pudo guardar", { description: error instanceof Error ? error.message : undefined })
+    } finally {
+      setSavingUser(false)
+    }
+  }
+
+  const handleUserStatus = async (user: typeof usersState[number]) => {
+    const nextActive = !user.is_active
+    setSavingUserId(user.id)
+    try {
+      const payload = await userRequest(`/api/settings/users/${user.id}/status`, "PUT", { is_active: nextActive })
+      setUsersState((current) => current.map((item) => item.id === user.id ? payload.user : item))
+      setDeactivationUserId(null)
+      toast.success(nextActive ? "Usuario reactivado" : "Usuario dado de baja")
+    } catch (error) {
+      toast.error("No se pudo cambiar el estado", { description: error instanceof Error ? error.message : undefined })
     } finally {
       setSavingUserId(null)
+    }
+  }
+
+  const handleResetPassword = async () => {
+    if (!passwordDialogUserId) return
+    setSavingUser(true)
+    try {
+      const payload = await userRequest(`/api/settings/users/${passwordDialogUserId}/password`, "PUT", passwordForm)
+      setUsersState((current) => current.map((item) => item.id === passwordDialogUserId ? payload.user : item))
+      setPasswordDialogUserId(null)
+      setPasswordForm({ password: "", password_confirmation: "" })
+      toast.success("Contraseña provisoria asignada", { description: "Las sesiones abiertas se cerraron y deberá cambiarla al ingresar." })
+    } catch (error) {
+      toast.error("No se pudo restablecer la contraseña", { description: error instanceof Error ? error.message : undefined })
+    } finally {
+      setSavingUser(false)
     }
   }
 
@@ -900,35 +923,57 @@ export default function SettingsPanel({
           <CardHeader>
             <div className="flex items-center justify-between gap-3">
               <div>
-                <CardTitle className="text-[#013765]">Usuarios y roles</CardTitle>
+                <CardTitle className="text-[#013765]">Gestion de usuarios</CardTitle>
                 <CardDescription className="text-[#013765]/70">
-                  Administra el perfil operativo de cada usuario del sistema.
+                  Crea cuentas, administra sus accesos y conserva el historial de usuarios dados de baja.
                 </CardDescription>
               </div>
+              <Button className="bg-[#013765] text-white hover:bg-[#024a8a]" onClick={openCreateUser}>
+                <Plus className="mr-2 h-4 w-4" /> Nuevo usuario
+              </Button>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-[minmax(220px,1fr)_180px_180px]">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} placeholder="Buscar por nombre o correo" className="pl-9" />
+              </div>
+              <Select value={userStatusFilter} onValueChange={setUserStatusFilter}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos los estados</SelectItem>
+                  <SelectItem value="active">Activos</SelectItem>
+                  <SelectItem value="inactive">Dados de baja</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={userRoleFilter} onValueChange={setUserRoleFilter}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos los roles</SelectItem>
+                  {roles.map((role) => <SelectItem key={role.id} value={String(role.id)}>{role.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="rounded-xl border border-[#dbe5ef]">
-              <div className="grid grid-cols-1 gap-3 border-b border-[#dbe5ef] bg-[#013765]/[0.03] px-4 py-3 text-xs font-medium text-[#013765]/70 md:grid-cols-[minmax(0,1.4fr)_180px_160px]">
+              <div className="hidden gap-3 border-b border-[#dbe5ef] bg-[#013765]/[0.03] px-4 py-3 text-xs font-medium text-[#013765]/70 md:grid md:grid-cols-[minmax(0,1.4fr)_150px_130px_210px]">
                 <span>Usuario</span>
                 <span>Rol</span>
+                <span>Estado</span>
                 <span className="text-right">Accion</span>
               </div>
 
               <div className="divide-y divide-[#dbe5ef]">
-                {usersState.map((user) => {
-                  const hasRoleChanges =
-                    user.role_id !== (savedUsersState.find((item) => item.id === user.id)?.role_id ?? user.role_id)
+                {filteredUsers.map((user) => {
                   const isSaving = savingUserId === user.id
-                  const isSaved = savedUserId === user.id && !hasRoleChanges
                   const isCurrentUser = currentUserId === user.id
 
                   return (
                     <div
                       key={user.id}
                       className={cn(
-                        "grid grid-cols-1 gap-3 px-4 py-4 md:grid-cols-[minmax(0,1.4fr)_180px_160px] md:items-center",
-                        isCurrentUser ? "bg-slate-50/80" : "",
+                        "grid grid-cols-1 gap-3 px-4 py-4 md:grid-cols-[minmax(0,1.4fr)_150px_130px_210px] md:items-center",
+                        isCurrentUser ? "bg-slate-50/80" : "", !user.is_active ? "opacity-70" : "",
                       )}
                     >
                       <div className="min-w-0">
@@ -941,64 +986,34 @@ export default function SettingsPanel({
                           ) : null}
                         </div>
                         <p className="truncate text-xs text-[#013765]/65">{user.email}</p>
+                        {user.requests_password && user.is_active ? <p className="mt-1 text-[11px] text-amber-700">Cambio de contraseña pendiente</p> : null}
                       </div>
 
-                      <div className="space-y-1.5">
-                        <label className="text-[11px] font-medium uppercase tracking-wide text-[#013765]/55 md:hidden">
-                          Rol
-                        </label>
-                        <Select
-                          value={String(user.role_id)}
-                          onValueChange={(value) => handleUserRoleChange(user.id, Number(value))}
-                          disabled={isSaving || isCurrentUser}
-                        >
-                          <SelectTrigger className="bg-white">
-                            <SelectValue placeholder="Selecciona un rol" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {roles.map((role) => (
-                              <SelectItem key={role.id} value={String(role.id)}>
-                                {role.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                      <div><span className="text-[11px] font-medium uppercase text-slate-500 md:hidden">Rol: </span><span className="text-sm text-[#013765]">{user.role_label}</span></div>
+                      <div>
+                        <Badge className={user.is_active ? "bg-emerald-100 text-emerald-800 hover:bg-emerald-100" : "bg-slate-200 text-slate-700 hover:bg-slate-200"}>
+                          {user.is_active ? "Activo" : "Baja"}
+                        </Badge>
                       </div>
 
                       <div className="flex items-center justify-end gap-2">
-                        <span className="text-[11px] text-[#013765]/60">
-                          {isCurrentUser
-                            ? "No editable desde aqui"
-                            : hasRoleChanges
-                            ? "Cambio pendiente"
-                            : isSaved
-                              ? "Rol actualizado"
-                              : ""}
-                        </span>
-                        <Button
-                          className="bg-[#013765] text-white hover:bg-[#024a8a]"
-                          onClick={() => handleSaveUserRole(user.id)}
-                          disabled={isSaving || !hasRoleChanges || isCurrentUser}
-                        >
-                          {isSaving ? (
-                            <>
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                              Guardando...
-                            </>
-                          ) : (
-                            "Guardar"
-                          )}
+                        <Button variant="outline" size="icon" title="Editar usuario" onClick={() => openEditUser(user)}><Pencil className="h-4 w-4" /></Button>
+                        <Button variant="outline" size="icon" disabled={isCurrentUser} title={isCurrentUser ? "Cambia tu contraseña desde Perfil" : "Asignar contraseña provisoria"} onClick={() => { setPasswordDialogUserId(user.id); setPasswordForm({ password: "", password_confirmation: "" }) }}>
+                          <KeyRound className="h-4 w-4" />
+                        </Button>
+                        <Button variant="outline" size="icon" disabled={isSaving || isCurrentUser} title={user.is_active ? "Dar de baja" : "Reactivar"} onClick={() => user.is_active ? setDeactivationUserId(user.id) : handleUserStatus(user)} className={user.is_active ? "text-red-700" : "text-emerald-700"}>
+                          {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : user.is_active ? <UserX className="h-4 w-4" /> : <UserCheck className="h-4 w-4" />}
                         </Button>
                       </div>
                     </div>
                   )
                 })}
+                {filteredUsers.length === 0 ? <div className="px-4 py-10 text-center text-sm text-slate-500">No hay usuarios que coincidan con los filtros.</div> : null}
               </div>
             </div>
 
             <div className="rounded-xl border border-dashed border-[#013765]/20 bg-[#013765]/[0.03] px-4 py-3 text-xs text-[#013765]/70">
-              Los cambios de rol impactan en accesos a configuracion, flujos y operacion. Tu propio usuario queda
-              bloqueado para evitar que te quites permisos por error.
+              Las bajas son reversibles y conservan el historial. No podes darte de baja ni quitar permisos al ultimo administrador activo.
             </div>
           </CardContent>
         </Card>
@@ -1598,6 +1613,78 @@ export default function SettingsPanel({
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setIntegrationTestModalOpen(false)} disabled={integrationTestLoading}>
               Cerrar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={userDialogOpen} onOpenChange={setUserDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{editingUserId ? "Editar usuario" : "Nuevo usuario"}</DialogTitle>
+            <DialogDescription>
+              {editingUserId ? "Actualiza sus datos y perfil operativo." : "La contraseña sera provisoria y debera cambiarla en el primer ingreso."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Nombre y apellido</label><Input value={userForm.name} onChange={(event) => setUserForm((form) => ({ ...form, name: event.target.value }))} /></div>
+            <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Correo electronico</label><Input type="email" value={userForm.email} onChange={(event) => setUserForm((form) => ({ ...form, email: event.target.value }))} /></div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-[#013765]">Rol</label>
+              <Select value={userForm.role_id} onValueChange={(value) => setUserForm((form) => ({ ...form, role_id: value }))} disabled={editingUserId === currentUserId}>
+                <SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{roles.map((role) => <SelectItem key={role.id} value={String(role.id)}>{role.name}</SelectItem>)}</SelectContent>
+              </Select>
+              {editingUserId === currentUserId ? <p className="text-xs text-slate-500">Tu propio rol no puede modificarse desde aqui.</p> : null}
+            </div>
+            {!editingUserId ? <>
+              <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Contraseña provisoria</label><Input type="password" value={userForm.password} onChange={(event) => setUserForm((form) => ({ ...form, password: event.target.value }))} /></div>
+              <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Confirmar contraseña</label><Input type="password" value={userForm.password_confirmation} onChange={(event) => setUserForm((form) => ({ ...form, password_confirmation: event.target.value }))} /></div>
+            </> : null}
+          </div>
+          <DialogFooter><Button variant="outline" onClick={() => setUserDialogOpen(false)}>Cancelar</Button><Button className="bg-[#013765] text-white hover:bg-[#024a8a]" disabled={savingUser} onClick={handleSaveUser}>{savingUser ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Guardar</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={passwordDialogUserId !== null} onOpenChange={(open) => { if (!open) setPasswordDialogUserId(null) }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Asignar contraseña provisoria</DialogTitle><DialogDescription>Se cerraran las sesiones activas del usuario y debera cambiar esta contraseña al volver a ingresar.</DialogDescription></DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Nueva contraseña</label><Input type="password" value={passwordForm.password} onChange={(event) => setPasswordForm((form) => ({ ...form, password: event.target.value }))} /></div>
+            <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Confirmar contraseña</label><Input type="password" value={passwordForm.password_confirmation} onChange={(event) => setPasswordForm((form) => ({ ...form, password_confirmation: event.target.value }))} /></div>
+          </div>
+          <DialogFooter><Button variant="outline" onClick={() => setPasswordDialogUserId(null)}>Cancelar</Button><Button className="bg-[#013765] text-white hover:bg-[#024a8a]" disabled={savingUser} onClick={handleResetPassword}>{savingUser ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <KeyRound className="mr-2 h-4 w-4" />}Asignar</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deactivationUserId !== null} onOpenChange={(open) => { if (!open && savingUserId === null) setDeactivationUserId(null) }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <div className="mb-2 flex h-11 w-11 items-center justify-center rounded-xl bg-red-50 text-red-700">
+              <UserX className="h-5 w-5" />
+            </div>
+            <DialogTitle>Dar de baja al usuario</DialogTitle>
+            <DialogDescription>
+              {(() => {
+                const user = usersState.find((item) => item.id === deactivationUserId)
+                return user ? `Vas a dar de baja a ${user.name} (${user.email}).` : "Vas a dar de baja a este usuario."
+              })()}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            Sus sesiones activas se cerrarán y no podrá volver a ingresar hasta que un administrador reactive la cuenta. El historial se conservará.
+          </div>
+          <DialogFooter>
+            <Button variant="outline" disabled={savingUserId !== null} onClick={() => setDeactivationUserId(null)}>Cancelar</Button>
+            <Button
+              className="bg-red-700 text-white hover:bg-red-800"
+              disabled={savingUserId !== null}
+              onClick={() => {
+                const user = usersState.find((item) => item.id === deactivationUserId)
+                if (user) void handleUserStatus(user)
+              }}
+            >
+              {savingUserId !== null ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserX className="mr-2 h-4 w-4" />}
+              Confirmar baja
             </Button>
           </DialogFooter>
         </DialogContent>

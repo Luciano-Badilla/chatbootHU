@@ -141,8 +141,8 @@ export default function QuickRepliesPanel() {
                     </div>
                     <p className="mt-0.5 line-clamp-2 text-xs leading-5 text-slate-500">{reply.body}</p>
                   </div>
-                  <Button variant="ghost" size="icon" className="border border-slate-200 text-slate-600 hover:border-[#013765]/40 hover:bg-slate-50 hover:text-[#013765]" onClick={() => openForm(reply)}><Pencil className="h-4 w-4" /></Button>
-                  <Button variant="ghost" size="icon" className="border border-red-200 text-red-500 hover:border-red-300 hover:bg-red-50 hover:text-red-600" disabled={deletingId === reply.id} onClick={() => setReplyToDelete(reply)}>
+                  <Button variant="outline" size="icon" className="rounded-lg border-slate-300 bg-white text-slate-600 shadow-sm hover:border-[#013765] hover:bg-slate-50 hover:text-[#013765]" onClick={() => openForm(reply)}><Pencil className="h-4 w-4" /></Button>
+                  <Button variant="outline" size="icon" className="rounded-lg border-red-300 bg-white text-red-500 shadow-sm hover:border-red-500 hover:bg-red-50 hover:text-red-600" disabled={deletingId === reply.id} onClick={() => setReplyToDelete(reply)}>
                     {deletingId === reply.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                   </Button>
                 </div>

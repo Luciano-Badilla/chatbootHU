@@ -333,7 +333,7 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
               </div>
               <p className="text-sm font-medium text-foreground">No se encontraron conversaciones</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                ProbÃ¡ con otro nombre, nÃºmero o fragmento del mensaje.
+                Probá con otro nombre, número o fragmento del mensaje.
               </p>
             </div>
           )}

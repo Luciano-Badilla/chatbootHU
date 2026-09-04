@@ -26,6 +26,9 @@ class User extends Authenticatable
         'validated',
         'requestsPassword',
         'role_id',
+        'is_active',
+        'deactivated_at',
+        'deactivated_by',
     ];
 
     /**
@@ -46,6 +49,10 @@ class User extends Authenticatable
     protected $casts = [
         'email_verified_at' => 'datetime',
         'password' => 'hashed',
+        'validated' => 'boolean',
+        'requestsPassword' => 'boolean',
+        'is_active' => 'boolean',
+        'deactivated_at' => 'datetime',
     ];
 
     public function role(): BelongsTo

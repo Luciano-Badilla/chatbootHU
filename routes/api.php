@@ -33,6 +33,8 @@ $sessionAuthenticated = [
     \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
     \Illuminate\Session\Middleware\StartSession::class,
     \App\Http\Middleware\Authenticate::class,
+    \App\Http\Middleware\EnsureUserIsActive::class,
+    \App\Http\Middleware\EnsurePasswordWasChanged::class,
 ];
 
 Route::middleware($sessionAuthenticated)->group(function () {
@@ -87,7 +89,11 @@ Route::middleware($sessionAuthenticated)->group(function () {
     });
 
     Route::middleware('permission:can_manage_users')->group(function () {
+        Route::post('/settings/users', [SettingsController::class, 'storeUser']);
+        Route::put('/settings/users/{user}', [SettingsController::class, 'updateUser']);
         Route::put('/settings/users/{user}/role', [SettingsController::class, 'updateUserRole']);
+        Route::put('/settings/users/{user}/status', [SettingsController::class, 'updateUserStatus']);
+        Route::put('/settings/users/{user}/password', [SettingsController::class, 'resetUserPassword']);
     });
 
     Route::middleware('permission:can_view_flows')->group(function () {
