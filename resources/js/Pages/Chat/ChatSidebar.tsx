@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useMemo, useEffect } from "react"
-import { Bot, Headset, Search, User } from "lucide-react"
+import { Bot, ChevronDown, ChevronRight, Headset, Search, User } from "lucide-react"
 import { Input } from "shadcn/components/ui/input"
 import { Avatar } from "shadcn/components/ui/avatar"
 import { Badge } from "shadcn/components/ui/badge"
@@ -14,10 +14,112 @@ interface ChatSidebarProps {
   chats: Chat[]
   selectedChatId: string
   onSelectChat: (chatId: string) => void
+  canViewAll?: boolean
 }
 
-export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: ChatSidebarProps) {
+function InboxAccordionButton({
+  label,
+  count,
+  active,
+  expanded,
+  onClick,
+}: {
+  label: string
+  count: number
+  active: boolean
+  expanded: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm font-semibold transition-colors",
+        active ? "border-[#013765]/30 bg-[#e8f0f8] text-[#013765]" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
+      )}
+    >
+      {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+      <span className="flex-1">{label}</span>
+      <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-medium text-slate-600">{count}</span>
+    </button>
+  )
+}
+
+function InboxChats({
+  chats,
+  selectedChatId,
+  onSelectChat,
+  formatTimestamp,
+  formatPreview,
+  showAssignment,
+}: {
+  chats: Chat[]
+  selectedChatId: string
+  onSelectChat: (chatId: string | number) => void
+  formatTimestamp: (timestamp?: string) => string
+  formatPreview: (message?: string | null) => string
+  showAssignment: boolean
+}) {
+  const [failedAvatars, setFailedAvatars] = useState<Record<string, boolean>>({})
+
+  if (chats.length === 0) {
+    return (
+      <div className="flex items-center gap-3 px-3 py-4 text-sm text-slate-500">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+          <Headset className="h-4 w-4" />
+        </span>
+        <span>Sin conversaciones</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="divide-y divide-slate-100">
+      {chats.map((chat) => {
+        const selected = String(chat.id) === String(selectedChatId)
+        return (
+          <button
+            key={chat.id}
+            type="button"
+            onClick={() => onSelectChat(chat.id)}
+            className={cn("flex w-full items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-slate-50", selected && "bg-[#dce8f5]")}
+          >
+            <Avatar className="h-10 w-10 shrink-0 overflow-hidden bg-[#2b5f90] text-white">
+              {chat.avatar && !failedAvatars[String(chat.id)] ? (
+                <img src={chat.avatar} alt={chat.name} className="h-full w-full object-cover" onError={() => setFailedAvatars((current) => ({ ...current, [String(chat.id)]: true }))} />
+              ) : <User className="m-auto h-5 w-5" />}
+            </Avatar>
+            <span className="min-w-0 flex-1">
+              <span className="flex items-center justify-between gap-2">
+                <span className={cn("truncate text-sm font-semibold", selected ? "text-[#013765]" : "text-slate-800")}>{chat.name}</span>
+                <span className="shrink-0 text-xs text-slate-500">{formatTimestamp(chat.timestamp)}</span>
+              </span>
+              <span className="mt-0.5 flex items-center gap-2">
+                <span className="truncate text-sm text-slate-500">{formatPreview(chat.lastMessage)}</span>
+                {chat.bot_enabled && <Bot className="h-3.5 w-3.5 shrink-0 text-blue-700" />}
+                {(chat.unread ?? 0) > 0 && <Badge className="h-5 min-w-5 bg-[#013765] text-xs text-white">{chat.unread}</Badge>}
+              </span>
+              {showAssignment && chat.operator_id && (
+                <span className={cn("mt-1 inline-flex max-w-full items-center gap-1 text-xs", selected ? "text-[#013765]/80" : "text-slate-500")}>
+                  <Headset className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">Asignado a: {chat.operator_name ?? `Operador #${chat.operator_id}`}</span>
+                </span>
+              )}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canViewAll = false }: ChatSidebarProps) {
   const [search, setSearch] = useState("")
+  const [inbox, setInbox] = useState<"bot" | "assigned" | "pending_assignment" | "archived">(
+    () => canViewAll ? "bot" : "assigned",
+  )
+  const [inboxExpanded, setInboxExpanded] = useState(true)
   const [now, setNow] = useState(Date.now())
   const [failedAvatars, setFailedAvatars] = useState<Record<string, boolean>>({})
 
@@ -128,12 +230,14 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
     const query = search.toLowerCase()
     const phoneQuery = normalizePhone(search)
 
-    const filtered = chats.filter(
-      (chat) =>
+    const filtered = chats.filter((chat) => {
+      const belongsToInbox = chat.attention_status === inbox
+      return belongsToInbox && (
         chat.name.toLowerCase().includes(query) ||
         formatLastMessagePreview(chat.lastMessage).toLowerCase().includes(query) ||
-        (phoneQuery.length > 0 && normalizePhone(chat.number).includes(phoneQuery)),
-    )
+        (phoneQuery.length > 0 && normalizePhone(chat.number).includes(phoneQuery))
+      )
+    })
 
     return [...filtered].sort((a, b) => {
       const aHasUnread = (a.unread ?? 0) > 0
@@ -153,7 +257,31 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
 
       return 0
     })
-  }, [search, chats])
+  }, [search, chats, inbox])
+
+  const inboxCounts = useMemo(() => ({
+    bot: chats.filter((chat) => chat.attention_status === "bot").length,
+    assigned: chats.filter((chat) => chat.attention_status === "assigned").length,
+    pending_assignment: chats.filter((chat) => chat.attention_status === "pending_assignment").length,
+    archived: chats.filter((chat) => chat.attention_status === "archived").length,
+  }), [chats])
+
+  const toggleInbox = (nextInbox: typeof inbox) => {
+    if (nextInbox === inbox) {
+      setInboxExpanded((expanded) => !expanded)
+      return
+    }
+
+    setInbox(nextInbox)
+    setInboxExpanded(true)
+  }
+
+  const inboxOptions = [
+    ...(canViewAll ? [{ key: "bot" as const, label: "Atendidos por el bot", count: inboxCounts.bot }] : []),
+    { key: "assigned" as const, label: canViewAll ? "Asignados" : "Mis asignados", count: inboxCounts.assigned },
+    ...(canViewAll ? [{ key: "pending_assignment" as const, label: "Pendientes", count: inboxCounts.pending_assignment }] : []),
+    { key: "archived" as const, label: canViewAll ? "Archivados" : "Mis archivados", count: inboxCounts.archived },
+  ]
 
   function formatTimestamp(timestamp?: string) {
     if (!timestamp) return ""
@@ -201,6 +329,13 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
           <h1 className="text-xl font-semibold text-foreground">Mensajes</h1>
         </div>
 
+        <div className="hidden">
+          {canViewAll && <InboxAccordionButton label="Atendidos por el bot" count={inboxCounts.bot} active={inbox === "bot"} expanded={inbox === "bot" && inboxExpanded} onClick={() => toggleInbox("bot")} />}
+          <InboxAccordionButton label={canViewAll ? "Asignados" : "Mis asignados"} count={inboxCounts.assigned} active={inbox === "assigned"} expanded={inbox === "assigned" && inboxExpanded} onClick={() => toggleInbox("assigned")} />
+          {canViewAll && <InboxAccordionButton label="Pendientes" count={inboxCounts.pending_assignment} active={inbox === "pending_assignment"} expanded={inbox === "pending_assignment" && inboxExpanded} onClick={() => toggleInbox("pending_assignment")} />}
+          <InboxAccordionButton label={canViewAll ? "Archivados" : "Mis archivados"} count={inboxCounts.archived} active={inbox === "archived"} expanded={inbox === "archived" && inboxExpanded} onClick={() => toggleInbox("archived")} />
+        </div>
+
         <div className="relative">
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
@@ -213,6 +348,28 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
       </div>
 
       <div className="flex-1 overflow-y-auto custom-scrollbar">
+        {inboxOptions.map((option) => {
+          const expanded = inbox === option.key && inboxExpanded
+          return (
+            <details key={option.key} open={expanded} className="overflow-hidden border-b border-slate-200 last:border-b-0">
+              <summary
+                onClick={(event) => {
+                  event.preventDefault()
+                  toggleInbox(option.key)
+                }}
+                className={cn("flex cursor-pointer list-none items-center gap-2 px-3 py-3 text-sm font-semibold", expanded ? "bg-[#e8f0f8] text-[#013765]" : "text-slate-700 hover:bg-slate-50")}
+              >
+                {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                <span className="flex-1">{option.label}</span>
+                <Badge variant="secondary" className="bg-slate-100 text-slate-600">{option.count}</Badge>
+              </summary>
+              {expanded && <InboxChats chats={visibleChats} selectedChatId={selectedChatId} onSelectChat={handleSelectChat} formatTimestamp={formatTimestamp} formatPreview={formatLastMessagePreview} showAssignment={canViewAll} />}
+            </details>
+          )
+        })}
+      </div>
+
+      {false && <div className="flex-1 overflow-y-auto custom-scrollbar">
         <div className="p-2">
           {visibleChats.length > 0 ? (
             visibleChats.map((chat, index) => {
@@ -338,7 +495,7 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat }: Cha
             </div>
           )}
         </div>
-      </div>
+      </div>}
     </div>
   )
 }

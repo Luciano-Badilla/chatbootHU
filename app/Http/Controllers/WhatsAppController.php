@@ -13,6 +13,7 @@ use App\Models\SystemSetting;
 use App\Services\AuditService;
 use App\Services\BotInactivityService;
 use App\Services\CampaignMetricsService;
+use App\Services\ChatAssignmentService;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -33,6 +34,7 @@ class WhatsAppController extends Controller
     public function __construct(
         private readonly BotInactivityService $botInactivityService,
         private readonly AuditService $auditService,
+        private readonly ChatAssignmentService $chatAssignmentService,
     ) {}
 
     public function verify(Request $request)
@@ -370,6 +372,17 @@ class WhatsAppController extends Controller
                 'last_user_message_at' => now(), // primer contacto
             ]);
         } else {
+            // Un mensaje nuevo reabre una conversación archivada y devuelve la atención al bot.
+            if ($chat->status === 'closed') {
+                $chat->status = 'open';
+                $chat->attention_status = 'bot';
+                $chat->closed_at = null;
+                $chat->closed_by = null;
+                $chat->closed_by_user_id = null;
+                $chat->operator_id = null;
+                $chat->assigned_at = null;
+            }
+
             // 1) Asegurar que use flow default y que tenga nodo
             $flow = $this->ensureChatUsesDefaultFlow($chat) ?? $flow;
 
@@ -486,6 +499,9 @@ class WhatsAppController extends Controller
                 'avatar' => $contact->profile_pic,
                 'lastMessage' => $previewText,
                 'timestamp' => now()->utc()->toIso8601String(),
+                'status' => $chat->status,
+                'attention_status' => $chat->attention_status,
+                'bot_enabled' => (bool) $chat->bot_enabled,
             ]), 0);
 
             // ChatMain
@@ -1668,6 +1684,7 @@ class WhatsAppController extends Controller
                 if ($flow) {
                     $this->resetChatToStartFromFlow($chat, $flow, 'input_terminal');
                 }
+                $this->archiveBotChat($chat, 'input_terminal');
 
                 return null;
             }
@@ -1809,6 +1826,8 @@ class WhatsAppController extends Controller
 
             // apagar bot
             $chat->bot_enabled = false;
+            $chat->status = 'open';
+            $chat->attention_status = 'pending_assignment';
 
             // por seguridad (por si venÃƒÂ­a de un input)
             $this->clearPendingInput($chat);
@@ -1829,6 +1848,8 @@ class WhatsAppController extends Controller
 
             $chat->save();
 
+            $chat = $this->chatAssignmentService->assignPending($chat);
+
             try {
                 $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_status_bot_'.uniqid());
                 $mqtt->connect();
@@ -1836,6 +1857,16 @@ class WhatsAppController extends Controller
                 $mqtt->publish("status_bot/chat/{$chat->id}", json_encode([
                     'chat_id' => $chat->id,
                     'status' => $chat->bot_enabled ? 'enabled' : 'disabled',
+                ]), 0);
+
+                $mqtt->publish("operator/chat/{$chat->id}", json_encode([
+                    'chat_id' => (int) $chat->id,
+                    'active' => (bool) $chat->operator_id,
+                    'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null,
+                    'operator_name' => $chat->operator?->name,
+                    'attention_status' => $chat->attention_status,
+                    'status' => $chat->status,
+                    'bot_enabled' => (bool) $chat->bot_enabled,
                 ]), 0);
 
                 $mqtt->disconnect();
@@ -3773,6 +3804,7 @@ class WhatsAppController extends Controller
                 ], fn ($value) => $value !== null && $value !== ''),
             ],
         );
+
     }
 
     private function appointmentSpecialtyFilter(array $settings, array $vars): ?string
@@ -4291,11 +4323,50 @@ class WhatsAppController extends Controller
         // Ã¢Å“â€¦ text y person_lookup pueden ser terminales automÃƒÂ¡ticos
         if (in_array($sentNode->type, ['text', 'person_lookup', 'person_create', 'appointment_lookup', 'appointment_create', 'appointment_cancel', 'image', 'document', 'video', 'audio', 'location'], true) && empty($sentNode->next_node_id)) {
             $this->resetChatToStartFromFlow($chat, $flow, 'terminal_text');
+            $this->archiveBotChat($chat, 'terminal_text');
 
             return true;
         }
 
         return false;
+    }
+
+    private function archiveBotChat(Chat $chat, string $reason): void
+    {
+        $chat->operator_id = null;
+        $chat->assigned_at = null;
+        $chat->status = 'closed';
+        $chat->attention_status = 'archived';
+        $chat->closed_at = now();
+        $chat->closed_by = 'bot';
+        $chat->closed_by_user_id = null;
+        $chat->bot_enabled = true;
+        $chat->save();
+
+        $this->auditService->recordChatAction(
+            'bot_finished_attention',
+            'El bot finalizo la atencion y archivo el chat',
+            $chat,
+            null,
+            ['meta' => ['reason' => $reason]],
+        );
+
+        try {
+            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_archive_chat_'.uniqid());
+            $mqtt->connect();
+            $mqtt->publish("operator/chat/{$chat->id}", json_encode([
+                'chat_id' => (int) $chat->id,
+                'active' => false,
+                'operator_id' => null,
+                'operator_name' => null,
+                'status' => 'closed',
+                'attention_status' => 'archived',
+                'bot_enabled' => true,
+            ]), 0);
+            $mqtt->disconnect();
+        } catch (\Throwable $e) {
+            Log::error('MQTT Error (archive bot chat): '.$e->getMessage());
+        }
     }
 
     private function nodeSettings(BotNode $node): array

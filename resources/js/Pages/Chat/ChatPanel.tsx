@@ -20,6 +20,11 @@ export type Chat = {
   bot_enabled: boolean
   operator_id?: number | null
   operator_name?: string | null
+  status?: "open" | "closed" | string
+  attention_status?: "bot" | "pending_assignment" | "assigned" | "archived" | string
+  assigned_at?: string | null
+  closed_at?: string | null
+  closed_by?: "bot" | "operator" | string | null
 
   bot_state?: {
     vars?: Record<string, any>
@@ -123,30 +128,17 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     selectedChat?.operator_id &&
     Number(selectedChat.operator_id) === Number(authUser?.id ?? 0),
   )
-
-  const shouldAskFinishAttention = (chat?: Chat | null) =>
-    Boolean(
-      chat &&
-      !chat.bot_enabled &&
-      chat.operator_id &&
-      Number(chat.operator_id) === Number(authUser?.id ?? 0),
-    )
+  const canFinishAttention = Boolean(
+    selectedChat?.status === "open" &&
+    selectedChat?.attention_status === "assigned" &&
+    Number(selectedChat?.operator_id ?? 0) === Number(authUser?.id ?? 0),
+  )
 
   const requestChatSelection = (nextChatId: string) => {
     const currentChatId = String(selectedChatId || "")
     const normalizedNextChatId = String(nextChatId || "")
 
     if (currentChatId === normalizedNextChatId) return
-
-    const currentChat = chats.find((chat) => String(chat.id) === currentChatId)
-    if (shouldAskFinishAttention(currentChat)) {
-      setFinishAttentionPrompt({
-        chatId: currentChatId,
-        chatName: currentChat?.name ?? null,
-        nextChatId: normalizedNextChatId,
-      })
-      return
-    }
 
     setSelectedChatId(normalizedNextChatId)
   }
@@ -200,6 +192,28 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
       continueAfterFinishPrompt(nextChatId)
     } catch (error) {
       console.error("Error finalizando atencion del operador:", error)
+    } finally {
+      setFinishingAttention(false)
+    }
+  }
+
+  const finishSelectedAttention = async () => {
+    if (!selectedChatId || !canFinishAttention) return
+    setFinishingAttention(true)
+    try {
+      const res = await fetch(`${import.meta.env.VITE_APP_URL}/api/chats/${selectedChatId}/finish-operator-attention`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      })
+      if (!res.ok) {
+        console.error("Error finalizando atencion del operador:", await res.text())
+        return
+      }
+      setChats((current) => current.map((chat) => String(chat.id) === String(selectedChatId)
+        ? { ...chat, status: "closed", attention_status: "archived", bot_enabled: true, operator_id: null, operator_name: null, closed_by: "operator", closed_at: new Date().toISOString() }
+        : chat,
+      ))
+      setSelectedChatId("")
     } finally {
       setFinishingAttention(false)
     }
@@ -359,6 +373,9 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
                     ...c,
                     operator_id: active ? (data.operator_id ?? null) : null,
                     operator_name: active ? (data.operator_name ?? null) : null,
+                    status: data.status ?? c.status,
+                    attention_status: data.attention_status ?? c.attention_status,
+                    bot_enabled: typeof data.bot_enabled === "boolean" ? data.bot_enabled : c.bot_enabled,
                   }
                 })()
                 : c,
@@ -399,6 +416,8 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
                   lastMessage: data.lastMessage,
                   timestamp: data.timestamp,
                   avatar: data.avatar ?? c.avatar ?? null,
+                  status: data.status ?? c.status,
+                  attention_status: data.attention_status ?? c.attention_status,
                   unread:
                     // si está abierto, siempre 0
                     chatId === selectedChatIdRef.current
@@ -424,6 +443,8 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
                 bot_enabled: typeof data.bot_enabled === "boolean" ? data.bot_enabled : true,
                 operator_id: data.operator_id ?? null,
                 operator_name: data.operator_name ?? null,
+                status: data.status ?? "open",
+                attention_status: data.attention_status ?? "bot",
               },
               ...prevChats,
             ]
@@ -445,6 +466,8 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   }, [])
 
   const updateOperatorPresence = async (chatId: string, active: boolean, keepalive = false) => {
+    // La asignación ya la resuelve el backend al entrar al handoff. Abrir o salir no la modifica.
+    return
     if (!chatId) return
     if (active && !authUser?.id) return
     const normalizedChatId = String(chatId)
@@ -616,6 +639,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
           chats={chats}
           selectedChatId={selectedChatId}
           onSelectChat={requestChatSelection}
+          canViewAll={Boolean(props?.auth?.permissions?.can_view_all_chats)}
         />
       </div>
 
@@ -638,7 +662,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
 
       {/* Panel derecho */}
       <div className="w-80 border-l border-gray-300 bg-gray-100 flex flex-col min-h-0">
-        <ChatInfo chat={selectedChat} readOnly={isReadOnly} canToggleBot={canToggleBot} />
+        <ChatInfo chat={selectedChat} readOnly={isReadOnly} canToggleBot={canToggleBot} canFinishAttention={canFinishAttention} finishingAttention={finishingAttention} onFinishAttention={finishSelectedAttention} />
       </div>
 
       {operatorConflict && (

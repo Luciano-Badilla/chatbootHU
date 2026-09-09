@@ -15,6 +15,9 @@ interface ChatInfoProps {
   variables?: ChatVariable[]
   readOnly?: boolean
   canToggleBot?: boolean
+  canFinishAttention?: boolean
+  finishingAttention?: boolean
+  onFinishAttention?: () => void
 }
 
 type VarType = "string" | "number" | "boolean" | "object" | "array" | "null" | "unknown"
@@ -166,6 +169,9 @@ export default function ChatInfo({
   variables = [],
   readOnly = false,
   canToggleBot = false,
+  canFinishAttention = false,
+  finishingAttention = false,
+  onFinishAttention,
 }: ChatInfoProps) {
   const [contactAvatarFailed, setContactAvatarFailed] = useState(false)
 
@@ -1077,6 +1083,17 @@ export default function ChatInfo({
                 <div className="text-[10px] text-muted-foreground mt-0.5">{formatDateSafe(lastMessageAt)}</div>
               </div>
             </div>
+            {canFinishAttention && (
+              <Button
+                type="button"
+                className="mt-3 w-full bg-[#013765] hover:bg-[#012e54]"
+                onClick={onFinishAttention}
+                disabled={finishingAttention}
+              >
+                {finishingAttention ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                {finishingAttention ? "Finalizando atención..." : "Finalizar atención y archivar"}
+              </Button>
+            )}
           </div>
 
           {/* Variables */}

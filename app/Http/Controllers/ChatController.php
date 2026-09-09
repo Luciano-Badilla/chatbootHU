@@ -3,7 +3,6 @@
 namespace App\Http\Controllers;
 
 use App\Models\Chat;
-use App\Models\Contact;
 use App\Models\Message;
 use App\Services\AuditService;
 use App\Services\BotInactivityService;
@@ -21,35 +20,43 @@ class ChatController extends Controller
 
     public function index()
     {
-        $chats = Contact::with([
-            'chats.messages' => function ($q) {
-                $q->latest();
-            },
-            'chats.operator',
-        ])
+        $actor = request()->user();
+        $canViewAll = (bool) $actor?->hasPermission('can_view_all_chats');
+
+        $chats = Chat::query()
+            ->with(['contact', 'messages' => fn ($query) => $query->latest(), 'operator'])
+            ->when(! $canViewAll, function ($query) use ($actor) {
+                $query->where(function ($scope) use ($actor) {
+                    $scope->where('operator_id', $actor->id)
+                        ->orWhere(function ($archived) use ($actor) {
+                            $archived->where('status', 'closed')->where('last_operator_id', $actor->id);
+                        });
+                });
+            })
+            // Administración y supervisión pueden auditar también conversaciones atendidas por bot.
+            ->when(! $canViewAll, fn ($query) => $query->whereIn('attention_status', ['assigned', 'archived']))
             ->get()
-            ->map(function ($contact) {
-                $chat = $contact->chats->last();
-                $lastMessage = $chat?->messages->first();
+            ->map(function (Chat $chat) {
+                $lastMessage = $chat->messages->first();
 
                 return [
-                    'id' => (int) ($chat?->id ?? 0),
-                    'name' => $contact->name ?? $contact->whatsapp_id,
-                    'number' => '+'.$contact->whatsapp_id,
+                    'id' => (int) $chat->id,
+                    'name' => $chat->contact?->name ?? $chat->contact?->whatsapp_id,
+                    'number' => '+'.$chat->contact?->whatsapp_id,
                     'lastMessage' => $lastMessage?->body ?? '',
                     'timestamp' => $lastMessage?->created_at,
-                    'unread' => $chat
-                        ? $chat->messages()
-                            ->where('status', 'received')
-                            ->where('status', '!=', 'read')
-                            ->count()
-                        : 0,
+                    'unread' => $chat->messages()->where('status', 'received')->count(),
                     'online' => false,
-                    'avatar' => $contact->profile_pic,
-                    'bot_enabled' => (bool) ($chat?->bot_enabled ?? true),
-                    'operator_id' => $chat?->operator_id ? (int) $chat->operator_id : null,
-                    'operator_name' => $chat?->operator?->name,
-                    'bot_state' => $chat?->bot_state ?? [],
+                    'avatar' => $chat->contact?->profile_pic,
+                    'bot_enabled' => (bool) $chat->bot_enabled,
+                    'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null,
+                    'operator_name' => $chat->operator?->name,
+                    'bot_state' => $chat->bot_state ?? [],
+                    'status' => $chat->status,
+                    'attention_status' => $chat->attention_status,
+                    'assigned_at' => $chat->assigned_at?->toIso8601String(),
+                    'closed_at' => $chat->closed_at?->toIso8601String(),
+                    'closed_by' => $chat->closed_by,
                 ];
             });
 
@@ -175,8 +182,15 @@ class ChatController extends Controller
             }
 
             $chat->operator_id = (int) $operatorId;
+            $chat->last_operator_id = (int) $operatorId;
+            $chat->assigned_at = now();
+            $chat->attention_status = 'assigned';
         } else {
             $chat->operator_id = null;
+            $chat->assigned_at = null;
+            if ($chat->status === 'open') {
+                $chat->attention_status = 'pending_assignment';
+            }
             $operatorId = null;
             $operatorName = null;
         }
@@ -248,7 +262,14 @@ class ChatController extends Controller
         }
 
         $this->botInactivityService->resetChatToStartFromFlow($chat, $flow, 'operator_finished_attention');
+        $chat->last_operator_id = $actorId;
         $chat->operator_id = null;
+        $chat->assigned_at = null;
+        $chat->status = 'closed';
+        $chat->attention_status = 'archived';
+        $chat->closed_at = now();
+        $chat->closed_by = 'operator';
+        $chat->closed_by_user_id = $actorId;
         $chat->save();
         $chat->load('operator');
 
@@ -256,6 +277,8 @@ class ChatController extends Controller
             'bot_enabled' => (bool) $chat->bot_enabled,
             'operator_id' => null,
             'operator_name' => null,
+            'status' => 'closed',
+            'attention_status' => 'archived',
             'bot_node_id' => $chat->bot_node_id,
         ];
 
@@ -275,6 +298,9 @@ class ChatController extends Controller
             'active' => false,
             'operator_id' => null,
             'operator_name' => null,
+            'status' => 'closed',
+            'attention_status' => 'archived',
+            'bot_enabled' => true,
         ]);
 
         $this->publishBotStatus((int) $chat->id, true);
@@ -315,13 +341,15 @@ class ChatController extends Controller
     public function snapshot()
     {
         $rows = Chat::with('operator:id,name')
-            ->get(['id', 'operator_id', 'bot_enabled'])
+            ->get(['id', 'operator_id', 'bot_enabled', 'status', 'attention_status'])
             ->map(function (Chat $chat) {
                 return [
                     'chat_id' => (int) $chat->id,
                     'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null,
                     'operator_name' => $chat->operator?->name,
                     'bot_enabled' => (bool) $chat->bot_enabled,
+                    'status' => $chat->status,
+                    'attention_status' => $chat->attention_status,
                 ];
             })
             ->values();

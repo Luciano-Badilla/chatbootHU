@@ -16,8 +16,14 @@ class Chat extends Model
         'bot_node_id',
         'title',
         'status',
+        'attention_status',
         'bot_enabled',
         'operator_id',
+        'assigned_at',
+        'closed_at',
+        'closed_by',
+        'closed_by_user_id',
+        'last_operator_id',
         'bot_step',
         'bot_state',
         'last_user_message_at',
@@ -28,6 +34,8 @@ class Chat extends Model
         'bot_enabled' => 'boolean',
         'bot_state' => 'array',
         'last_user_message_at' => 'datetime',
+        'assigned_at' => 'datetime',
+        'closed_at' => 'datetime',
     ];
 
     public function contact()
