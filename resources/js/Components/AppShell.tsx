@@ -1,4 +1,4 @@
-import type { FormEvent, ReactNode } from "react"
+import { useEffect, type FormEvent, type ReactNode } from "react"
 
 import { useForm, usePage } from "@inertiajs/react"
 import { Button } from "shadcn/components/ui/button"
@@ -30,8 +30,9 @@ export function AppShell({
   contentClassName = "px-4 py-4 lg:px-6 lg:py-6",
   fullHeight = false,
 }: AppShellProps) {
-  const page = usePage<{ auth?: { user?: { requestsPassword?: boolean } | null } }>()
+  const page = usePage<{ auth?: { user?: { requestsPassword?: boolean; role_name?: string } | null } }>()
   const mustChangePassword = Boolean(page.props.auth?.user?.requestsPassword)
+  const isOperator = ['operator', 'admin'].includes(page.props.auth?.user?.role_name ?? '')
   const passwordForm = useForm({ current_password: "", password: "", password_confirmation: "" })
 
   const changePassword = (event: FormEvent) => {
@@ -41,6 +42,21 @@ export function AppShell({
       onSuccess: () => passwordForm.reset(),
     })
   }
+
+  useEffect(() => {
+    if (!isOperator) return
+
+    const heartbeat = () => {
+      fetch(`${import.meta.env.VITE_APP_URL}/api/operators/me/heartbeat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      }).catch(() => undefined)
+    }
+
+    heartbeat()
+    const interval = window.setInterval(heartbeat, 30000)
+    return () => window.clearInterval(interval)
+  }, [isOperator])
 
   return (
     <SidebarProvider defaultOpen={false}>

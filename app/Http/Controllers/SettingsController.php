@@ -48,6 +48,7 @@ class SettingsController extends Controller
                 'integrations.autogestion.timeout',
                 'bot.inactivity_timeout_minutes',
                 'bot.inactivity_timeout_message',
+                'operators.max_assigned_chats',
             ])
             ->pluck('value', 'key');
         $storedWhatsappToken = trim((string) ($settings['integrations.whatsapp.token'] ?? ''));
@@ -100,6 +101,9 @@ class SettingsController extends Controller
                     'inactivity_timeout_minutes' => $settings['bot.inactivity_timeout_minutes'] ?? '1440',
                     'inactivity_timeout_message' => $settings['bot.inactivity_timeout_message']
                         ?? 'La conversacion se cerro por inactividad. Si queres continuar, escribinos nuevamente y retomamos desde el inicio.',
+                ],
+                'operators' => [
+                    'max_assigned_chats' => $settings['operators.max_assigned_chats'] ?? '5',
                 ],
             ],
             'botFlows' => $activeFlows->map(fn (BotFlow $flow) => [
@@ -558,6 +562,7 @@ class SettingsController extends Controller
             'default_flow_id' => ['required', 'integer', 'exists:bot_flows,id'],
             'inactivity_timeout_minutes' => ['required', 'integer', 'min:1', 'max:10080'],
             'inactivity_timeout_message' => ['required', 'string', 'max:2000'],
+            'max_assigned_chats' => ['required', 'integer', 'min:1', 'max:100'],
         ]);
 
         $beforeDefaultFlow = BotFlow::query()->where('is_default', true)->first();
@@ -569,6 +574,7 @@ class SettingsController extends Controller
                 'bot.inactivity_timeout_message',
                 'La conversacion se cerro por inactividad. Si queres continuar, escribinos nuevamente y retomamos desde el inicio.'
             ),
+            'max_assigned_chats' => $this->settingValue('operators.max_assigned_chats', '5'),
         ];
 
         $flow = BotFlow::query()->findOrFail($data['default_flow_id']);
@@ -593,6 +599,11 @@ class SettingsController extends Controller
                 ['key' => 'bot.inactivity_timeout_message'],
                 ['value' => trim($data['inactivity_timeout_message'])],
             );
+
+            SystemSetting::updateOrCreate(
+                ['key' => 'operators.max_assigned_chats'],
+                ['value' => (string) $data['max_assigned_chats']],
+            );
         });
 
         $after = [
@@ -600,6 +611,7 @@ class SettingsController extends Controller
             'default_flow_name' => $flow->name,
             'inactivity_timeout_minutes' => (string) $data['inactivity_timeout_minutes'],
             'inactivity_timeout_message' => trim($data['inactivity_timeout_message']),
+            'max_assigned_chats' => (string) $data['max_assigned_chats'],
         ];
 
         $this->auditService->recordSettingsChange('bot', $before, $after, $request->user());
@@ -611,6 +623,9 @@ class SettingsController extends Controller
                     'default_flow_id' => $flow->id,
                     'inactivity_timeout_minutes' => (string) $data['inactivity_timeout_minutes'],
                     'inactivity_timeout_message' => trim($data['inactivity_timeout_message']),
+                ],
+                'operators' => [
+                    'max_assigned_chats' => (string) $data['max_assigned_chats'],
                 ],
             ],
         ]);
@@ -901,7 +916,7 @@ class SettingsController extends Controller
 
     protected function importSettings(array $settings): array
     {
-        $allowedPrefixes = ['general.', 'integrations.', 'bot.'];
+        $allowedPrefixes = ['general.', 'integrations.', 'bot.', 'operators.'];
         $imported = 0;
 
         foreach ($settings as $key => $value) {

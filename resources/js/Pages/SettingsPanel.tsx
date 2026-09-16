@@ -80,6 +80,9 @@ interface SettingsPanelProps {
       inactivity_timeout_minutes?: string
       inactivity_timeout_message?: string
     }
+    operators?: {
+      max_assigned_chats?: string
+    }
   }
   botFlows?: Array<{
     id: number
@@ -151,6 +154,7 @@ export default function SettingsPanel({
   const initialInactivityTimeoutMessage =
     settings?.bot?.inactivity_timeout_message ??
     "La conversacion se cerro por inactividad. Si queres continuar, escribinos nuevamente y retomamos desde el inicio."
+  const initialMaxAssignedChats = settings?.operators?.max_assigned_chats ?? "5"
 
   const [timezone, setTimezone] = useState(initialTimezone)
   const [language, setLanguage] = useState(initialLanguage)
@@ -204,6 +208,8 @@ export default function SettingsPanel({
   const [savedDefaultFlowId, setSavedDefaultFlowId] = useState<number | null>(initialDefaultFlowId)
   const [savedInactivityTimeoutMinutes, setSavedInactivityTimeoutMinutes] = useState(initialInactivityTimeoutMinutes)
   const [savedInactivityTimeoutMessage, setSavedInactivityTimeoutMessage] = useState(initialInactivityTimeoutMessage)
+  const [maxAssignedChats, setMaxAssignedChats] = useState(initialMaxAssignedChats)
+  const [savedMaxAssignedChats, setSavedMaxAssignedChats] = useState(initialMaxAssignedChats)
   const [savingGeneral, setSavingGeneral] = useState(false)
   const [generalSaved, setGeneralSaved] = useState(false)
   const [savingBot, setSavingBot] = useState(false)
@@ -257,6 +263,8 @@ export default function SettingsPanel({
     setSavedDefaultFlowId(initialDefaultFlowId)
     setSavedInactivityTimeoutMinutes(initialInactivityTimeoutMinutes)
     setSavedInactivityTimeoutMessage(initialInactivityTimeoutMessage)
+    setMaxAssignedChats(initialMaxAssignedChats)
+    setSavedMaxAssignedChats(initialMaxAssignedChats)
     setUsersState(users)
   }, [
     initialTimezone,
@@ -272,6 +280,7 @@ export default function SettingsPanel({
     initialDefaultFlowId,
     initialInactivityTimeoutMinutes,
     initialInactivityTimeoutMessage,
+    initialMaxAssignedChats,
     users,
   ])
 
@@ -317,7 +326,8 @@ export default function SettingsPanel({
     return (
       defaultFlowId !== savedDefaultFlowId ||
       inactivityTimeoutMinutes !== savedInactivityTimeoutMinutes ||
-      inactivityTimeoutMessage !== savedInactivityTimeoutMessage
+      inactivityTimeoutMessage !== savedInactivityTimeoutMessage ||
+      maxAssignedChats !== savedMaxAssignedChats
     )
   }, [
     defaultFlowId,
@@ -326,6 +336,8 @@ export default function SettingsPanel({
     savedDefaultFlowId,
     savedInactivityTimeoutMinutes,
     savedInactivityTimeoutMessage,
+    maxAssignedChats,
+    savedMaxAssignedChats,
   ])
 
   const handleSaveGeneral = async () => {
@@ -399,6 +411,7 @@ export default function SettingsPanel({
           default_flow_id: defaultFlowId,
           inactivity_timeout_minutes: Number(inactivityTimeoutMinutes || 1440),
           inactivity_timeout_message: inactivityTimeoutMessage,
+          max_assigned_chats: Number(maxAssignedChats),
         }),
       })
 
@@ -414,6 +427,7 @@ export default function SettingsPanel({
       setSavedDefaultFlowId(defaultFlowId)
       setSavedInactivityTimeoutMinutes(inactivityTimeoutMinutes)
       setSavedInactivityTimeoutMessage(inactivityTimeoutMessage)
+      setSavedMaxAssignedChats(maxAssignedChats)
       setBotSaved(true)
       toast.success("Configuracion del bot guardada", {
         description: "Se actualizaron el flujo por defecto y la politica de inactividad.",
@@ -1183,6 +1197,29 @@ export default function SettingsPanel({
                 />
                 <p className="text-xs text-[#013765]/60">
                   Este texto se envia cuando el sistema detecta que el flujo pendiente vencio por inactividad.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-4 border-t border-[#dbe5ef] pt-5">
+              <div>
+                <h3 className="text-sm font-semibold text-[#013765]">Asignación a operadores</h3>
+                <p className="mt-1 text-xs text-[#013765]/65">
+                  Configura cómo se entregan los chats cuando el bot deriva la conversación a atención humana.
+                </p>
+              </div>
+              <div className="max-w-md space-y-1.5">
+                <label className="text-sm font-medium text-[#013765]">Máximo de chats por operador</label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={maxAssignedChats}
+                  onChange={(event) => setMaxAssignedChats(event.target.value)}
+                  placeholder="5"
+                />
+                <p className="text-xs text-[#013765]/60">
+                  La asignación automática sólo considera operadores que estén por debajo de este límite. Si todos lo alcanzan, el chat queda pendiente de asignación.
                 </p>
               </div>
             </div>

@@ -53,7 +53,7 @@ class AuditController extends Controller
             'messages' => $query->whereIn('log_name', ['messages', 'chat']),
             'flows' => $query->whereIn('log_name', ['flows', 'bot_flows']),
             'campaigns' => $query->where('log_name', 'campaigns'),
-            default => $query->whereIn('log_name', ['settings', 'users', 'security', 'agenda']),
+            default => $query->whereIn('log_name', ['settings', 'users', 'security', 'agenda', 'operator_control']),
         };
 
         return $query

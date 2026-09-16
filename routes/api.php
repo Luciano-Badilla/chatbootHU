@@ -7,6 +7,7 @@ use App\Http\Controllers\CampaignController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\ChatMediaController;
 use App\Http\Controllers\LocationController;
+use App\Http\Controllers\OperatorControlController;
 use App\Http\Controllers\QuickReplyController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\WhatsAppController;
@@ -52,6 +53,9 @@ Route::middleware($sessionAuthenticated)->group(function () {
     Route::post('/chats/{chat}/bot/reset', [WhatsAppController::class, 'resetBotFlow'])->middleware('permission:can_toggle_bot');
     Route::post('/chats/{chat}/operator', [ChatController::class, 'updateOperator'])->middleware('permission:can_assign_chats');
     Route::post('/chats/{chat}/finish-operator-attention', [ChatController::class, 'finishOperatorAttention'])->middleware('permission:can_assign_chats');
+    Route::post('/operators/me/availability', [OperatorControlController::class, 'updateMyAvailability']);
+    Route::post('/operators/me/current-chat', [OperatorControlController::class, 'updateMyCurrentChat']);
+    Route::post('/operators/me/heartbeat', [OperatorControlController::class, 'heartbeat']);
     Route::get('/chats/{chat}/media', [ChatMediaController::class, 'index']);
     Route::get('/agenda/contacts', [AgendaContactController::class, 'apiIndex']);
     Route::post('/agenda/contacts', [AgendaContactController::class, 'store']);
@@ -77,6 +81,11 @@ Route::middleware($sessionAuthenticated)->group(function () {
         Route::get('/audit/logs', [AuditController::class, 'logs']);
         Route::get('/audit/logs/tail', [AuditController::class, 'applicationLogs']);
     });
+
+    Route::put('/operators/{user}/availability', [OperatorControlController::class, 'updateAvailability'])->middleware('permission:can_view_all_chats');
+    Route::post('/operators/chats/{chat}/reassign', [OperatorControlController::class, 'reassignChat'])->middleware('permission:can_view_all_chats');
+    Route::get('/operator-control/snapshot', [OperatorControlController::class, 'snapshot'])->middleware('permission:can_view_all_chats');
+    Route::get('/operator-control/operators/{user}/timeline', [OperatorControlController::class, 'timeline'])->middleware('permission:can_view_all_chats');
 
     Route::middleware('permission:can_manage_settings')->group(function () {
         Route::get('/settings/export', [SettingsController::class, 'exportConfiguration']);

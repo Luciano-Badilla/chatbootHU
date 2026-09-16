@@ -6,6 +6,7 @@ use App\Models\Chat;
 use App\Models\Message;
 use App\Services\AuditService;
 use App\Services\BotInactivityService;
+use App\Services\ChatAssignmentService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
@@ -16,6 +17,7 @@ class ChatController extends Controller
     public function __construct(
         private readonly AuditService $auditService,
         private readonly BotInactivityService $botInactivityService,
+        private readonly ChatAssignmentService $chatAssignmentService,
     ) {}
 
     public function index()
@@ -198,6 +200,8 @@ class ChatController extends Controller
         $chat->save();
         $chat->load('operator');
 
+        $this->chatAssignmentService->assignAllPending();
+
         $this->auditService->recordChatAction(
             $data['active'] ? 'operator_assigned' : 'operator_released',
             $data['active'] ? 'Tomo el chat' : 'Libero el chat',
@@ -272,6 +276,8 @@ class ChatController extends Controller
         $chat->closed_by_user_id = $actorId;
         $chat->save();
         $chat->load('operator');
+
+        $this->chatAssignmentService->assignAllPending();
 
         $after = [
             'bot_enabled' => (bool) $chat->bot_enabled,

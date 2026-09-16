@@ -19,6 +19,10 @@ class Kernel extends ConsoleKernel
         $schedule->command('campaigns:dispatch')
             ->everyMinute()
             ->withoutOverlapping();
+
+        $schedule->command('operators:release-disconnected-chats')
+            ->everyMinute()
+            ->withoutOverlapping();
     }
 
     /**

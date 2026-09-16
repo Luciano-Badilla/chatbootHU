@@ -29,6 +29,9 @@ class User extends Authenticatable
         'is_active',
         'deactivated_at',
         'deactivated_by',
+        'operator_availability',
+        'current_chat_id',
+        'last_operator_activity_at',
     ];
 
     /**
@@ -53,6 +56,7 @@ class User extends Authenticatable
         'requestsPassword' => 'boolean',
         'is_active' => 'boolean',
         'deactivated_at' => 'datetime',
+        'last_operator_activity_at' => 'datetime',
     ];
 
     public function role(): BelongsTo
@@ -78,6 +82,12 @@ class User extends Authenticatable
     public function hasRole(string ...$roles): bool
     {
         return in_array($this->roleName(), array_map('strtolower', $roles), true);
+    }
+
+    /** Identifies users who can receive and operate assigned chats. */
+    public function canHandleChats(): bool
+    {
+        return $this->hasRole('operator', 'admin');
     }
 
     public function roleLabel(): string

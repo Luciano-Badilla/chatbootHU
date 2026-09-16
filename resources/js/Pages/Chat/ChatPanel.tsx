@@ -7,6 +7,7 @@ import ChatInfo from "./ChatInfo"
 import mqtt from "mqtt"
 import { usePage } from "@inertiajs/react"
 import { AlertTriangle, Eye, WifiOff, X } from "lucide-react"
+import { toast } from "sonner"
 
 export type Chat = {
   id: number | string
@@ -73,7 +74,7 @@ interface ChatPanelProps {
 // - Coordinar Sidebar, Main y Info.
 export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   const { props } = usePage() as any
-  const authUser = props?.auth?.user as { id?: number; name?: string } | undefined
+  const authUser = props?.auth?.user as { id?: number; name?: string; role_name?: string; operator_availability?: "available" | "paused" | "unavailable" } | undefined
 
   // Estado local con la lista de chats (se inicializa con lo que viene del backend).
   const [chats, setChats] = useState<Chat[]>(initialChats)
@@ -133,6 +134,25 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     selectedChat?.attention_status === "assigned" &&
     Number(selectedChat?.operator_id ?? 0) === Number(authUser?.id ?? 0),
   )
+
+  useEffect(() => {
+    if (!["operator", "admin"].includes(authUser?.role_name ?? "")) return
+
+    const currentChatId = selectedChat?.attention_status === "assigned" && Number(selectedChat?.operator_id ?? 0) === Number(authUser.id ?? 0)
+      ? selectedChat.id
+      : null
+    const notifyCurrentChat = () => {
+      fetch(`${import.meta.env.VITE_APP_URL}/api/operators/me/current-chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: currentChatId }),
+      }).catch(() => undefined)
+    }
+
+    notifyCurrentChat()
+    const heartbeat = window.setInterval(notifyCurrentChat, 30000)
+    return () => window.clearInterval(heartbeat)
+  }, [authUser?.id, authUser?.role_name, selectedChat?.id, selectedChat?.operator_id, selectedChat?.attention_status])
 
   const requestChatSelection = (nextChatId: string) => {
     const currentChatId = String(selectedChatId || "")
