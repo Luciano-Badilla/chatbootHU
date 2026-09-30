@@ -263,6 +263,13 @@ class OperatorControlController extends Controller
             'reason' => ['nullable', 'string', 'max:500'],
         ]);
 
+        $isAdminAction = (bool) $request->route('admin_action');
+        $auditReason = $isAdminAction
+            ? ($request->boolean('automatic')
+                ? 'Intervención administrativa: liberó el chat para reasignación automática.'
+                : 'Intervención administrativa: reasignó el chat a un operador.')
+            : ($data['reason'] ?? null);
+
         if ($chat->status !== 'open') {
             return response()->json(['ok' => false, 'message' => 'Solo se pueden reasignar chats abiertos.'], 422);
         }
@@ -280,9 +287,10 @@ class OperatorControlController extends Controller
             $this->auditService->recordChatAction('operator_auto_reassigned', $assigned ? 'Reasigno el chat automáticamente' : 'Dejo el chat pendiente de asignación automática', $chat, $request->user(), [
                 'before' => $before,
                 'after' => ['operator_id' => $chat->operator_id, 'attention_status' => $chat->attention_status],
-                'meta' => ['reason' => $data['reason'] ?? null],
+                'meta' => ['reason' => $auditReason],
             ]);
             $this->publishControlUpdate(['type' => 'automatic_reassignment', 'chat_id' => $chat->id, 'operator_id' => $chat->operator_id]);
+            $this->publishChatUpdate($chat);
 
             return response()->json([
                 'ok' => true,
@@ -319,9 +327,10 @@ class OperatorControlController extends Controller
         $this->auditService->recordChatAction('operator_reassigned', 'Reasigno el chat a '.$operator->name, $chat, $request->user(), [
             'before' => $before,
             'after' => ['operator_id' => $operator->id, 'operator_name' => $operator->name, 'attention_status' => 'assigned'],
-            'meta' => ['reason' => $data['reason'] ?? null],
+            'meta' => ['reason' => $auditReason],
         ]);
         $this->publishControlUpdate(['type' => 'reassignment', 'chat_id' => $chat->id, 'operator_id' => $operator->id]);
+        $this->publishChatUpdate($chat->fresh('operator'));
 
         return response()->json([
             'ok' => true,
@@ -381,6 +390,29 @@ class OperatorControlController extends Controller
             $mqtt->disconnect();
         } catch (\Throwable $exception) {
             Log::warning('MQTT Error (operator control): '.$exception->getMessage());
+        }
+    }
+
+    private function publishChatUpdate(Chat $chat): void
+    {
+        $host = env('MQTT_HOST') ?: env('VITE_MOSQUITTO_HOST');
+        if (! $host) return;
+
+        try {
+            $mqtt = new MqttClient((string) $host, 1883, 'laravel_operator_chat_'.uniqid());
+            $mqtt->connect();
+            $mqtt->publish("operator/chat/{$chat->id}", json_encode([
+                'chat_id' => (int) $chat->id,
+                'active' => $chat->attention_status === 'assigned' && (bool) $chat->operator_id,
+                'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null,
+                'operator_name' => $chat->operator?->name,
+                'bot_enabled' => (bool) $chat->bot_enabled,
+                'status' => $chat->status,
+                'attention_status' => $chat->attention_status,
+            ]), 0);
+            $mqtt->disconnect();
+        } catch (\Throwable $exception) {
+            Log::warning('MQTT Error (operator chat update): '.$exception->getMessage());
         }
     }
 }

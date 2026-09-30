@@ -49,8 +49,8 @@ Route::middleware($sessionAuthenticated)->group(function () {
     Route::post('/message/send-location', [WhatsAppController::class, 'sendLocation']);
     Route::get('/location/search', [LocationController::class, 'search']);
     Route::get('/location/reverse', [LocationController::class, 'reverse']);
-    Route::post('/chats/{chat}/bot', [WhatsAppController::class, 'updateBotStatus'])->middleware('permission:can_toggle_bot');
-    Route::post('/chats/{chat}/bot/reset', [WhatsAppController::class, 'resetBotFlow'])->middleware('permission:can_toggle_bot');
+    Route::post('/chats/{chat}/bot', [WhatsAppController::class, 'updateBotStatus'])->middleware('permission:can_administer_chats');
+    Route::post('/chats/{chat}/bot/reset', [WhatsAppController::class, 'resetBotFlow'])->middleware('permission:can_administer_chats');
     Route::post('/chats/{chat}/operator', [ChatController::class, 'updateOperator'])->middleware('permission:can_assign_chats');
     Route::post('/chats/{chat}/finish-operator-attention', [ChatController::class, 'finishOperatorAttention'])->middleware('permission:can_assign_chats');
     Route::post('/operators/me/availability', [OperatorControlController::class, 'updateMyAvailability']);
@@ -80,6 +80,16 @@ Route::middleware($sessionAuthenticated)->group(function () {
     Route::middleware('permission:can_view_audit')->group(function () {
         Route::get('/audit/logs', [AuditController::class, 'logs']);
         Route::get('/audit/logs/tail', [AuditController::class, 'applicationLogs']);
+    });
+
+    Route::middleware('permission:can_view_audit')->group(function () {
+        Route::get('/chats/{chat}/audit', [AuditController::class, 'chatLogs']);
+    });
+
+    Route::middleware('permission:can_administer_chats')->group(function () {
+        Route::post('/chats/{chat}/reassign', [OperatorControlController::class, 'reassignChat'])->defaults('admin_action', true);
+        Route::post('/chats/{chat}/archive', [ChatController::class, 'archiveByAdmin']);
+        Route::post('/chats/{chat}/reopen', [ChatController::class, 'reopenByAdmin']);
     });
 
     Route::put('/operators/{user}/availability', [OperatorControlController::class, 'updateAvailability'])->middleware('permission:can_view_all_chats');

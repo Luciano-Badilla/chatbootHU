@@ -4219,12 +4219,8 @@ class WhatsAppController extends Controller
             'bot_state' => $chat->bot_state,
         ];
 
-        $chat->bot_flow_id = $flow->id;
-        $chat->bot_node_id = $flow->start_node_id;
-        $chat->bot_step = null;
-        $chat->bot_state = [];
-        $chat->bot_enabled = true;
-        $chat->save();
+        // Mantiene las variables ya capturadas y limpia solo el estado operativo del flujo.
+        $this->botInactivityService->resetChatToStartFromFlow($chat, $flow, 'admin_reset');
 
         try {
             $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_reset_bot_'.uniqid());
@@ -4251,7 +4247,7 @@ class WhatsAppController extends Controller
                     'bot_flow_id' => $flow->id,
                     'bot_node_id' => $flow->start_node_id,
                     'bot_step' => null,
-                    'bot_state' => [],
+                    'bot_state' => $chat->bot_state,
                 ],
             ],
         );

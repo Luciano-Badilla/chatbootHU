@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\AuditService;
+use App\Models\Chat;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\File;
@@ -42,6 +43,38 @@ class AuditController extends Controller
 
         return response()->json([
             'tail' => $this->readApplicationLogTail($lines),
+        ]);
+    }
+
+    public function chatLogs(Chat $chat, Request $request)
+    {
+        $limit = max(10, min(100, (int) $request->integer('limit', 50)));
+
+        return response()->json([
+            'logs' => Activity::query()
+                ->with('causer')
+                ->whereIn('log_name', ['chat', 'messages'])
+                ->where(function ($query) use ($chat) {
+                    $query->where(function ($subject) use ($chat) {
+                        $subject->where('subject_type', Chat::class)->where('subject_id', $chat->id);
+                    })->orWhere('properties->chat_id', $chat->id)
+                      ->orWhere('properties->chat->id', $chat->id);
+                })
+                ->latest('id')
+                ->limit($limit)
+                ->get()
+                ->map(fn (Activity $activity) => [
+                    'id' => $activity->id,
+                    'event' => $activity->event,
+                    'description' => $activity->description,
+                    'created_at' => optional($activity->created_at)?->toIso8601String(),
+                    'causer_name' => $activity->causer?->name,
+                    'properties' => $this->auditService->presentProperties(
+                        (string) $activity->log_name,
+                        $activity->event,
+                        $activity->properties?->toArray() ?? [],
+                    ),
+                ])->values(),
         ]);
     }
 

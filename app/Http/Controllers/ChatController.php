@@ -26,7 +26,7 @@ class ChatController extends Controller
         $canViewAll = (bool) $actor?->hasPermission('can_view_all_chats');
 
         $chats = Chat::query()
-            ->with(['contact', 'messages' => fn ($query) => $query->latest(), 'operator'])
+            ->with(['contact', 'messages' => fn ($query) => $query->latest(), 'operator', 'botFlow', 'botNode'])
             ->when(! $canViewAll, function ($query) use ($actor) {
                 $query->where(function ($scope) use ($actor) {
                     $scope->where('operator_id', $actor->id)
@@ -59,6 +59,11 @@ class ChatController extends Controller
                     'assigned_at' => $chat->assigned_at?->toIso8601String(),
                     'closed_at' => $chat->closed_at?->toIso8601String(),
                     'closed_by' => $chat->closed_by,
+                    'bot_flow_id' => $chat->bot_flow_id ? (int) $chat->bot_flow_id : null,
+                    'bot_flow_name' => $chat->botFlow?->name,
+                    'bot_node_id' => $chat->bot_node_id ? (int) $chat->bot_node_id : null,
+                    'bot_node_name' => $chat->botNode?->key,
+                    'bot_step' => $chat->bot_step,
                 ];
             });
 
@@ -320,6 +325,70 @@ class ChatController extends Controller
         ]);
     }
 
+    public function archiveByAdmin(Request $request, Chat $chat)
+    {
+        if ($chat->status === 'closed') {
+            return response()->json(['ok' => false, 'message' => 'El chat ya esta archivado.'], 422);
+        }
+
+        $flow = $this->botInactivityService->getDefaultFlow();
+        if (! $flow || ! $flow->start_node_id) {
+            return response()->json(['ok' => false, 'message' => 'No hay un flujo activo para reactivar el bot.'], 422);
+        }
+
+        $chat->loadMissing('operator');
+        $before = $this->adminChatState($chat);
+        $previousOperatorId = $chat->operator_id;
+        $this->botInactivityService->resetChatToStartFromFlow($chat, $flow, 'admin_archived');
+        $chat->last_operator_id = $previousOperatorId ?? $chat->last_operator_id;
+        $chat->operator_id = null;
+        $chat->assigned_at = null;
+        $chat->status = 'closed';
+        $chat->attention_status = 'archived';
+        $chat->closed_at = now();
+        $chat->closed_by = 'admin';
+        $chat->closed_by_user_id = $request->user()?->id;
+        $chat->save();
+        $chat->load('operator');
+
+        $this->auditService->recordChatAction('admin_archived_chat', 'Archivo el chat y reactivo el bot', $chat, $request->user(), [
+            'before' => $before, 'after' => $this->adminChatState($chat), 'meta' => ['reason' => 'Intervención administrativa: archivó el chat y reactivó el bot.'],
+        ]);
+        $this->publishChatLifecycle($chat);
+
+        return response()->json(['ok' => true, 'chat' => $this->adminChatPayload($chat)]);
+    }
+
+    public function reopenByAdmin(Request $request, Chat $chat)
+    {
+        if ($chat->status !== 'closed') {
+            return response()->json(['ok' => false, 'message' => 'Solo se pueden reabrir chats archivados.'], 422);
+        }
+
+        $flow = $this->botInactivityService->getDefaultFlow();
+        if (! $flow || ! $flow->start_node_id) {
+            return response()->json(['ok' => false, 'message' => 'No hay un flujo activo para reabrir el chat.'], 422);
+        }
+
+        $before = $this->adminChatState($chat);
+        $this->botInactivityService->resetChatToStartFromFlow($chat, $flow, 'admin_reopened');
+        $chat->operator_id = null;
+        $chat->assigned_at = null;
+        $chat->status = 'open';
+        $chat->attention_status = 'bot';
+        $chat->closed_at = null;
+        $chat->closed_by = null;
+        $chat->closed_by_user_id = null;
+        $chat->save();
+
+        $this->auditService->recordChatAction('admin_reopened_chat', 'Reabrio el chat con el bot activo', $chat, $request->user(), [
+            'before' => $before, 'after' => $this->adminChatState($chat), 'meta' => ['reason' => 'Intervención administrativa: reabrió el chat con el bot activo.'],
+        ]);
+        $this->publishChatLifecycle($chat);
+
+        return response()->json(['ok' => true, 'chat' => $this->adminChatPayload($chat)]);
+    }
+
     public function getMessages(Request $request, $chatId)
     {
         $limit = max(10, min((int) $request->query('limit', 50), 100));
@@ -383,6 +452,26 @@ class ChatController extends Controller
         } catch (\Throwable $e) {
             Log::error('MQTT Error (operator status): '.$e->getMessage());
         }
+    }
+
+    private function adminChatState(Chat $chat): array
+    {
+        return ['operator_id' => $chat->operator_id, 'bot_enabled' => (bool) $chat->bot_enabled, 'status' => $chat->status, 'attention_status' => $chat->attention_status, 'bot_flow_id' => $chat->bot_flow_id, 'bot_node_id' => $chat->bot_node_id];
+    }
+
+    private function adminChatPayload(Chat $chat): array
+    {
+        $chat->loadMissing(['botFlow', 'botNode']);
+
+        return ['chat_id' => (int) $chat->id, 'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null, 'operator_name' => null, 'bot_enabled' => (bool) $chat->bot_enabled, 'status' => $chat->status, 'attention_status' => $chat->attention_status, 'assigned_at' => $chat->assigned_at?->toIso8601String(), 'closed_at' => $chat->closed_at?->toIso8601String(), 'closed_by' => $chat->closed_by, 'bot_flow_id' => $chat->bot_flow_id ? (int) $chat->bot_flow_id : null, 'bot_flow_name' => $chat->botFlow?->name, 'bot_node_id' => $chat->bot_node_id ? (int) $chat->bot_node_id : null, 'bot_node_name' => $chat->botNode?->key, 'bot_step' => $chat->bot_step, 'bot_state' => $chat->bot_state];
+    }
+
+    private function publishChatLifecycle(Chat $chat): void
+    {
+        $payload = $this->adminChatPayload($chat);
+        $payload['active'] = false;
+        $this->publishOperatorStatus((int) $chat->id, $payload);
+        $this->publishBotStatus((int) $chat->id, (bool) $chat->bot_enabled);
     }
 
     private function publishBotStatus(int $chatId, bool $enabled): void

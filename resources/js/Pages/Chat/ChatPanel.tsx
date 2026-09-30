@@ -26,6 +26,11 @@ export type Chat = {
   assigned_at?: string | null
   closed_at?: string | null
   closed_by?: "bot" | "operator" | string | null
+  bot_flow_id?: number | null
+  bot_flow_name?: string | null
+  bot_node_id?: number | null
+  bot_node_name?: string | null
+  bot_step?: string | null
 
   bot_state?: {
     vars?: Record<string, any>
@@ -126,8 +131,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   const isReadOnly = readOnlyByOperator || readOnlyByViewerLock || readOnlyByBot
   const readOnlyReason: "operator" | "bot" | null = readOnlyByBot ? "bot" : (isReadOnly ? "operator" : null)
   const canToggleBot = Boolean(
-    selectedChat?.operator_id &&
-    Number(selectedChat.operator_id) === Number(authUser?.id ?? 0),
+    props?.auth?.permissions?.can_administer_chats,
   )
   const canFinishAttention = Boolean(
     selectedChat?.status === "open" &&
@@ -396,6 +400,14 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
                     status: data.status ?? c.status,
                     attention_status: data.attention_status ?? c.attention_status,
                     bot_enabled: typeof data.bot_enabled === "boolean" ? data.bot_enabled : c.bot_enabled,
+                    assigned_at: Object.prototype.hasOwnProperty.call(data, "assigned_at") ? data.assigned_at : c.assigned_at,
+                    closed_at: Object.prototype.hasOwnProperty.call(data, "closed_at") ? data.closed_at : c.closed_at,
+                    closed_by: Object.prototype.hasOwnProperty.call(data, "closed_by") ? data.closed_by : c.closed_by,
+                    bot_flow_id: data.bot_flow_id ?? c.bot_flow_id,
+                    bot_node_id: data.bot_node_id ?? c.bot_node_id,
+                    bot_node_name: data.bot_node_name ?? c.bot_node_name,
+                    bot_step: Object.prototype.hasOwnProperty.call(data, "bot_step") ? data.bot_step : c.bot_step,
+                    bot_state: data.bot_state ?? c.bot_state,
                   }
                 })()
                 : c,
@@ -682,7 +694,17 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
 
       {/* Panel derecho */}
       <div className="w-80 border-l border-gray-300 bg-gray-100 flex flex-col min-h-0">
-        <ChatInfo chat={selectedChat} readOnly={isReadOnly} canToggleBot={canToggleBot} canFinishAttention={canFinishAttention} finishingAttention={finishingAttention} onFinishAttention={finishSelectedAttention} />
+        <ChatInfo
+          chat={selectedChat}
+          readOnly={isReadOnly}
+          canToggleBot={canToggleBot}
+          canAdminister={Boolean(props?.auth?.permissions?.can_administer_chats)}
+          canViewAudit={Boolean(props?.auth?.permissions?.can_view_audit)}
+          canFinishAttention={canFinishAttention}
+          finishingAttention={finishingAttention}
+          onFinishAttention={finishSelectedAttention}
+          onChatUpdated={(update) => setChats((current) => current.map((item) => String(item.id) === String(selectedChat?.id) ? { ...item, ...update } : item))}
+        />
       </div>
 
       {operatorConflict && (

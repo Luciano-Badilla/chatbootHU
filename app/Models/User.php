@@ -117,6 +117,7 @@ class User extends Authenticatable
                 'can_toggle_bot' => true,
                 'can_manage_users' => true,
                 'can_manage_campaigns' => true,
+                'can_administer_chats' => true,
             ],
             'supervisor' => [
                 'can_manage_settings' => false,
@@ -129,6 +130,7 @@ class User extends Authenticatable
                 'can_toggle_bot' => true,
                 'can_manage_users' => false,
                 'can_manage_campaigns' => true,
+                'can_administer_chats' => false,
             ],
             default => [
                 'can_manage_settings' => false,
@@ -141,6 +143,7 @@ class User extends Authenticatable
                 'can_toggle_bot' => true,
                 'can_manage_users' => false,
                 'can_manage_campaigns' => false,
+                'can_administer_chats' => false,
             ],
         };
     }

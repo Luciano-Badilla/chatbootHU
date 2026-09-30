@@ -1,10 +1,12 @@
 "use client"
 
 import React, { useEffect, useMemo, useRef, useState } from "react"
-import { AudioLines, Code, Contact, Database, Zap, User, Image as ImageIcon, FileText, Video, Bot, Clock3, MessageSquare, PowerOff, Power, Loader2, RotateCcw, ChevronDown, ChevronRight, ExternalLink, MapPin, X } from "lucide-react"
+import { AudioLines, Code, Contact, Database, Zap, User, Image as ImageIcon, FileText, Video, Bot, Clock3, MessageSquare, PowerOff, Power, Loader2, RotateCcw, ChevronDown, ChevronRight, ExternalLink, MapPin, X, Shield, Users, History, ArchiveRestore } from "lucide-react"
 import { Avatar } from "shadcn/components/ui/avatar"
 import { Badge } from "shadcn/components/ui/badge"
 import { Button } from "shadcn/components/ui/button"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "shadcn/components/ui/select"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "shadcn/components/ui/dialog"
 import mqtt from "mqtt"
 import { formatDistanceToNow, format, parseISO } from "date-fns"
 import { es } from "date-fns/locale"
@@ -15,9 +17,12 @@ interface ChatInfoProps {
   variables?: ChatVariable[]
   readOnly?: boolean
   canToggleBot?: boolean
+  canAdminister?: boolean
+  canViewAudit?: boolean
   canFinishAttention?: boolean
   finishingAttention?: boolean
   onFinishAttention?: () => void
+  onChatUpdated?: (update: Partial<Chat>) => void
 }
 
 type VarType = "string" | "number" | "boolean" | "object" | "array" | "null" | "unknown"
@@ -58,6 +63,14 @@ type PreviewMedia = {
     address: string
     isValid: boolean
   }
+}
+
+type PendingAdminAction = {
+  title: string
+  description: string
+  url: string
+  body: Record<string, unknown>
+  onSuccess: (payload: any) => void
 }
 
 const API_BASE = (import.meta.env.VITE_APP_URL || "").replace(/\/$/, "")
@@ -169,9 +182,12 @@ export default function ChatInfo({
   variables = [],
   readOnly = false,
   canToggleBot = false,
+  canAdminister = false,
+  canViewAudit = false,
   canFinishAttention = false,
   finishingAttention = false,
   onFinishAttention,
+  onChatUpdated,
 }: ChatInfoProps) {
   const [contactAvatarFailed, setContactAvatarFailed] = useState(false)
 
@@ -329,6 +345,14 @@ export default function ChatInfo({
   const [botEnabled, setBotEnabled] = useState<boolean>(chat?.bot_enabled ?? true)
   const [togglingBot, setTogglingBot] = useState(false)
   const [resettingBot, setResettingBot] = useState(false)
+  const [adminOperators, setAdminOperators] = useState<Array<{ id: number; name: string; availability: string; assigned_count: number; capacity: number }>>([])
+  const [selectedOperatorId, setSelectedOperatorId] = useState("")
+  const [adminBusy, setAdminBusy] = useState(false)
+  const [adminMessage, setAdminMessage] = useState<string | null>(null)
+  const [pendingAdminAction, setPendingAdminAction] = useState<PendingAdminAction | null>(null)
+  const [auditLogs, setAuditLogs] = useState<Array<{ id: number; event: string; description: string; created_at?: string; causer_name?: string | null; properties?: any }>>([])
+  const [auditOpen, setAuditOpen] = useState(false)
+  const [auditLoading, setAuditLoading] = useState(false)
   const [totalMessages, setTotalMessages] = useState<number | null>(null)
   const [lastMessageAt, setLastMessageAt] = useState<string | null>(chat?.timestamp ?? null)
   const knownMessageIdsRef = useRef<Set<string>>(new Set())
@@ -861,8 +885,11 @@ export default function ChatInfo({
         body: JSON.stringify({ bot_enabled: nextEnabled }),
       })
 
+      const payload = await res.json().catch(() => ({}))
       if (!res.ok) {
         setBotEnabled(!nextEnabled)
+      } else {
+        onChatUpdated?.({ bot_enabled: nextEnabled, bot_state: payload.chat?.bot_state ?? chat.bot_state })
       }
     } catch {
       setBotEnabled(!nextEnabled)
@@ -884,13 +911,115 @@ export default function ChatInfo({
         },
       })
 
+      const payload = await res.json().catch(() => ({}))
       if (!res.ok) return
 
       setBotEnabled(true)
-      setVarsByDateMap({})
-      setExpandedVarDate(null)
+      onChatUpdated?.({
+        bot_enabled: true,
+        bot_flow_id: payload.chat?.bot_flow_id ?? chat.bot_flow_id,
+        bot_node_id: payload.chat?.bot_node_id ?? chat.bot_node_id,
+        bot_step: payload.chat?.bot_step ?? null,
+        bot_state: payload.chat?.bot_state ?? chat.bot_state,
+      })
     } finally {
       setResettingBot(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!canAdminister) return
+    let cancelled = false
+    fetch(`${API_BASE}/api/operator-control/snapshot`)
+      .then((response) => response.ok ? response.json() : Promise.reject())
+      .then((payload) => {
+        if (!cancelled) setAdminOperators(Array.isArray(payload.operators) ? payload.operators : [])
+      })
+      .catch(() => {
+        if (!cancelled) setAdminMessage("No se pudo cargar la disponibilidad de operadores.")
+      })
+    return () => { cancelled = true }
+  }, [canAdminister, chat?.id])
+
+  const attentionStatusLabel = (status?: string | null) => ({
+    bot: "Atendido por bot",
+    pending_assignment: "Pendiente de asignación",
+    assigned: "Asignado a operador",
+    archived: "Archivado",
+  }[status ?? ""] ?? "Sin datos")
+
+  const executePendingAdminAction = async () => {
+    if (!pendingAdminAction) return
+    setAdminBusy(true)
+    setAdminMessage(null)
+    try {
+      const response = await fetch(pendingAdminAction.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(pendingAdminAction.body) })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.message || "No se pudo completar la acción.")
+      pendingAdminAction.onSuccess(payload)
+      setPendingAdminAction(null)
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : "No se pudo completar la acción.")
+    } finally {
+      setAdminBusy(false)
+    }
+  }
+
+  const reassignChat = (automatic: boolean) => {
+    if (!chat?.id) return
+    const operatorId = Number(selectedOperatorId)
+    if (!automatic && !operatorId) {
+      setAdminMessage("Seleccioná un operador disponible.")
+      return
+    }
+    setPendingAdminAction({
+      title: "Confirmar reasignación",
+      description: "El chat será reasignado al operador seleccionado.",
+      url: `${API_BASE}/api/chats/${chat.id}/reassign`,
+      body: { automatic, operator_id: automatic ? null : operatorId },
+      onSuccess: (result) => {
+        const target = adminOperators.find((operator) => operator.id === Number(result.operator_id))
+        onChatUpdated?.({ operator_id: result.operator_id ?? null, operator_name: result.operator_name ?? target?.name ?? null, attention_status: result.pending ? "pending_assignment" : "assigned", status: "open", bot_enabled: false })
+        setAdminMessage("Chat reasignado correctamente.")
+      },
+    })
+  }
+
+  const changeLifecycle = (action: "archive" | "reopen") => {
+    if (!chat?.id) return
+    const isArchive = action === "archive"
+    setPendingAdminAction({
+      title: isArchive ? "Archivar conversación" : "Reabrir conversación",
+      description: isArchive ? "Se liberará al operador, se archivará el chat y se reactivará el bot." : "El chat se reabrirá con el bot activo y sin operador asignado.",
+      url: `${API_BASE}/api/chats/${chat.id}/${action}`,
+      body: {},
+      onSuccess: (result) => {
+        if (!result?.chat) return
+        onChatUpdated?.({
+          operator_id: null, operator_name: null, bot_enabled: true,
+          status: result.chat.status, attention_status: result.chat.attention_status,
+          assigned_at: result.chat.assigned_at, closed_at: result.chat.closed_at, closed_by: result.chat.closed_by,
+          bot_flow_id: result.chat.bot_flow_id, bot_flow_name: result.chat.bot_flow_name, bot_node_id: result.chat.bot_node_id, bot_node_name: result.chat.bot_node_name,
+          bot_step: result.chat.bot_step, bot_state: result.chat.bot_state,
+        })
+        setAdminMessage(isArchive ? "Chat archivado y bot reactivado." : "Chat reabierto con el bot activo.")
+      },
+    })
+  }
+
+  const loadAudit = async () => {
+    if (!chat?.id) return
+    setAuditOpen(true)
+    setAuditLoading(true)
+    try {
+      const response = await fetch(`${API_BASE}/api/chats/${chat.id}/audit`)
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.message || "No se pudo cargar el historial.")
+      setAuditLogs(Array.isArray(payload.logs) ? payload.logs : [])
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : "No se pudo cargar el historial.")
+    } finally {
+      setAuditLoading(false)
     }
   }
 
@@ -960,6 +1089,22 @@ export default function ChatInfo({
   }
   return (
     <div className="flex flex-col h-full">
+      <Dialog open={Boolean(pendingAdminAction)} onOpenChange={(open) => { if (!open && !adminBusy) setPendingAdminAction(null) }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{pendingAdminAction?.title}</DialogTitle>
+            <DialogDescription>{pendingAdminAction?.description}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={adminBusy} onClick={() => setPendingAdminAction(null)}>Cancelar</Button>
+            <Button type="button" className="bg-[#013765] hover:bg-[#012e54]" disabled={adminBusy} onClick={executePendingAdminAction}>
+              {adminBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Confirmar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Header */}
       <div className="flex h-[72px] items-center px-4 border-b border-gray-300 bg-gray-100">
         <h2 className="text-lg font-semibold text-foreground">Información del Chat</h2>
@@ -1007,8 +1152,9 @@ export default function ChatInfo({
                   <Badge variant="secondary" className={botEnabled ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}>
                     {botEnabled ? "Activo" : "Pausado"}
                   </Badge>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button
+                  {canToggleBot && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button
                       type="button"
                       size="sm"
                       variant="outline"
@@ -1025,8 +1171,8 @@ export default function ChatInfo({
                       ) : (
                         <Power className="h-3.5 w-3.5 text-green-600" />
                       )}
-                    </Button>
-                    <Button
+                      </Button>
+                      <Button
                       type="button"
                       size="sm"
                       variant="outline"
@@ -1041,15 +1187,16 @@ export default function ChatInfo({
                       ) : (
                         <RotateCcw className="h-3.5 w-3.5 text-blue-600" />
                       )}
-                    </Button>
-                  </div>
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </div>
 
               <div className="rounded-md border border-gray-200 px-2.5 py-2">
                 <div className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase mb-1">RED</div>
                 <div className="mt-1 text-[10px] text-muted-foreground">
-                  Estado del servidor:{" "}
+                  Canal en tiempo real:{" "}
                   <span className="inline-flex items-center gap-1 text-foreground font-medium">
                     <span className={`inline-block h-2 w-2 rounded-full ${mqttStatusMeta.dot}`} />
                     {mqttStatusMeta.label}
@@ -1095,6 +1242,81 @@ export default function ChatInfo({
               </Button>
             )}
           </div>
+
+          <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3">
+            <h4 className="mb-3 flex items-center gap-2 font-medium text-slate-800">
+              <Clock3 className="h-4 w-4 text-[#013765]" />
+              Estado operativo
+            </h4>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs text-slate-700">
+              <span className="text-slate-500">Atención</span><span className="font-medium">{attentionStatusLabel(chat.attention_status)}</span>
+              <span className="text-slate-500">Operador</span><span className="truncate font-medium">{chat.operator_name ?? "Sin asignar"}</span>
+              <span className="text-slate-500">Asignado desde</span><span className="font-medium">{formatDateSafe(chat.assigned_at)}</span>
+              <span className="text-slate-500">Cierre</span><span className="font-medium">{formatDateSafe(chat.closed_at)}</span>
+              <span className="text-slate-500">Flujo</span><span className="truncate font-medium">{chat.bot_flow_name ?? "Sin flujo"}</span>
+              <span className="text-slate-500">Nombre del nodo</span><span className="truncate font-medium">{chat.bot_node_name ?? "Sin nodo configurado"}</span>
+            </div>
+
+            {canViewAudit && (
+              <>
+                <Button type="button" size="sm" variant="outline" className="mt-3 w-full" disabled={auditLoading} onClick={loadAudit}>
+                  {auditLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <History className="mr-1.5 h-3.5 w-3.5" />} Ver historial operativo
+                </Button>
+                {auditOpen && (
+                  <div className="mt-3 max-h-64 space-y-2 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-2">
+                    {auditLogs.length === 0 && !auditLoading ? <p className="text-xs text-slate-500">No hay eventos registrados para este chat.</p> : null}
+                    {auditLogs.map((entry) => (
+                      <div key={entry.id} className="border-b border-slate-200 pb-2 last:border-0">
+                        <p className="text-xs font-medium text-slate-800">{entry.description}</p>
+                        <p className="mt-0.5 text-[10px] text-slate-500">{entry.causer_name ?? "Sistema"} · {formatDateSafe(entry.created_at)}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          {canAdminister && (
+            <div className="mb-4 rounded-xl border border-[#013765]/25 bg-[#f5f9fd] p-3">
+              <h4 className="mb-3 flex items-center gap-2 font-medium text-[#013765]">
+                <Shield className="h-4 w-4" />
+                Administración del chat
+              </h4>
+
+              {chat.status === "open" ? (
+                <div className="space-y-2 border-t border-slate-200 pt-3">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-slate-800"><Users className="h-3.5 w-3.5" /> Reasignar atención</div>
+                  <Select
+                    value={selectedOperatorId}
+                    onValueChange={setSelectedOperatorId}
+                    disabled={adminBusy}
+                  >
+                    <SelectTrigger className="h-8 w-full bg-white text-xs">
+                      <SelectValue placeholder="Seleccionar operador disponible" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {adminOperators.filter((operator) => operator.availability === "available" && operator.assigned_count < operator.capacity).map((operator) => (
+                        <SelectItem key={operator.id} value={String(operator.id)}>{operator.name} ({operator.assigned_count}/{operator.capacity})</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button type="button" size="sm" variant="outline" className="w-full" disabled={adminBusy} onClick={() => reassignChat(false)}>Reasignar</Button>
+                  <Button type="button" size="sm" variant="outline" className="w-full border-amber-300 text-amber-800 hover:bg-amber-50" disabled={adminBusy} onClick={() => changeLifecycle("archive")}>
+                    <ArchiveRestore className="mr-1.5 h-3.5 w-3.5" /> Archivar
+                  </Button>
+                </div>
+              ) : (
+                <div className="border-t border-slate-200 pt-3">
+                  <Button type="button" size="sm" className="w-full bg-[#013765] hover:bg-[#012e54]" disabled={adminBusy} onClick={() => changeLifecycle("reopen")}>
+                    <ArchiveRestore className="mr-1.5 h-3.5 w-3.5" /> Reabrir con bot
+                  </Button>
+                </div>
+              )}
+
+              {adminMessage ? <p className="mt-2 text-[11px] text-slate-600">{adminMessage}</p> : null}
+            </div>
+          )}
 
           {/* Variables */}
           <div className="order-2 mb-4">

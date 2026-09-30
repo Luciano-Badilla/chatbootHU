@@ -221,6 +221,7 @@ class AuditService
             $actor,
             $chat,
             array_merge([
+                'chat_id' => (int) $chat->id,
                 'chat' => $this->chatContext($chat),
             ], $properties),
         );
@@ -243,6 +244,7 @@ class AuditService
             $actor,
             $subject,
             array_merge([
+                'chat_id' => (int) $chat->id,
                 'chat' => $this->chatContext($chat),
             ], $properties),
         );
