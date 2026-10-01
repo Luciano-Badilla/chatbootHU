@@ -12,6 +12,9 @@ class Chat extends Model
 
     protected $fillable = [
         'contact_id',
+        'channel',
+        'webchat_token',
+        'webchat_last_seen_at',
         'bot_flow_id',
         'bot_node_id',
         'title',
@@ -34,6 +37,7 @@ class Chat extends Model
         'bot_enabled' => 'boolean',
         'bot_state' => 'array',
         'last_user_message_at' => 'datetime',
+        'webchat_last_seen_at' => 'datetime',
         'assigned_at' => 'datetime',
         'closed_at' => 'datetime',
     ];

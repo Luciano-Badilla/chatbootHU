@@ -356,7 +356,7 @@ class WhatsAppController extends Controller
         // 5) Crear / obtener chat
         // --------------------------------
 
-        $flow = $this->getDefaultFlow() ?? null;
+        $flow = $this->getDefaultFlow('whatsapp') ?? null;
 
         // Ideal: lock para evitar doble webhook avanzando el puntero 2 veces
         $chat = Chat::where('contact_id', $contact->id)->lockForUpdate()->first();
@@ -536,7 +536,7 @@ class WhatsAppController extends Controller
                 $this->sendBotNode($chat, $nextNode);
 
                 // Reset si el nodo enviado fue terminal
-                $flowForRuntime = $this->getDefaultFlow();
+                $flowForRuntime = $this->getDefaultFlow('whatsapp');
                 if ($flowForRuntime) {
                     $didReset = $this->maybeResetAfterSendingNode($chat, $flowForRuntime, $nextNode);
 
@@ -557,6 +557,60 @@ class WhatsAppController extends Controller
         }
 
         return response('EVENT_RECEIVED', 200);
+    }
+
+    /**
+     * Entrada normalizada del canal webchat. Mantiene el mismo motor de flujos
+     * que WhatsApp, sin construir payloads ni llamadas hacia Meta.
+     */
+    public function processWebchatMessage(Chat $chat, string $body, ?string $interactiveReplyId = null): Message
+    {
+        if (($chat->channel ?? 'whatsapp') !== 'webchat') {
+            throw new \InvalidArgumentException('El chat no pertenece al canal webchat.');
+        }
+
+        $message = Message::create([
+            'chat_id' => $chat->id,
+            'sender' => 'contact',
+            'sender_subtype' => 'contact',
+            'message_type' => 'text',
+            'body' => $body,
+            'status' => 'received',
+        ]);
+        $this->publishWebchatMessage($chat, $message);
+
+        try {
+            $nextNode = $this->handleBotFromDb($chat, $message, $interactiveReplyId);
+            if ($nextNode) {
+                $this->sendBotNode($chat, $nextNode);
+                $flow = $this->getDefaultFlow('webchat');
+                if ($flow) {
+                    $this->maybeResetAfterSendingNode($chat, $flow, $nextNode);
+                    $this->runAutoAdvance($chat, $flow, $nextNode);
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::error('Error procesando mensaje de webchat: '.$e->getMessage(), ['chat_id' => $chat->id]);
+        }
+
+        return $message;
+    }
+
+    /** Envía el nodo inicial apenas se crea una conversación de webchat. */
+    public function startWebchatConversation(Chat $chat): void
+    {
+        $flow = $this->getDefaultFlow('webchat');
+        if (! $flow || ! $flow->start_node_id) {
+            return;
+        }
+
+        $node = BotNode::find($flow->start_node_id);
+        if (! $node) {
+            return;
+        }
+
+        $this->sendBotNode($chat, $node);
+        $this->runAutoAdvance($chat, $flow, $node);
     }
 
     /**
@@ -1394,6 +1448,23 @@ class WhatsAppController extends Controller
     ): Message {
         $contact = $chat->contact;
 
+        if (($chat->channel ?? 'whatsapp') === 'webchat') {
+            $message = Message::create([
+                'chat_id' => $chat->id,
+                'sender' => $sender,
+                'sender_subtype' => $sender === 'contact' ? 'contact' : $senderSubtype,
+                'operator_name' => $senderSubtype === 'operator' ? $operatorName : null,
+                'bot_node_type' => $botNodeType,
+                'interactive_options' => $interactiveOptions,
+                'message_type' => 'text',
+                'body' => $messageBody,
+                'status' => 'sent',
+            ]);
+            $this->publishWebchatMessage($chat, $message);
+
+            return $message;
+        }
+
         if (! $contact || ! $contact->whatsapp_id) {
             throw new \RuntimeException('Contacto sin whatsapp_id');
         }
@@ -1467,6 +1538,49 @@ class WhatsAppController extends Controller
         }
 
         return $message;
+    }
+
+    private function publishWebchatMessage(Chat $chat, Message $message): void
+    {
+        $contact = $chat->contact;
+        try {
+            $host = env('MQTT_HOST') ?: env('VITE_MOSQUITTO_HOST');
+            if (! $host) {
+                return;
+            }
+            $mqtt = new MqttClient((string) $host, 1883, 'laravel_webchat_'.uniqid());
+            $mqtt->connect();
+            $payload = [
+                'chat_id' => $chat->id,
+                'message_id' => $message->id,
+                'sender' => $message->sender,
+                'sender_subtype' => $message->sender_subtype,
+                'operator_name' => $message->operator_name,
+                'bot_node_type' => $message->bot_node_type,
+                'interactive_options' => $message->interactive_options,
+                'body' => $message->body,
+                'message_type' => $message->message_type,
+                'media_url' => $message->media_url,
+                'media_name' => $message->media_name,
+                'status' => $message->status,
+                'timestamp' => $message->created_at?->toIso8601String(),
+            ];
+            $mqtt->publish('sidebar/chat', json_encode([
+                'chat_id' => $chat->id,
+                'name' => $contact?->name ?? 'Webchat',
+                'avatar' => $contact?->profile_pic,
+                'lastMessage' => $message->body,
+                'timestamp' => $payload['timestamp'],
+                'channel' => 'webchat',
+            ]), 0);
+            $mqtt->publish("chat/{$chat->id}", json_encode($payload), 0);
+            if ($chat->webchat_token) {
+                $mqtt->publish("webchat/{$chat->webchat_token}", json_encode($payload), 0);
+            }
+            $mqtt->disconnect();
+        } catch (\Throwable $e) {
+            Log::error('MQTT Error (webchat): '.$e->getMessage());
+        }
     }
 
     private function persistAndPublishOutgoing(
@@ -1586,7 +1700,7 @@ class WhatsAppController extends Controller
 
     private function ensureChatUsesDefaultFlow(Chat $chat): ?BotFlow
     {
-        $flow = $this->getDefaultFlow();
+        $flow = $this->getDefaultFlow($chat->channel ?? 'whatsapp');
 
         if (! $flow || ! $flow->start_node_id) {
             return null;
@@ -1680,7 +1794,7 @@ class WhatsAppController extends Controller
 
             // Ã¢Å“â€¦ CASO: finalizar flujo
             if (! $nextId) {
-                $flow = $this->getDefaultFlow();
+                $flow = $this->getDefaultFlow($chat->channel ?? 'whatsapp');
                 if ($flow) {
                     $this->resetChatToStartFromFlow($chat, $flow, 'input_terminal');
                 }
@@ -1833,7 +1947,7 @@ class WhatsAppController extends Controller
             $this->clearPendingInput($chat);
 
             // Ã¢Å“â€¦ preparar puntero para cuando se reactive
-            $flow = $this->ensureChatUsesDefaultFlow($chat) ?? $this->getDefaultFlow();
+            $flow = $this->ensureChatUsesDefaultFlow($chat) ?? $this->getDefaultFlow($chat->channel ?? 'whatsapp');
             if ($flow && $flow->start_node_id) {
                 $chat->bot_node_id = $flow->start_node_id;
             }
@@ -2012,11 +2126,6 @@ class WhatsAppController extends Controller
 
     private function sendBotMediaNode(Chat $chat, BotNode $node): void
     {
-        $contact = $chat->contact;
-        if (! $contact || ! $contact->whatsapp_id) {
-            return;
-        }
-
         $mediaType = (string) $node->type;
         if (! in_array($mediaType, ['image', 'document', 'video', 'audio'], true)) {
             return;
@@ -2039,6 +2148,28 @@ class WhatsAppController extends Controller
             ? ''
             : trim($this->renderTemplate($node->body ?? '', $chat, $node));
         $filename = trim($this->renderTemplate((string) ($settings['filename'] ?? ''), $chat, $node));
+
+        if (($chat->channel ?? 'whatsapp') === 'webchat') {
+            $message = Message::create([
+                'chat_id' => $chat->id,
+                'sender' => 'user',
+                'sender_subtype' => 'bot',
+                'bot_node_type' => $mediaType,
+                'message_type' => $mediaType,
+                'body' => $caption,
+                'media_url' => $sourceKind === 'url' ? $source : null,
+                'media_name' => $filename ?: null,
+                'status' => 'sent',
+            ]);
+            $this->publishWebchatMessage($chat, $message);
+
+            return;
+        }
+
+        $contact = $chat->contact;
+        if (! $contact || ! $contact->whatsapp_id) {
+            return;
+        }
 
         $accessToken = $this->whatsappAccessToken();
         $phoneId = $this->whatsappPhoneId();
@@ -3933,14 +4064,25 @@ class WhatsAppController extends Controller
 
     private function sendWhatsAppButtons(Chat $chat, BotNode $node, string $botNodeType = 'buttons'): void
     {
+        $settings = $node->settings ?? [];
+        $buttons = $settings['buttons'] ?? [];
+        $bodyText = $this->renderTemplate($node->body ?? '', $chat, $node);
+
+        if (($chat->channel ?? 'whatsapp') === 'webchat') {
+            $options = array_map(fn ($button, $index) => [
+                'id' => (string) ($button['id'] ?? 'btn_'.($index + 1)),
+                'label' => $this->renderTemplate((string) ($button['title'] ?? 'Opcion '.($index + 1)), $chat, $node),
+                'kind' => 'button',
+            ], $buttons, array_keys($buttons));
+            $this->sendWhatsAppText($chat, $bodyText ?: 'Seleccioná una opción', 'user', 'bot', $botNodeType, $options);
+
+            return;
+        }
+
         $contact = $chat->contact;
         if (! $contact || ! $contact->whatsapp_id) {
             return;
         }
-
-        $settings = $node->settings ?? [];
-        $buttons = $settings['buttons'] ?? [];
-        $bodyText = $this->renderTemplate($node->body ?? '', $chat, $node);
 
         if (empty($buttons)) {
             $this->sendWhatsAppText($chat, $bodyText, 'user', 'bot', $botNodeType, []);
@@ -4072,11 +4214,6 @@ class WhatsAppController extends Controller
 
     private function sendWhatsAppList(Chat $chat, BotNode $node, string $botNodeType = 'list'): void
     {
-        $contact = $chat->contact;
-        if (! $contact || ! $contact->whatsapp_id) {
-            return;
-        }
-
         $settings = $node->settings ?? [];
 
         $buttonText = $settings['button_text'] ?? 'Ver opciones';
@@ -4087,6 +4224,23 @@ class WhatsAppController extends Controller
         $bodyText = $this->renderTemplate($node->body ?? '', $chat, $node);
         $buttonText = $this->renderTemplate((string) $buttonText, $chat, $node);
         $sectionTitle = $this->renderTemplate((string) $sectionTitle, $chat, $node);
+
+        if (($chat->channel ?? 'whatsapp') === 'webchat') {
+            $options = array_map(fn ($row, $index) => [
+                'id' => (string) ($row['id'] ?? 'row_'.($index + 1)),
+                'label' => $this->renderTemplate((string) ($row['title'] ?? 'Opción '.($index + 1)), $chat, $node),
+                'description' => $this->renderTemplate((string) ($row['description'] ?? ''), $chat, $node),
+                'kind' => 'list',
+            ], $rows, array_keys($rows));
+            $this->sendWhatsAppText($chat, $bodyText ?: 'Seleccioná una opción', 'user', 'bot', $botNodeType, $options);
+
+            return;
+        }
+
+        $contact = $chat->contact;
+        if (! $contact || ! $contact->whatsapp_id) {
+            return;
+        }
 
         if (empty($rows)) {
             $this->sendWhatsAppText($chat, $bodyText, 'user', 'bot', $botNodeType, []);
@@ -4202,7 +4356,7 @@ class WhatsAppController extends Controller
 
     public function resetBotFlow(Request $request, Chat $chat)
     {
-        $flow = $this->getDefaultFlow();
+        $flow = $this->getDefaultFlow($chat->channel ?? 'whatsapp');
 
         if (! $flow || ! $flow->start_node_id) {
             return response()->json([
@@ -4258,17 +4412,23 @@ class WhatsAppController extends Controller
         ]);
     }
 
-    private function getDefaultFlow(): ?BotFlow
+    private function getDefaultFlow(?string $channel = null): ?BotFlow
     {
-        return BotFlow::where('is_default', true)
+        return BotFlow::query()
+            ->when($channel, fn ($query) => $query->whereJsonContains('channels', $channel))
+            ->where('is_default', true)
             ->where('is_active', true)
             ->first()
-            ?? BotFlow::where('is_active', true)->orderBy('id')->first();
+            ?? BotFlow::query()
+                ->when($channel, fn ($query) => $query->whereJsonContains('channels', $channel))
+                ->where('is_active', true)
+                ->orderBy('id')
+                ->first();
     }
 
     private function resetChatToStart(Chat $chat): void
     {
-        $flow = $this->getDefaultFlow();
+        $flow = $this->getDefaultFlow($chat->channel ?? 'whatsapp');
         if (! $flow || ! $flow->start_node_id) {
             return;
         }

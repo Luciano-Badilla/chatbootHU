@@ -13,6 +13,7 @@ export type Chat = {
   id: number | string
   name: string
   number: string
+  channel?: "whatsapp" | "webchat" | string
   lastMessage: string
   timestamp: string
   unread: number

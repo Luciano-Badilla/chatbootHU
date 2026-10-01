@@ -1130,6 +1130,7 @@ export default function ChatInfo({
             </div>
             <h3 className="font-semibold text-foreground text-lg">{chat.name}</h3>
             <p className="text-sm text-muted-foreground">{chat.number}</p>
+            {chat.channel === "webchat" ? <p className="mt-1 text-xs font-medium text-[#013765]">Canal: Webchat</p> : null}
 
             {chat.unread > 0 && (
               <Badge variant="secondary" className="mt-2 bg-[#013765] text-white">

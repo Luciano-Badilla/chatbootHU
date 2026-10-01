@@ -116,6 +116,7 @@ class BotFlowController extends Controller
             'name' => $data['name'],
             'description' => null,
             'is_active' => true,
+            'channels' => ['whatsapp'],
         ]);
 
         $this->auditService->recordFlowChange(
@@ -135,6 +136,8 @@ class BotFlowController extends Controller
         $data = $request->validate([
             'name' => 'required|string',
             'description' => 'nullable|string',
+            'channels' => 'nullable|array|min:1',
+            'channels.*' => 'in:whatsapp,webchat',
         ]);
 
         $before = $this->flowAuditSnapshot($flow);
@@ -142,6 +145,7 @@ class BotFlowController extends Controller
         $flow->update([
             'name' => $data['name'],
             'description' => $data['description'] ?? null,
+            'channels' => $data['channels'] ?? $flow->channels ?? ['whatsapp'],
         ]);
 
         $this->auditService->recordFlowChange(
@@ -614,6 +618,7 @@ class BotFlowController extends Controller
             'description' => $flow->description,
             'is_active' => (bool) $flow->is_active,
             'is_default' => (bool) $flow->is_default,
+            'channels' => $flow->channels ?? ['whatsapp'],
             'start_node_id' => $flow->start_node_id,
             'start_node_key' => $flow->startNode?->key,
             'deleted_at' => optional($flow->deleted_at)->toDateTimeString(),

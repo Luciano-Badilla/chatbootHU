@@ -60,6 +60,7 @@ interface BotFlow {
   start_node_id?: number | null
   is_active: boolean
   is_default?: boolean
+  channels?: Array<"whatsapp" | "webchat">
   deleted_at?: string | null
 }
 
@@ -1297,6 +1298,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const [createAlephooDependencies, setCreateAlephooDependencies] = useState(true)
   const [editFlowName, setEditFlowName] = useState("")
   const [editFlowStartNodeId, setEditFlowStartNodeId] = useState<number | null>(null)
+  const [editFlowChannels, setEditFlowChannels] = useState<Array<"whatsapp" | "webchat">>(["whatsapp"])
 
   // Estado local editable del nodo
   const [editNode, setEditNode] = useState<BotNode | null>(null)
@@ -1322,9 +1324,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const hasUnsavedFlowChanges = useMemo(() => {
     return (
       editFlowName.trim() !== (selectedFlow?.name ?? "") ||
-      editFlowStartNodeId !== (selectedFlow?.start_node_id ?? null)
+      editFlowStartNodeId !== (selectedFlow?.start_node_id ?? null) ||
+      JSON.stringify(editFlowChannels) !== JSON.stringify(selectedFlow?.channels?.length ? selectedFlow.channels : ["whatsapp"])
     )
-  }, [editFlowName, editFlowStartNodeId, selectedFlow?.name, selectedFlow?.start_node_id])
+  }, [editFlowName, editFlowStartNodeId, editFlowChannels, selectedFlow?.name, selectedFlow?.start_node_id, selectedFlow?.channels])
 
   const startNodeOptions = useMemo(() => {
     return nodes.map((n) => ({
@@ -1596,7 +1599,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   useEffect(() => {
     setEditFlowName(selectedFlow?.name ?? "")
     setEditFlowStartNodeId(selectedFlow?.start_node_id ?? null)
-  }, [selectedFlow?.id, selectedFlow?.name, selectedFlow?.start_node_id])
+    setEditFlowChannels(selectedFlow?.channels?.length ? selectedFlow.channels : ["whatsapp"])
+  }, [selectedFlow?.id, selectedFlow?.name, selectedFlow?.start_node_id, selectedFlow?.channels])
 
   useEffect(() => {
     setTemplateVariableOpen(false)
@@ -1700,19 +1704,21 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     const startNodeId = editFlowStartNodeId ?? null
     const nameChanged = name !== (selectedFlow.name ?? "")
     const startNodeChanged = startNodeId !== (selectedFlow.start_node_id ?? null)
-    if (!name || (!nameChanged && !startNodeChanged)) return
+    const channelsChanged = JSON.stringify(editFlowChannels) !== JSON.stringify(selectedFlow.channels?.length ? selectedFlow.channels : ["whatsapp"])
+    if (!name || editFlowChannels.length === 0 || (!nameChanged && !startNodeChanged && !channelsChanged)) return
 
     setSavingFlow(true)
     try {
       let updatedFlow: BotFlow = selectedFlow
 
-      if (nameChanged) {
+      if (nameChanged || channelsChanged) {
         const res = await fetch(`${API_BASE}/api/bot/flows/${selectedFlow.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             name,
             description: selectedFlow.description ?? null,
+            channels: editFlowChannels,
           }),
         })
 
@@ -1744,6 +1750,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       setFlows((prev) => prev.map((flow) => (flow.id === updatedFlow.id ? { ...flow, ...updatedFlow } : flow)))
       setEditFlowName(updatedFlow.name)
       setEditFlowStartNodeId(updatedFlow.start_node_id ?? null)
+      setEditFlowChannels(updatedFlow.channels?.length ? updatedFlow.channels : ["whatsapp"])
       setFlowConfigOpen(false)
     } catch (err) {
       console.error("Error de red guardando flow:", err)
@@ -6514,6 +6521,22 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                               </p>
                             </div>
 
+                          </div>
+
+                          <div>
+                            <label className="text-xs mb-2 block text-muted-foreground">Canales habilitados</label>
+                            <div className="flex gap-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-700">
+                              {(["whatsapp", "webchat"] as const).map((channel) => (
+                                <label key={channel} className="flex cursor-pointer items-center gap-2">
+                                  <Checkbox
+                                    checked={editFlowChannels.includes(channel)}
+                                    onCheckedChange={(checked) => setEditFlowChannels((current) => checked ? [...new Set([...current, channel])] : current.filter((item) => item !== channel))}
+                                  />
+                                  {channel === "whatsapp" ? "WhatsApp" : "Webchat"}
+                                </label>
+                              ))}
+                            </div>
+                            <p className="mt-1 text-[10px] text-muted-foreground">El flujo solo podrá iniciarse desde los canales seleccionados.</p>
                           </div>
 
                           <div className="mt-4 flex shrink-0 flex-col items-center gap-2 border-t border-slate-200 bg-white pt-4">

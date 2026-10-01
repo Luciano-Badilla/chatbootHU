@@ -10,7 +10,13 @@ class BotFlow extends Model
 {
     use SoftDeletes;
 
-    protected $fillable = ['name', 'description', 'start_node_id', 'is_active', 'is_default'];
+    protected $fillable = ['name', 'description', 'start_node_id', 'is_active', 'is_default', 'channels'];
+
+    protected $casts = [
+        'channels' => 'array',
+        'is_active' => 'boolean',
+        'is_default' => 'boolean',
+    ];
 
     public function nodes()
     {

@@ -44,7 +44,10 @@ class ChatController extends Controller
                 return [
                     'id' => (int) $chat->id,
                     'name' => $chat->contact?->name ?? $chat->contact?->whatsapp_id,
-                    'number' => '+'.$chat->contact?->whatsapp_id,
+                    'number' => ($chat->channel ?? 'whatsapp') === 'webchat'
+                        ? 'Webchat'
+                        : '+'.$chat->contact?->whatsapp_id,
+                    'channel' => $chat->channel ?? 'whatsapp',
                     'lastMessage' => $lastMessage?->body ?? '',
                     'timestamp' => $lastMessage?->created_at,
                     'unread' => $chat->messages()->where('status', 'received')->count(),

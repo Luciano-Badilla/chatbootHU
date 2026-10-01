@@ -10,6 +10,7 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\QuickReplyController;
 use App\Http\Controllers\OperatorControlController;
 use App\Http\Controllers\SettingsController;
+use App\Http\Controllers\WebchatController;
 use App\Models\Chat;
 use App\Models\Message;
 use Illuminate\Support\Facades\Route;
@@ -35,6 +36,8 @@ Route::get('/test-broadcast', function () {
 Route::get('/', function () {
     return redirect('/dashboard');
 });
+
+Route::get('/webchat', [WebchatController::class, 'index'])->name('webchat');
 
 Route::middleware(['auth', 'active'])->group(function () {
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');

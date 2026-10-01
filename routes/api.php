@@ -12,6 +12,7 @@ use App\Http\Controllers\QuickReplyController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\WhatsAppController;
 use App\Http\Controllers\WhatsAppTemplateController;
+use App\Http\Controllers\WebchatController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -28,6 +29,11 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/webhook', [WhatsAppController::class, 'verify']);
 Route::post('/webhook', [WhatsAppController::class, 'receiveMessage']);
+
+Route::post('/webchat/session', [WebchatController::class, 'session']);
+Route::post('/webchat/start', [WebchatController::class, 'start']);
+Route::post('/webchat/messages', [WebchatController::class, 'messages']);
+Route::post('/webchat/send', [WebchatController::class, 'send']);
 
 $sessionAuthenticated = [
     \App\Http\Middleware\EncryptCookies::class,
