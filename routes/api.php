@@ -34,6 +34,10 @@ Route::post('/webchat/session', [WebchatController::class, 'session']);
 Route::post('/webchat/start', [WebchatController::class, 'start']);
 Route::post('/webchat/messages', [WebchatController::class, 'messages']);
 Route::post('/webchat/send', [WebchatController::class, 'send']);
+Route::post('/webchat/send-media', [WebchatController::class, 'sendMedia']);
+Route::post('/webchat/send-contact', [WebchatController::class, 'sendContact']);
+Route::post('/webchat/send-location', [WebchatController::class, 'sendLocation']);
+Route::get('/webchat/location/search', [LocationController::class, 'webchatSearch']);
 
 $sessionAuthenticated = [
     \App\Http\Middleware\EncryptCookies::class,
@@ -111,6 +115,7 @@ Route::middleware($sessionAuthenticated)->group(function () {
         Route::post('/settings/integrations/alephoo/test', [SettingsController::class, 'testAlephoo']);
         Route::post('/settings/integrations/test', [SettingsController::class, 'testAlephoo']);
         Route::post('/settings/bot', [SettingsController::class, 'saveBot']);
+        Route::post('/settings/webchat', [SettingsController::class, 'saveWebchat']);
     });
 
     Route::middleware('permission:can_manage_users')->group(function () {

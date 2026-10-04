@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
 use Illuminate\Validation\ValidationException;
@@ -49,6 +50,9 @@ class SettingsController extends Controller
                 'bot.inactivity_timeout_minutes',
                 'bot.inactivity_timeout_message',
                 'operators.max_assigned_chats',
+                'webchat.enabled', 'webchat.availability_mode', 'webchat.schedule_start', 'webchat.schedule_end', 'webchat.offline_message',
+                'webchat.title', 'webchat.subtitle',
+                'webchat.logo_url', 'webchat.default_flow_id',
             ])
             ->pluck('value', 'key');
         $storedWhatsappToken = trim((string) ($settings['integrations.whatsapp.token'] ?? ''));
@@ -59,7 +63,7 @@ class SettingsController extends Controller
         $activeFlows = BotFlow::query()
             ->where('is_active', true)
             ->orderBy('name')
-            ->get(['id', 'name', 'is_default']);
+            ->get(['id', 'name', 'is_default', 'channels']);
 
         $defaultFlow = $activeFlows->firstWhere('is_default', true);
 
@@ -105,11 +109,25 @@ class SettingsController extends Controller
                 'operators' => [
                     'max_assigned_chats' => $settings['operators.max_assigned_chats'] ?? '5',
                 ],
+                'webchat' => [
+                    'enabled' => ($settings['webchat.enabled'] ?? '1') === '1',
+                    'availability_mode' => $settings['webchat.availability_mode'] ?? 'always',
+                    'schedule_start' => $settings['webchat.schedule_start'] ?? '08:00',
+                    'schedule_end' => $settings['webchat.schedule_end'] ?? '20:00',
+                    'offline_message' => $settings['webchat.offline_message'] ?? 'En este momento no estamos disponibles. Volvé a intentarlo dentro del horario de atención.',
+                    'title' => $settings['webchat.title'] ?? 'Asistente virtual',
+                    'subtitle' => $settings['webchat.subtitle'] ?? 'Hospital Universitario',
+                    'logo_url' => $settings['webchat.logo_url'] ?? '',
+                    'default_flow_id' => filled($settings['webchat.default_flow_id'] ?? null)
+                        ? (int) $settings['webchat.default_flow_id']
+                        : null,
+                ],
             ],
             'botFlows' => $activeFlows->map(fn (BotFlow $flow) => [
                 'id' => $flow->id,
                 'name' => $flow->name,
                 'is_default' => (bool) $flow->is_default,
+                'channels' => $flow->channels ?? [],
             ])->values(),
             'roles' => Role::query()
                 ->orderBy('id')
@@ -629,6 +647,44 @@ class SettingsController extends Controller
                 ],
             ],
         ]);
+    }
+
+    public function saveWebchat(Request $request)
+    {
+        // A blank value represents the automatic Webchat flow. Older saved values
+        // are stored as an empty string, which must not be validated as flow ID 0.
+        if (in_array($request->input('default_flow_id'), ['', '0', 0, null], true)) {
+            $request->merge(['default_flow_id' => null]);
+        }
+
+        $data = $request->validate([
+            'enabled' => ['required', 'boolean'], 'availability_mode' => ['required', 'in:always,schedule'],
+            'schedule_start' => ['required', 'date_format:H:i'], 'schedule_end' => ['required', 'date_format:H:i'],
+            'offline_message' => ['required', 'string', 'max:1000'], 'title' => ['required', 'string', 'max:100'],
+            'subtitle' => ['nullable', 'string', 'max:100'],
+            'logo' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp,svg', 'max:2048'],
+            'default_flow_id' => ['nullable', 'integer', 'exists:bot_flows,id'],
+        ]);
+        unset($data['logo']);
+
+        if ($request->hasFile('logo')) {
+            $currentLogo = $this->settingValue('webchat.logo_url', '');
+            $path = $request->file('logo')->store('webchat/logos', 'public');
+            $data['logo_url'] = '/storage/'.$path;
+
+            if (str_starts_with($currentLogo, '/storage/webchat/logos/')) {
+                Storage::disk('public')->delete(ltrim(substr($currentLogo, strlen('/storage/')), '/'));
+            }
+        }
+        if (!empty($data['default_flow_id']) && !BotFlow::query()->whereKey($data['default_flow_id'])->where('is_active', true)->whereJsonContains('channels', 'webchat')->exists()) {
+            return response()->json(['message' => 'El flujo seleccionado debe estar activo y habilitado para Webchat.'], 422);
+        }
+        $before = SystemSetting::query()->where('key', 'like', 'webchat.%')->pluck('value', 'key')->all();
+        foreach ($data as $key => $value) {
+            SystemSetting::updateOrCreate(['key' => 'webchat.'.$key], ['value' => is_bool($value) ? ($value ? '1' : '0') : (string) ($value ?? '')]);
+        }
+        $this->auditService->recordSettingsChange('webchat', $before, $data, $request->user());
+        return response()->json(['ok' => true, 'settings' => ['webchat' => $data]]);
     }
 
     public function updateUserRole(Request $request, User $user)

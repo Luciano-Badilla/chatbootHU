@@ -1,0 +1,16 @@
+{
+  "name": "HUni · Hospital Universitario",
+  "short_name": "HUni",
+  "start_url": "./webchat",
+  "display": "standalone",
+  "background_color": "#f4f7fa",
+  "theme_color": "#003f73",
+  "icons": [
+    {
+      "src": "./images/hu_icon_new.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

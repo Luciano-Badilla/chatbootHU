@@ -127,11 +127,16 @@ La aplicacion debe servirse desde Apache/Nginx/Laragon apuntando a la carpeta `p
 Ejemplo local con subcarpeta:
 
 ```env
-APP_URL=http://172.22.115.103/chatbot/public
-VITE_APP_URL=http://172.22.115.103/chatbot/public
+APP_HOST=192.168.100.2
+APP_URL="http://${APP_HOST}/chatbot/public"
+VITE_APP_URL="${APP_URL}"
 VITE_API_BASE_URL=/chatbot/public
-VITE_DEV_SERVER=http://172.22.115.103:5173
+VITE_DEV_SERVER="http://${APP_HOST}:5173"
 ```
+
+Para cambiar entre localhost y la IP de tu PC, modifica solamente `APP_HOST` en `.env` (sin protocolo ni puerto). Laravel, React, Ziggy y el servidor de Vite toman la direccion desde esta configuracion. Si usas un virtual host que apunta a `public/`, utiliza `APP_URL="http://${APP_HOST}"`.
+
+Despues de cambiarla, ejecuta `php artisan config:clear` y reinicia `npm run dev`. Si usas assets compilados, ejecuta `npm run build`. Los servicios independientes conservan su propia configuracion (`DB_HOST`, `REDIS_HOST`, `MAIL_HOST`, `BEANSTALKD_HOST`, etc.).
 
 Actualmente no hay seeders obligatorios. Si se agregan datos iniciales en el futuro:
 

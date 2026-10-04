@@ -1,25 +1,29 @@
 ﻿import { useEffect, useMemo, useState } from "react"
+import { useRef, type ReactNode } from "react"
 import {
-  ArrowLeft,
-  CalendarDays,
+  Bot,
+  ArrowRight,
   Check,
   CheckCircle2,
   ChevronsUpDown,
   ClipboardPaste,
-  Contact,
   Download,
   Eye,
   EyeOff,
   ExternalLink,
+  Globe2,
   Loader2,
   KeyRound,
-  MessageSquareText,
   Pencil,
   Plus,
   Search,
+  Settings,
   Upload,
   UserCheck,
+  UsersRound,
   UserX,
+  Waypoints,
+  Wrench,
   XCircle,
 } from "lucide-react"
 import { Badge } from "shadcn/components/ui/badge"
@@ -44,6 +48,7 @@ import { AppShell, AppShellBackButton } from "../components/AppShell"
 
 interface SettingsPanelProps {
   settings?: {
+    webchat?: WebchatSettings
     general?: {
       timezone?: string
       language?: string
@@ -88,6 +93,7 @@ interface SettingsPanelProps {
     id: number
     name: string
     is_default?: boolean
+    channels?: string[]
   }>
   roles?: Array<{
     id: number
@@ -113,12 +119,44 @@ interface SettingsPanelProps {
   }>
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || ""
-const APP_URL = import.meta.env.VITE_APP_URL || ""
+type WebchatSettings = { enabled: boolean; availability_mode: "always" | "schedule"; schedule_start: string; schedule_end: string; offline_message: string; title: string; subtitle: string; logo_url: string; default_flow_id: number | null }
+type SettingsSection = "general" | "integrations" | "bot" | "webchat" | "users"
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL || ""
+const webchatLogoUrl = (path: string) => path.startsWith("http") ? path : `${import.meta.env.VITE_APP_URL}${path}`
+const TIME_OPTIONS = Array.from({ length: 96 }, (_, index) => {
+  const hours = String(Math.floor(index / 4)).padStart(2, "0")
+  const minutes = String((index % 4) * 15).padStart(2, "0")
+  return `${hours}:${minutes}`
+})
 function getErrorMessage(payload: any, fallback: string): string {
   const firstError = payload?.errors ? Object.values(payload.errors).flat()[0] : null
   return String(firstError ?? payload?.message ?? fallback)
+}
+
+function SettingsGroup({
+  title,
+  description,
+  action,
+  children,
+}: {
+  title: string
+  description: string
+  action?: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <section className="space-y-4 border-t border-[#dbe5ef] pt-6 first:border-t-0 first:pt-0">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-[#013765]">{title}</h3>
+          <p className="mt-1 text-xs text-[#013765]/65">{description}</p>
+        </div>
+        {action}
+      </div>
+      {children}
+    </section>
+  )
 }
 
 export default function SettingsPanel({
@@ -155,6 +193,7 @@ export default function SettingsPanel({
     settings?.bot?.inactivity_timeout_message ??
     "La conversacion se cerro por inactividad. Si queres continuar, escribinos nuevamente y retomamos desde el inicio."
   const initialMaxAssignedChats = settings?.operators?.max_assigned_chats ?? "5"
+  const initialWebchat = useMemo<WebchatSettings>(() => settings?.webchat ?? { enabled: true, availability_mode: "always", schedule_start: "08:00", schedule_end: "20:00", offline_message: "En este momento no estamos disponibles. Volvé a intentarlo dentro del horario de atención.", title: "Asistente virtual", subtitle: "Hospital Universitario", logo_url: "", default_flow_id: null }, [settings?.webchat])
 
   const [timezone, setTimezone] = useState(initialTimezone)
   const [language, setLanguage] = useState(initialLanguage)
@@ -210,6 +249,12 @@ export default function SettingsPanel({
   const [savedInactivityTimeoutMessage, setSavedInactivityTimeoutMessage] = useState(initialInactivityTimeoutMessage)
   const [maxAssignedChats, setMaxAssignedChats] = useState(initialMaxAssignedChats)
   const [savedMaxAssignedChats, setSavedMaxAssignedChats] = useState(initialMaxAssignedChats)
+  const [webchat, setWebchat] = useState<WebchatSettings>(initialWebchat)
+  const [webchatLogoFile, setWebchatLogoFile] = useState<File | null>(null)
+  const [webchatLogoPreview, setWebchatLogoPreview] = useState("")
+  const [savedWebchat, setSavedWebchat] = useState(JSON.stringify(initialWebchat))
+  const [savingWebchat, setSavingWebchat] = useState(false)
+  const [webchatSaved, setWebchatSaved] = useState(false)
   const [savingGeneral, setSavingGeneral] = useState(false)
   const [generalSaved, setGeneralSaved] = useState(false)
   const [savingBot, setSavingBot] = useState(false)
@@ -235,6 +280,10 @@ export default function SettingsPanel({
   const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [importFile, setImportFile] = useState<File | null>(null)
   const [importError, setImportError] = useState("")
+  const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSection>("general")
+  const [pendingNavigation, setPendingNavigation] = useState<(() => void) | null>(null)
+  const [settingsSectionNavPinned, setSettingsSectionNavPinned] = useState(false)
+  const settingsSectionNavSentinelRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     setTimezone(initialTimezone)
@@ -265,6 +314,10 @@ export default function SettingsPanel({
     setSavedInactivityTimeoutMessage(initialInactivityTimeoutMessage)
     setMaxAssignedChats(initialMaxAssignedChats)
     setSavedMaxAssignedChats(initialMaxAssignedChats)
+    setWebchat(initialWebchat)
+    setWebchatLogoFile(null)
+    setWebchatLogoPreview("")
+    setSavedWebchat(JSON.stringify(initialWebchat))
     setUsersState(users)
   }, [
     initialTimezone,
@@ -281,8 +334,26 @@ export default function SettingsPanel({
     initialInactivityTimeoutMinutes,
     initialInactivityTimeoutMessage,
     initialMaxAssignedChats,
+    initialWebchat,
     users,
   ])
+
+  useEffect(() => () => {
+    if (webchatLogoPreview.startsWith("blob:")) URL.revokeObjectURL(webchatLogoPreview)
+  }, [webchatLogoPreview])
+
+  useEffect(() => {
+    const sentinel = settingsSectionNavSentinelRef.current
+    if (!sentinel) return
+
+    const observer = new IntersectionObserver(
+      ([entry]) => setSettingsSectionNavPinned(!entry.isIntersecting),
+      { rootMargin: "-96px 0px 0px", threshold: 0 },
+    )
+
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [])
 
   const hasUnsavedGeneralChanges = useMemo(() => {
     return timezone !== savedTimezone || language !== savedLanguage
@@ -339,6 +410,21 @@ export default function SettingsPanel({
     maxAssignedChats,
     savedMaxAssignedChats,
   ])
+  const hasUnsavedWebchatChanges = JSON.stringify(webchat) !== savedWebchat || webchatLogoFile !== null
+  const selectedWebchatFlowLabel = webchat.default_flow_id
+    ? botFlows.find((flow) => flow.id === webchat.default_flow_id)?.name ?? "Flujo seleccionado"
+    : "Usar flujo predeterminado"
+
+  const hasUnsavedSettingsChanges = hasUnsavedGeneralChanges || hasUnsavedIntegrationsChanges || hasUnsavedBotChanges || hasUnsavedWebchatChanges
+
+  const requestNavigation = (navigation: () => void) => {
+    if (!hasUnsavedSettingsChanges) {
+      navigation()
+      return
+    }
+
+    setPendingNavigation(() => navigation)
+  }
 
   const handleSaveGeneral = async () => {
     setSavingGeneral(true)
@@ -810,6 +896,27 @@ export default function SettingsPanel({
     }
   }
 
+  const handleSaveWebchat = async () => {
+    setSavingWebchat(true)
+    setWebchatSaved(false)
+    try {
+      const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content")
+      const formData = new FormData()
+      Object.entries(webchat).forEach(([key, value]) => formData.append(key, typeof value === "boolean" ? (value ? "1" : "0") : value === null ? "" : String(value)))
+      if (webchatLogoFile) formData.append("logo", webchatLogoFile)
+      const res = await fetch(`${API_BASE}/api/settings/webchat`, { method: "POST", headers: { Accept: "application/json", ...(csrfToken ? { "X-CSRF-TOKEN": csrfToken } : {}) }, body: formData })
+      if (!res.ok) { toast.error("No se pudo guardar Webchat", { description: getErrorMessage(await res.json().catch(() => null), "Revisá los datos e intentá nuevamente.") }); return }
+      const payload = await res.json()
+      const savedSettings = { ...webchat, ...(payload.settings?.webchat ?? {}) }
+      setWebchat(savedSettings)
+      setWebchatLogoFile(null)
+      setWebchatLogoPreview("")
+      setSavedWebchat(JSON.stringify(savedSettings))
+      setWebchatSaved(true)
+      toast.success("Configuración de Webchat guardada")
+    } catch { toast.error("Error de red", { description: "No se pudo guardar la configuración de Webchat." }) } finally { setSavingWebchat(false) }
+  }
+
   const handleExportConfig = async () => {
     setExportingConfig(true)
 
@@ -881,39 +988,10 @@ export default function SettingsPanel({
       currentPath="/settings-panel"
       title="Configuracion"
       subtitle="Modulo central para administrar opciones globales del sistema."
-      leading={<AppShellBackButton onClick={() => window.history.back()} />}
+      leading={<AppShellBackButton onClick={() => requestNavigation(() => window.history.back())} />}
+      onNavigate={(href) => requestNavigation(() => { window.location.href = href })}
       actions={
         <>
-          <Button
-            variant="outline"
-            className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white"
-            onClick={() => {
-              window.location.href = `${APP_URL}/audit-panel`
-            }}
-          >
-            <CalendarDays className="mr-2 h-4 w-4" />
-            Ver auditoria
-          </Button>
-          <Button
-            variant="outline"
-            className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white"
-            onClick={() => {
-              window.location.href = `${APP_URL}/agenda-panel`
-            }}
-          >
-            <Contact className="mr-2 h-4 w-4" />
-            Ver agenda
-          </Button>
-          <Button
-            variant="outline"
-            className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white"
-            onClick={() => {
-              window.location.href = `${APP_URL}/quick-replies-panel`
-            }}
-          >
-            <MessageSquareText className="mr-2 h-4 w-4" />
-            Ver mensajes rapidos
-          </Button>
           <Button
             variant="outline"
             className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white"
@@ -931,9 +1009,134 @@ export default function SettingsPanel({
           </Button>
         </>
       }
-      contentClassName="container mx-auto flex flex-col gap-6 px-6 py-8"
+      contentClassName="container mx-auto flex flex-col gap-6 px-6 pb-32 pt-8"
     >
-        <Card className="order-4 border-[#dbe5ef] bg-white">
+        <div ref={settingsSectionNavSentinelRef} className="-mb-6 h-px" aria-hidden />
+        <Card className={cn(
+          "sticky top-24 z-20 transition-colors duration-200",
+          settingsSectionNavPinned
+            ? "border-[#b7cedf] bg-[#eaf3f8] shadow-md"
+            : "border-[#dbe5ef] bg-white shadow-sm",
+        )}>
+          <CardHeader className={cn(
+            "transition-[padding] duration-200",
+            settingsSectionNavPinned ? "h-14 justify-center space-y-0 px-3 py-0 sm:px-4" : "space-y-4",
+          )}>
+            <div className={settingsSectionNavPinned ? "hidden" : ""}>
+              <CardTitle className="text-[#013765]">Áreas de configuración</CardTitle>
+              <CardDescription className="text-[#013765]/70">Elegí un área.</CardDescription>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {([
+                ["general", "General", Settings, hasUnsavedGeneralChanges],
+                ["integrations", "Integraciones", Waypoints, hasUnsavedIntegrationsChanges],
+                ["bot", "Bot", Bot, hasUnsavedBotChanges],
+                ["webchat", "Webchat", Globe2, hasUnsavedWebchatChanges],
+                ["users", "Usuarios", UsersRound, false],
+              ] as const).map(([section, label, Icon, hasChanges]) => (
+                <Button
+                  key={section}
+                  type="button"
+                  variant="outline"
+                  className={cn(
+                    "relative border-[#dbe5ef] text-[#013765] hover:bg-[#013765]/[0.04]",
+                    activeSettingsSection === section ? "bg-[#013765] text-white hover:bg-[#024a8a] hover:text-white" : "",
+                  )}
+                  onClick={() => setActiveSettingsSection(section)}
+                >
+                  <Icon className="mr-2 h-4 w-4" />
+                  {label}
+                  {hasChanges ? <span className={cn("ml-1.5 h-2 w-2 rounded-full", activeSettingsSection === section ? "bg-amber-300" : "bg-amber-500")} aria-label="Cambios sin guardar" /> : null}
+                </Button>
+              ))}
+            </div>
+          </CardHeader>
+        </Card>
+
+        {activeSettingsSection !== "users" ? (
+          <div className="fixed bottom-4 left-1/2 z-40 w-fit max-w-[calc(100vw-2rem)] -translate-x-1/2">
+            {activeSettingsSection === "general" ? (
+              <div className="flex flex-col items-center gap-1.5 text-center">
+                <Button className="bg-[#013765] text-white hover:bg-[#024a8a]" onClick={handleSaveGeneral} disabled={savingGeneral || !hasUnsavedGeneralChanges}>{savingGeneral ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Guardando...</> : "Guardar configuración general"}</Button>
+                <p className="text-xs text-[#013765]/70">{hasUnsavedGeneralChanges ? "Hay cambios sin guardar." : generalSaved ? "Configuración guardada." : "Sin cambios pendientes."}</p>
+              </div>
+            ) : null}
+            {activeSettingsSection === "bot" ? (
+              <div className="flex flex-col items-center gap-1.5 text-center">
+                <Button className="bg-[#013765] text-white hover:bg-[#024a8a]" onClick={handleSaveBot} disabled={savingBot || !hasUnsavedBotChanges || !defaultFlowId}>{savingBot ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Guardando...</> : "Guardar configuración del bot"}</Button>
+                <p className="text-xs text-[#013765]/70">{hasUnsavedBotChanges ? "Hay cambios sin guardar." : botSaved ? "Configuración guardada." : "Sin cambios pendientes."}</p>
+              </div>
+            ) : null}
+            {activeSettingsSection === "integrations" ? (
+              <div className="flex flex-col items-center gap-1.5 text-center">
+                <Button className="bg-[#013765] text-white hover:bg-[#024a8a]" onClick={handleSaveIntegrations} disabled={savingIntegrations || !hasUnsavedIntegrationsChanges}>{savingIntegrations ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Guardando...</> : "Guardar canales e integraciones"}</Button>
+                <p className="text-xs text-[#013765]/70">{hasUnsavedIntegrationsChanges ? "Hay cambios sin guardar." : integrationsSaved ? "Configuración guardada." : "Sin cambios pendientes."}</p>
+              </div>
+            ) : null}
+            {activeSettingsSection === "webchat" ? (
+              <div className="flex flex-col items-center gap-1.5 text-center">
+                <Button className="bg-[#013765] text-white hover:bg-[#024a8a]" onClick={handleSaveWebchat} disabled={savingWebchat || !hasUnsavedWebchatChanges}>{savingWebchat ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Guardando...</> : "Guardar configuración de Webchat"}</Button>
+                <p className="text-xs text-[#013765]/70">{hasUnsavedWebchatChanges ? "Hay cambios sin guardar." : webchatSaved ? "Configuración guardada." : "Sin cambios pendientes."}</p>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {activeSettingsSection === "webchat" ? (
+          <Card className="border-[#dbe5ef] bg-white">
+            <CardHeader>
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <CardTitle className="text-[#013765]">Configuración de Webchat</CardTitle>
+                  <CardDescription className="mt-1 text-[#013765]/70">Administrá la disponibilidad y la experiencia de quienes usan el canal público.</CardDescription>
+                </div>
+                <div className="inline-flex gap-1 rounded-lg border border-[#cbd8e5] bg-white p-1 shadow-sm" role="group" aria-label="Estado de disponibilidad del Webchat">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => setWebchat((v) => ({ ...v, enabled: true }))}
+                    className={cn("h-9 gap-2 px-3 text-xs", webchat.enabled ? "bg-[#013765] text-white hover:bg-[#024a8a]" : "bg-transparent text-[#013765] hover:bg-[#013765]/[0.06]")}
+                    aria-pressed={webchat.enabled}
+                  >
+                    <CheckCircle2 className="h-4 w-4" /> Activo
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => setWebchat((v) => ({ ...v, enabled: false }))}
+                    className={cn("h-9 gap-2 px-3 text-xs", !webchat.enabled ? "bg-[#013765] text-white hover:bg-[#024a8a]" : "bg-transparent text-[#013765]/70 hover:bg-[#013765]/[0.06]")}
+                    aria-pressed={!webchat.enabled}
+                  >
+                      <Wrench className="h-4 w-4" /> Mantenimiento
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-8">
+              <section className="border-t border-[#dbe5ef] pt-6">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Disponibilidad</label><Select value={webchat.availability_mode} onValueChange={(value: "always" | "schedule") => setWebchat((v) => ({ ...v, availability_mode: value }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="always">Siempre disponible</SelectItem><SelectItem value="schedule">Según horario</SelectItem></SelectContent></Select></div>
+                  {webchat.availability_mode === "schedule" ? <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Horario de atención</label><div className="flex items-center gap-2"><Select value={webchat.schedule_start} onValueChange={(value) => setWebchat((v) => ({ ...v, schedule_start: value }))}><SelectTrigger aria-label="Horario de inicio" className="min-w-0 flex-1 tabular-nums"><SelectValue /></SelectTrigger><SelectContent>{TIME_OPTIONS.map((time) => <SelectItem key={time} value={time}>{time}</SelectItem>)}</SelectContent></Select><ArrowRight className="h-4 w-4 shrink-0 text-[#013765]/55" aria-hidden="true" /><Select value={webchat.schedule_end} onValueChange={(value) => setWebchat((v) => ({ ...v, schedule_end: value }))}><SelectTrigger aria-label="Horario de fin" className="min-w-0 flex-1 tabular-nums"><SelectValue /></SelectTrigger><SelectContent>{TIME_OPTIONS.map((time) => <SelectItem key={time} value={time}>{time}</SelectItem>)}</SelectContent></Select></div></div> : null}
+                  <div className="space-y-1.5 md:col-span-2"><label className="text-sm font-medium text-[#013765]">Mensaje fuera de horario o deshabilitado</label><Textarea rows={2} value={webchat.offline_message} onChange={(e) => setWebchat((v) => ({ ...v, offline_message: e.target.value }))} /></div>
+                </div>
+              </section>
+              <SettingsGroup title="Experiencia pública" description="Textos que ve la persona antes y durante la conversación.">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Título</label><Input value={webchat.subtitle} onChange={(e) => setWebchat((v) => ({ ...v, subtitle: e.target.value }))} /></div><div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Nombre</label><Input value={webchat.title} onChange={(e) => setWebchat((v) => ({ ...v, title: e.target.value }))} /></div>
+                </div>
+              </SettingsGroup>
+              <SettingsGroup title="Publicación" description="Elegí el flujo y el logo que se mostrará en el canal público.">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Logo</label><label className="flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-[#013765]/25 bg-[#013765]/[0.03] p-3 transition-colors hover:border-[#013765]/45 hover:bg-[#013765]/[0.06]"><input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" className="sr-only" onChange={(event) => { const file = event.target.files?.[0] ?? null; setWebchatLogoFile(file); setWebchatLogoPreview(file ? URL.createObjectURL(file) : "") }} /><span className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-xl bg-white p-2 text-[#013765] shadow-sm"><img src={webchatLogoPreview || (webchat.logo_url ? webchatLogoUrl(webchat.logo_url) : `${import.meta.env.VITE_APP_URL}/images/hu_icon_new.png`)} alt="Vista previa del logo" className="h-full w-full object-contain" onError={(event) => { event.currentTarget.src = `${import.meta.env.VITE_APP_URL}/images/hu_icon_new.png` }} /></span><span className="min-w-0"><span className="block text-sm font-medium text-[#013765]">{webchatLogoFile ? webchatLogoFile.name : webchat.logo_url ? "Logo actual" : "Seleccionar imagen"}</span><span className="mt-0.5 block text-xs text-[#013765]/65">Hacé clic para cambiarlo · PNG, JPG, WebP o SVG</span></span><Upload className="ml-auto h-4 w-4 shrink-0 text-[#013765]/65" /></label></div>
+                  <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Flujo</label><Select value={webchat.default_flow_id ? String(webchat.default_flow_id) : "auto"} onValueChange={(value) => setWebchat((v) => ({ ...v, default_flow_id: value === "auto" ? null : Number(value) }))}><SelectTrigger className="h-20 border-dashed border-[#013765]/25 bg-[#013765]/[0.03] px-3 hover:border-[#013765]/45 hover:bg-[#013765]/[0.06]"><div className="flex min-w-0 items-center gap-3"><span className="grid h-14 w-14 shrink-0 place-items-center rounded-xl bg-white text-[#013765] shadow-sm"><Waypoints className="h-5 w-5" /></span><span className="min-w-0 text-left"><span className="block truncate text-sm font-medium text-[#013765]">{selectedWebchatFlowLabel}</span><span className="mt-0.5 block text-xs text-[#013765]/65">Hacé clic para cambiarlo</span></span></div></SelectTrigger><SelectContent><SelectItem value="auto">Usar flujo Webchat predeterminado</SelectItem>{botFlows.filter((flow) => flow.channels?.includes("webchat")).map((flow) => <SelectItem key={flow.id} value={String(flow.id)}>{flow.name}</SelectItem>)}</SelectContent></Select></div>
+                </div>
+              </SettingsGroup>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {activeSettingsSection === "users" ? (
+        <Card className="border-[#dbe5ef] bg-white">
           <CardHeader>
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -1031,8 +1234,10 @@ export default function SettingsPanel({
             </div>
           </CardContent>
         </Card>
+        ) : null}
 
-        <Card className="order-1 border-[#dbe5ef] bg-white">
+        {activeSettingsSection === "general" ? (
+        <Card className="border-[#dbe5ef] bg-white">
           <CardHeader>
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -1110,33 +1315,12 @@ export default function SettingsPanel({
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#dbe5ef] pt-4">
-              <div className="text-xs text-[#013765]/70">
-                {hasUnsavedGeneralChanges
-                  ? "Hay cambios sin guardar en la configuracion general."
-                  : generalSaved
-                    ? "Configuracion general guardada."
-                    : "Sin cambios pendientes."}
-              </div>
-              <Button
-                className="bg-[#013765] text-white hover:bg-[#024a8a]"
-                onClick={handleSaveGeneral}
-                disabled={savingGeneral || !hasUnsavedGeneralChanges}
-              >
-                {savingGeneral ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Guardando...
-                  </>
-                ) : (
-                  "Guardar configuracion general"
-                )}
-              </Button>
-            </div>
           </CardContent>
         </Card>
+        ) : null}
 
-        <Card className="order-3 border-[#dbe5ef] bg-white">
+        {activeSettingsSection === "bot" ? (
+        <Card className="border-[#dbe5ef] bg-white">
           <CardHeader>
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -1148,6 +1332,10 @@ export default function SettingsPanel({
             </div>
           </CardHeader>
           <CardContent className="space-y-5">
+            <SettingsGroup
+              title="Comportamiento del bot"
+              description="Definí el flujo inicial y cuándo debe cerrarse una conversación pendiente."
+            >
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-[#013765]">Flujo por defecto</label>
@@ -1200,14 +1388,12 @@ export default function SettingsPanel({
                 </p>
               </div>
             </div>
+            </SettingsGroup>
 
-            <div className="space-y-4 border-t border-[#dbe5ef] pt-5">
-              <div>
-                <h3 className="text-sm font-semibold text-[#013765]">Asignación a operadores</h3>
-                <p className="mt-1 text-xs text-[#013765]/65">
-                  Configura cómo se entregan los chats cuando el bot deriva la conversación a atención humana.
-                </p>
-              </div>
+            <SettingsGroup
+              title="Asignación a operadores"
+              description="Configurá cómo se entregan los chats cuando el bot deriva la conversación a atención humana."
+            >
               <div className="max-w-md space-y-1.5">
                 <label className="text-sm font-medium text-[#013765]">Máximo de chats por operador</label>
                 <Input
@@ -1222,35 +1408,14 @@ export default function SettingsPanel({
                   La asignación automática sólo considera operadores que estén por debajo de este límite. Si todos lo alcanzan, el chat queda pendiente de asignación.
                 </p>
               </div>
-            </div>
+            </SettingsGroup>
 
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#dbe5ef] pt-4">
-              <div className="text-xs text-[#013765]/70">
-                {hasUnsavedBotChanges
-                  ? "Hay cambios sin guardar en la configuracion del bot."
-                  : botSaved
-                    ? "Configuracion del bot guardada."
-                    : "Sin cambios pendientes."}
-              </div>
-              <Button
-                className="bg-[#013765] text-white hover:bg-[#024a8a]"
-                onClick={handleSaveBot}
-                disabled={savingBot || !hasUnsavedBotChanges || !defaultFlowId}
-              >
-                {savingBot ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Guardando...
-                  </>
-                ) : (
-                  "Guardar configuracion del bot"
-                )}
-              </Button>
-            </div>
           </CardContent>
         </Card>
+        ) : null}
 
-        <Card className="order-2 border-[#dbe5ef] bg-white">
+        {activeSettingsSection === "integrations" ? (
+        <Card className="border-[#dbe5ef] bg-white">
           <CardHeader>
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -1261,16 +1426,11 @@ export default function SettingsPanel({
               </div>
             </div>
           </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="surface-nested rounded-xl p-4">
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-semibold text-[#013765]">WhatsApp</h3>
-                  <p className="text-xs text-[#013765]/65">
-                    Credenciales, identificadores y requisitos necesarios para Meta Cloud API.
-                  </p>
-                </div>
-                <a
+          <CardContent className="space-y-8">
+            <SettingsGroup
+              title="WhatsApp"
+              description="Credenciales, identificadores y requisitos necesarios para Meta Cloud API."
+              action={<a
                   href="https://developers.facebook.com/apps/"
                   target="_blank"
                   rel="noreferrer"
@@ -1278,8 +1438,8 @@ export default function SettingsPanel({
                 >
                   Abrir Meta
                   <ExternalLink className="h-3.5 w-3.5" />
-                </a>
-              </div>
+                </a>}
+            >
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="space-y-1.5 md:col-span-2">
                   <div className="flex items-center justify-between gap-2">
@@ -1355,17 +1515,9 @@ export default function SettingsPanel({
                   </div>
                 </div>
               </div>
-            </div>
+            </SettingsGroup>
 
-            <div className="surface-nested rounded-xl p-4">
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-semibold text-[#013765]">API intermedia (la que usa Autogestion)</h3>
-                  <p className="text-xs text-[#013765]/65">
-                    Configuracion de la API intermedia utilizada por los nodos del bot.
-                  </p>
-                </div>
-              </div>
+            <SettingsGroup title="API intermedia (la que usa Autogestion)" description="Configuracion de la API intermedia utilizada por los nodos del bot.">
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="space-y-1.5 md:col-span-2">
                   <label className="text-sm font-medium text-[#013765]">Base URL</label>
@@ -1423,16 +1575,10 @@ export default function SettingsPanel({
                   </div>
                 ) : null}
               </div>
-            </div>
+            </SettingsGroup>
 
-            <div className="surface-nested rounded-xl p-4">
-              <div className="mb-4">
-                <h3 className="text-sm font-semibold text-[#013765]">Alephoo</h3>
-                <p className="text-xs text-[#013765]/65">
-                  Prueba del servicio de Alephoo consumido directamente por el sistema.
-                </p>
-              </div>
-              <div className="mb-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+            <SettingsGroup title="Alephoo" description="Prueba del servicio de Alephoo consumido directamente por el sistema.">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="space-y-1.5 md:col-span-2">
                   <label className="text-sm font-medium text-[#013765]">Base URL</label>
                   <Input value={alephooV3BaseUrl} onChange={(e) => setAlephooV3BaseUrl(e.target.value)} placeholder="https://universitario.alephoo.com/api/v3" />
@@ -1509,15 +1655,9 @@ export default function SettingsPanel({
                   </div>
                 ) : null}
               </div>
-            </div>
+            </SettingsGroup>
 
-            <div className="surface-nested rounded-xl p-4">
-              <div className="mb-4">
-                <h3 className="text-sm font-semibold text-[#013765]">Autogestion</h3>
-                <p className="text-xs text-[#013765]/65">
-                  Configuracion de la API que determina especialidades, profesionales, obras sociales y planes habilitados.
-                </p>
-              </div>
+            <SettingsGroup title="Autogestion" description="Configuracion de la API que determina especialidades, profesionales, obras sociales y planes habilitados.">
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="space-y-1.5 md:col-span-2">
                   <label className="text-sm font-medium text-[#013765]">Base URL</label>
@@ -1558,34 +1698,37 @@ export default function SettingsPanel({
                   </div>
                 ) : null}
               </div>
-            </div>
+            </SettingsGroup>
 
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#dbe5ef] pt-4">
-              <div className="text-xs text-[#013765]/70">
-                {hasUnsavedIntegrationsChanges
-                  ? "Hay cambios sin guardar en canales e integraciones."
-                  : integrationsSaved
-                    ? "Canales e integraciones guardados."
-                    : "Sin cambios pendientes."}
-              </div>
-              <Button
-                className="bg-[#013765] text-white hover:bg-[#024a8a]"
-                onClick={handleSaveIntegrations}
-                disabled={savingIntegrations || !hasUnsavedIntegrationsChanges}
-              >
-                {savingIntegrations ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Guardando...
-                  </>
-                ) : (
-                  "Guardar canales e integraciones"
-                )}
-              </Button>
-            </div>
           </CardContent>
         </Card>
+        ) : null}
       
+
+      <Dialog open={pendingNavigation !== null} onOpenChange={(open) => { if (!open) setPendingNavigation(null) }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Tenés cambios sin guardar</DialogTitle>
+            <DialogDescription>
+              Si salís ahora, se perderán los cambios pendientes en la configuración.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setPendingNavigation(null)}>Cancelar</Button>
+            <Button
+              type="button"
+              className="bg-[#013765] text-white hover:bg-[#024a8a]"
+              onClick={() => {
+                const navigation = pendingNavigation
+                setPendingNavigation(null)
+                navigation?.()
+              }}
+            >
+              Salir sin guardar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={integrationTestModalOpen} onOpenChange={setIntegrationTestModalOpen}>
         <DialogContent className="max-w-2xl">

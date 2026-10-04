@@ -9,6 +9,68 @@ use Illuminate\Support\Facades\Log;
 
 class LocationController extends Controller
 {
+    public function webchatSearch(Request $request)
+    {
+        $data = $request->validate([
+            'q' => ['required', 'string', 'min:3', 'max:255'],
+            'limit' => ['nullable', 'integer', 'min:1', 'max:8'],
+        ]);
+
+        $params = [
+            'q' => $data['q'],
+            'limit' => $data['limit'] ?? 6,
+        ];
+        $cacheKey = 'webchat.location.photon.' . md5(json_encode($params));
+
+        try {
+            $features = Cache::remember($cacheKey, now()->addDay(), function () use ($params) {
+                $response = Http::timeout(8)
+                    ->acceptJson()
+                    ->get('https://photon.komoot.io/api', $params);
+
+                if (!$response->ok()) {
+                    throw new \RuntimeException('Photon search failed with status ' . $response->status());
+                }
+
+                return $response->json('features', []);
+            });
+
+            $results = collect($features)->map(function ($feature, $index) {
+                $properties = $feature['properties'] ?? [];
+                $coordinates = $feature['geometry']['coordinates'] ?? [];
+                $longitude = $coordinates[0] ?? null;
+                $latitude = $coordinates[1] ?? null;
+
+                $name = trim((string) ($properties['name'] ?? $properties['street'] ?? $properties['city'] ?? 'Ubicación'));
+                $address = collect([
+                    $properties['street'] ?? null,
+                    $properties['housenumber'] ?? null,
+                    $properties['district'] ?? null,
+                    $properties['city'] ?? null,
+                    $properties['state'] ?? null,
+                    $properties['country'] ?? null,
+                ])->filter(fn ($part) => filled($part))->implode(', ');
+
+                return [
+                    'id' => (string) ($properties['osm_id'] ?? $index) . '-' . $latitude . '-' . $longitude,
+                    'latitude' => is_numeric($latitude) ? (float) $latitude : null,
+                    'longitude' => is_numeric($longitude) ? (float) $longitude : null,
+                    'name' => $name,
+                    'address' => $address ?: $name,
+                ];
+            })->filter(fn ($result) => is_numeric($result['latitude']) && is_numeric($result['longitude']))->values();
+
+            return response()->json(['ok' => true, 'data' => $results]);
+        } catch (\Throwable $e) {
+            Log::warning('Photon webchat search failed', ['message' => $e->getMessage(), 'query' => $data['q']]);
+
+            return response()->json([
+                'ok' => false,
+                'message' => 'No se pudo buscar la ubicación en este momento.',
+            ], 503);
+        }
+    }
+
     public function search(Request $request)
     {
         $data = $request->validate([
@@ -113,7 +175,7 @@ class LocationController extends Controller
 
     private function nominatim()
     {
-        $appUrl = config('app.url') ?: env('APP_URL', 'http://172.22.115.103');
+        $appUrl = config('app.url');
 
         return Http::timeout(8)
             ->acceptJson()

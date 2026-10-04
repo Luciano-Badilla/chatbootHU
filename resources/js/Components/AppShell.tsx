@@ -16,6 +16,7 @@ type AppShellProps = {
   children: ReactNode
   actions?: ReactNode
   leading?: ReactNode
+  onNavigate?: (href: string) => void
   contentClassName?: string
   fullHeight?: boolean
 }
@@ -27,6 +28,7 @@ export function AppShell({
   children,
   actions,
   leading,
+  onNavigate,
   contentClassName = "px-4 py-4 lg:px-6 lg:py-6",
   fullHeight = false,
 }: AppShellProps) {
@@ -61,7 +63,7 @@ export function AppShell({
   return (
     <SidebarProvider defaultOpen={false}>
       <div className="min-h-screen bg-[#f4f8fb]">
-        <AppSidebar currentPath={currentPath} />
+        <AppSidebar currentPath={currentPath} onNavigate={onNavigate} />
 
         <SidebarInset className="bg-[#f4f8fb]">
           <div className={fullHeight ? "flex h-screen flex-col overflow-hidden" : "min-h-screen"}>

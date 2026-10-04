@@ -44,7 +44,7 @@ return [
 
         'beanstalkd' => [
             'driver' => 'beanstalkd',
-            'host' => '172.22.115.103',
+            'host' => env('BEANSTALKD_HOST', env('APP_HOST', 'localhost')),
             'queue' => 'default',
             'retry_after' => 90,
             'block_for' => 0,

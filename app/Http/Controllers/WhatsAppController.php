@@ -563,7 +563,14 @@ class WhatsAppController extends Controller
      * Entrada normalizada del canal webchat. Mantiene el mismo motor de flujos
      * que WhatsApp, sin construir payloads ni llamadas hacia Meta.
      */
-    public function processWebchatMessage(Chat $chat, string $body, ?string $interactiveReplyId = null): Message
+    public function processWebchatMessage(
+        Chat $chat,
+        string $body,
+        ?string $interactiveReplyId = null,
+        string $messageType = 'text',
+        ?string $mediaUrl = null,
+        ?string $mediaName = null,
+    ): Message
     {
         if (($chat->channel ?? 'whatsapp') !== 'webchat') {
             throw new \InvalidArgumentException('El chat no pertenece al canal webchat.');
@@ -573,8 +580,10 @@ class WhatsAppController extends Controller
             'chat_id' => $chat->id,
             'sender' => 'contact',
             'sender_subtype' => 'contact',
-            'message_type' => 'text',
+            'message_type' => $messageType,
             'body' => $body,
+            'media_url' => $mediaUrl,
+            'media_name' => $mediaName,
             'status' => 'received',
         ]);
         $this->publishWebchatMessage($chat, $message);
@@ -1117,6 +1126,26 @@ class WhatsAppController extends Controller
             ], fn ($value) => $value !== null && $value !== '');
         }
 
+        if (($chat->channel ?? 'whatsapp') === 'webchat') {
+            $message = Message::create([
+                'chat_id' => $chat->id,
+                'sender' => 'user',
+                'sender_subtype' => 'bot',
+                'bot_node_type' => 'contact',
+                'interactive_options' => [],
+                'message_type' => 'contacts',
+                'body' => json_encode([
+                    'contacts' => [$contactPayload],
+                    'display_name' => $formattedName,
+                    'phone' => $phone,
+                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'status' => 'sent',
+            ]);
+            $this->publishWebchatMessage($chat, $message);
+
+            return;
+        }
+
         $payload = [
             'messaging_product' => 'whatsapp',
             'to' => $this->formatPhoneNumber($contact->whatsapp_id),
@@ -1572,10 +1601,11 @@ class WhatsAppController extends Controller
                 'lastMessage' => $message->body,
                 'timestamp' => $payload['timestamp'],
                 'channel' => 'webchat',
-            ]), 0);
-            $mqtt->publish("chat/{$chat->id}", json_encode($payload), 0);
+            ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE), 0);
+            $serializedPayload = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR);
+            $mqtt->publish("chat/{$chat->id}", $serializedPayload, 0);
             if ($chat->webchat_token) {
-                $mqtt->publish("webchat/{$chat->webchat_token}", json_encode($payload), 0);
+                $mqtt->publish("webchat/{$chat->webchat_token}", $serializedPayload, 0);
             }
             $mqtt->disconnect();
         } catch (\Throwable $e) {
@@ -2304,6 +2334,26 @@ class WhatsAppController extends Controller
             ], fn ($value) => $value !== null && $value !== '');
         }
 
+        if (($chat->channel ?? 'whatsapp') === 'webchat') {
+            $message = Message::create([
+                'chat_id' => $chat->id,
+                'sender' => 'user',
+                'sender_subtype' => 'bot',
+                'bot_node_type' => 'contact',
+                'interactive_options' => [],
+                'message_type' => 'contacts',
+                'body' => json_encode([
+                    'contacts' => [$contactPayload],
+                    'display_name' => $formattedName,
+                    'phone' => $phone,
+                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'status' => 'sent',
+            ]);
+            $this->publishWebchatMessage($chat, $message);
+
+            return;
+        }
+
         $payload = [
             'messaging_product' => 'whatsapp',
             'to' => $this->formatPhoneNumber($contact->whatsapp_id),
@@ -2422,6 +2472,22 @@ class WhatsAppController extends Controller
         }
         if ($address !== '') {
             $locationPayload['address'] = mb_substr($address, 0, 1000);
+        }
+
+        if (($chat->channel ?? 'whatsapp') === 'webchat') {
+            $message = Message::create([
+                'chat_id' => $chat->id,
+                'sender' => 'user',
+                'sender_subtype' => 'bot',
+                'bot_node_type' => 'location',
+                'interactive_options' => [],
+                'message_type' => 'location',
+                'body' => json_encode($locationPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'status' => 'sent',
+            ]);
+            $this->publishWebchatMessage($chat, $message);
+
+            return;
         }
 
         $payload = [

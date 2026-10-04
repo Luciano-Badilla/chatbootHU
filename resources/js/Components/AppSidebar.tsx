@@ -4,6 +4,7 @@ import {
   Activity,
   Contact,
   GitBranch,
+  Globe2,
   LayoutDashboard,
   LogOut,
   Megaphone,
@@ -39,6 +40,7 @@ const HOSPITAL_FAVICON_URL = `${APP_URL}/favicon-48x48.png`
 const navigationItems: Array<{ label: string; href: string; icon: LucideIcon; permission?: string }> = [
   { label: "Inicio", href: `${APP_URL}/dashboard`, icon: LayoutDashboard },
   { label: "Mensajes", href: `${APP_URL}/chat-panel`, icon: MessageSquare },
+  { label: "Webchat", href: `${APP_URL}/webchat`, icon: Globe2 },
   { label: "Control de operadores", href: `${APP_URL}/operator-control`, icon: UsersRound, permission: "can_view_all_chats" },
   { label: "Respuestas rapidas", href: `${APP_URL}/quick-replies-panel`, icon: MessageSquareText },
   { label: "Agenda", href: `${APP_URL}/agenda-panel`, icon: Contact },
@@ -48,11 +50,7 @@ const navigationItems: Array<{ label: string; href: string; icon: LucideIcon; pe
   { label: "Auditoria", href: `${APP_URL}/audit-panel`, icon: ShieldCheck, permission: "can_view_audit" },
 ]
 
-function navigateTo(href: string) {
-  window.location.href = href
-}
-
-export function AppSidebar({ currentPath = "/dashboard" }: { currentPath?: string }) {
+export function AppSidebar({ currentPath = "/dashboard", onNavigate }: { currentPath?: string; onNavigate?: (href: string) => void }) {
   const { props } = usePage<{
     auth?: {
       user?: {
@@ -70,6 +68,14 @@ export function AppSidebar({ currentPath = "/dashboard" }: { currentPath?: strin
   const permissions = props.auth?.permissions ?? {}
   const userName = user?.name?.trim() || "Usuario"
   const userRole = user?.role_label?.trim() || user?.role_name?.trim() || "Usuario"
+  const navigateTo = (href: string) => {
+    if (onNavigate) {
+      onNavigate(href)
+      return
+    }
+
+    window.location.href = href
+  }
 
   return (
     <Sidebar
