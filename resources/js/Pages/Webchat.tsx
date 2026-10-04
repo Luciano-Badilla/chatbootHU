@@ -1,14 +1,14 @@
-import { FormEvent, type ReactNode, useEffect, useRef, useState } from "react"
+import { Fragment, FormEvent, type ReactNode, useEffect, useRef, useState } from "react"
 import mqtt from "mqtt"
 import { Gallery, Item } from "react-photoswipe-gallery"
 import "photoswipe/dist/photoswipe.css"
-import { ArrowUp, AudioLines, Bell, BellOff, Check, ChevronDown, Clock3, Contact, FileText, Headset, ImageIcon, Info, Loader2, MapPin, Menu, MessageCircle, Mic, Play, Plus, Search, Send, Share, ShieldCheck, Square, User, WifiOff, Wrench, X } from "lucide-react"
+import { ArrowUp, AudioLines, Bell, BellOff, Check, ChevronDown, Clock3, Contact, FileText, Headset, ImageIcon, Info, Loader2, MapPin, Menu, MessageCircle, Mic, Play, Plus, Search, Send, Share, Square, User, WifiOff, Wrench, X } from "lucide-react"
 import { toast } from "sonner"
 
 type Option = { id: string; label: string; description?: string; kind?: string }
 type RetryPayload = { message: string; optionId?: string }
 type Message = { id: number | string; sender: "contact" | "user"; sender_subtype?: "contact" | "operator" | "bot"; operator_name?: string | null; body: string | null; created_at?: string; timestamp?: string; message_type?: string | null; media_url?: string | null; media_name?: string | null; interactive_options?: Option[] | null; delivery_status?: "sending" | "failed"; retry_payload?: RetryPayload }
-type WebchatSettings = { enabled: boolean; available: boolean; title: string; subtitle: string; logo_url: string; offline_message: string }
+type WebchatSettings = { enabled: boolean; available: boolean; operators_available?: boolean; title: string; subtitle: string; logo_url: string; offline_message: string }
 type PendingMedia = { id: string; file: File; previewUrl: string; type: "image" | "video" }
 type LocationDraft = { latitude: number; longitude: number; name: string; address: string }
 type LocationSearchResult = LocationDraft & { id: string }
@@ -297,7 +297,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   const [chatStatus, setChatStatus] = useState<"open" | "closed">("open")
   const [closedBy, setClosedBy] = useState<string | null>(null)
   const [closedByName, setClosedByName] = useState<string | null>(null)
-  const [channelAvailability, setChannelAvailability] = useState(() => ({ enabled: webchat.enabled, available: webchat.available }))
+  const [channelAvailability, setChannelAvailability] = useState(() => ({ enabled: webchat.enabled, available: webchat.available, operatorsAvailable: webchat.operators_available ?? webchat.available }))
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported">(() => typeof window === "undefined" || !("Notification" in window) ? "unsupported" : Notification.permission)
   const [isIos, setIsIos] = useState(false)
   const [showIosInstallHelp, setShowIosInstallHelp] = useState(false)
@@ -509,7 +509,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
       try {
         const data = await api("status", {})
         if (typeof data.webchat?.enabled === "boolean" && typeof data.webchat?.available === "boolean") {
-          setChannelAvailability({ enabled: data.webchat.enabled, available: data.webchat.available })
+          setChannelAvailability({ enabled: data.webchat.enabled, available: data.webchat.available, operatorsAvailable: typeof data.webchat.operators_available === "boolean" ? data.webchat.operators_available : data.webchat.available })
         }
       } catch {
         // La configuración mostrada al cargar sigue disponible si falla la actualización.
@@ -1187,7 +1187,9 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
       ? { label: "En mantenimiento", dot: "bg-amber-300" }
       : !channelAvailability.available
         ? { label: "Fuera de horario", dot: "bg-slate-300" }
-        : { label: "En línea", dot: "bg-[#a9d7bd]" }
+        : !channelAvailability.operatorsAvailable
+          ? { label: "Operadores fuera de horario", dot: "bg-amber-300" }
+          : { label: "En línea", dot: "bg-[#a9d7bd]" }
   const conversationUnavailable = !channelAvailability.enabled || !channelAvailability.available
   const isOperatorHandling = !conversationUnavailable && !botEnabled
   const isWaitingForOperator = isOperatorHandling && !operatorName
@@ -1195,6 +1197,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   const attentionTitle = conversationUnavailable ? "Canal temporalmente no disponible" : isWaitingForOperator ? "Buscando un operador" : isOperatorHandling ? `Atiende ${operatorName}` : "Asistente virtual activo"
   const attentionDescription = conversationUnavailable ? "La conversación se retomará cuando el canal vuelva a estar disponible." : isWaitingForOperator ? "Te avisaremos cuando una persona tome la conversación." : isOperatorHandling ? "Podés continuar escribiendo por este mismo chat." : "Podés consultar o seguir las opciones disponibles en la conversación."
   const sharedMedia = messages.filter((message) => ["image", "video", "audio", "document"].includes(message.message_type ?? "text")).slice(-12).reverse()
+  const hasOperatorMessages = messages.some((message) => message.sender_subtype === "operator")
 
   return (
     <main className="h-[100dvh] overflow-hidden bg-[#f4f7fa] p-0 font-sans text-slate-800 sm:p-5 lg:p-7">
@@ -1272,8 +1275,10 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
                     ? messages.slice(index + 1).find((candidate) => candidate.sender === "contact" && message.interactive_options?.some((option) => option.label === candidate.body))
                     : undefined
                   const selectedOptionId = selectedOptions[String(message.id)] ?? message.interactive_options?.find((option) => option.label === responseToOptions?.body)?.id
+                  const previousOperatorMessage = [...messages.slice(0, index)].reverse().find((candidate) => candidate.sender_subtype === "operator")
+                  const operatorStartedAttention = message.sender_subtype === "operator" && (!previousOperatorMessage || previousOperatorMessage.operator_name !== message.operator_name)
 
-                  return <div key={`${message.id}-${index}`} data-message-id={message.id} className={`flex items-start gap-2.5 ${isOwnMessage ? "justify-end" : "justify-start"} ${String(message.id) === enteringMessageId ? `webchat-message-enter ${isOwnMessage ? "webchat-message-enter--own" : "webchat-message-enter--incoming"}` : ""}`}>
+                  return <Fragment key={`${message.id}-${index}`}>{operatorStartedAttention ? <div className="flex items-center gap-3 py-3 text-center"><span className="h-px flex-1 bg-slate-200" /><span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">{message.operator_name || "Un operador"} comenzó a atender la conversación</span><span className="h-px flex-1 bg-slate-200" /></div> : null}<div data-message-id={message.id} className={`flex items-start gap-2.5 ${isOwnMessage ? "justify-end" : "justify-start"} ${String(message.id) === enteringMessageId ? `webchat-message-enter ${isOwnMessage ? "webchat-message-enter--own" : "webchat-message-enter--incoming"}` : ""}`}>
                     {!isOwnMessage ? <div title={isBotMessage ? "Asistente virtual" : message.operator_name || "Operador"} className={`self-end grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-full border shadow-sm ${isBotMessage ? "border-[#003f73]/15 bg-white p-1" : "border-[#2b5f90]/20 bg-[#e8f0f6] text-[#003f73]"}`}>
                       {isBotMessage ? <img src={webchat.logo_url ? publicAssetUrl(webchat.logo_url) : `${import.meta.env.VITE_APP_URL}/images/hu_icon_new.png`} alt="Asistente virtual" className="h-full w-full object-contain" /> : <Headset className="h-4 w-4" />}
                     </div> : null}
@@ -1286,15 +1291,16 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
                       })}</div> : null}
                       {time ? <p className={`mt-1.5 text-right text-[10px] leading-none ${isOwnMessage ? "text-white/65" : "text-slate-400"}`}>{time}</p> : null}
                     </div>
-                  </div>
+                  </div></Fragment>
                 })}
-                {chatStatus === "closed" ? <div className="flex items-center gap-3 py-3 text-center"><span className="h-px flex-1 bg-slate-200" /><span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400"><ShieldCheck className="h-3.5 w-3.5 text-[#003f73]" />{closedBy === "operator" ? `${closedByName || "El operador"} finalizó la atención` : "Atención finalizada"}</span><span className="h-px flex-1 bg-slate-200" /></div> : null}
+                {isOperatorHandling && operatorName && !hasOperatorMessages ? <div className="flex items-center gap-3 py-3 text-center"><span className="h-px flex-1 bg-slate-200" /><span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">{operatorName} comenzó a atender la conversación</span><span className="h-px flex-1 bg-slate-200" /></div> : null}
+                {chatStatus === "closed" ? <div className="flex items-center gap-3 py-3 text-center"><span className="h-px flex-1 bg-slate-200" /><span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">{closedBy === "operator" ? `${closedByName || "El operador"} finalizó la atención` : "Atención finalizada"}</span><span className="h-px flex-1 bg-slate-200" /></div> : null}
               </Gallery><div ref={messagesEndRef} aria-hidden="true" className="h-px" />
             </div></div>
             {showScrollToBottom ? <button type="button" onClick={scrollToBottom} title="Ir al final" aria-label="Ir al final" className="absolute bottom-4 left-1/2 grid h-10 w-10 -translate-x-1/2 place-items-center rounded-full bg-[#003f73] text-white shadow-lg transition hover:bg-[#003461]"><ChevronDown className="h-5 w-5" /></button> : null}
           </div>
           <form onSubmit={(event) => { event.preventDefault(); void sendComposer() }} className="shrink-0 border-t border-slate-200 bg-white px-4 py-3 sm:px-8 sm:py-4"><div className="mx-auto max-w-3xl">
-            {chatStatus === "closed" ? <div><button type="button" onClick={() => void restartConversation()} disabled={sending} className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#003f73] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-[#003f73]/20 transition hover:bg-[#003461] disabled:opacity-60">{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}Nueva conversación</button></div> : <>
+            {chatStatus === "closed" || (isWaitingForOperator && !channelAvailability.operatorsAvailable) ? <div><button type="button" onClick={() => void restartConversation()} disabled={sending} className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#003f73] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-[#003f73]/20 transition hover:bg-[#003461] disabled:opacity-60">{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}{chatStatus === "closed" ? "Nueva conversación" : `Continuar con ${webchat.title}`}</button><p className="mt-2 text-center text-xs text-slate-500">Los operadores están fuera de horario. Podés retomar la atención automática.</p></div> : <>
             {manualInputLocked ? <p className="mb-2 text-center text-xs font-medium text-[#003f73]">Elegí una de las opciones del mensaje para continuar.</p> : null}
             {pendingMedia.length ? <div className="mb-2 flex gap-2 overflow-x-auto pb-1">{pendingMedia.map((media) => <div key={media.id} className="relative h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100"><button type="button" onClick={() => removePendingMedia(media.id)} aria-label={`Quitar ${media.file.name}`} className="absolute right-1 top-1 z-10 grid h-5 w-5 place-items-center rounded-full bg-slate-900/70 text-white"><X className="h-3 w-3" /></button>{media.type === "image" ? <img src={media.previewUrl} alt={media.file.name} className="h-full w-full object-cover" /> : <><video src={media.previewUrl} muted preload="metadata" className="h-full w-full object-cover" /><span className="absolute inset-0 grid place-items-center text-white drop-shadow"><Play className="h-5 w-5 fill-current" /></span></>}</div>)}</div> : null}
             <input ref={fileInputRef} type="file" multiple accept={fileAccept} className="hidden" onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; queueMedia(files) }} />

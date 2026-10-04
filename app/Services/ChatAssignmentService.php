@@ -9,7 +9,10 @@ use Illuminate\Support\Facades\DB;
 
 class ChatAssignmentService
 {
-    public function __construct(private readonly AuditService $auditService)
+    public function __construct(
+        private readonly AuditService $auditService,
+        private readonly WebchatAvailabilityService $webchatAvailabilityService,
+    )
     {
     }
 
@@ -39,6 +42,10 @@ class ChatAssignmentService
             $chat = Chat::query()->lockForUpdate()->findOrFail($chat->id);
 
             if ($chat->status !== 'open' || $chat->attention_status !== 'pending_assignment') {
+                return ['chat' => $chat, 'assignment' => null];
+            }
+
+            if (! $this->webchatAvailabilityService->canAssignOperator($chat)) {
                 return ['chat' => $chat, 'assignment' => null];
             }
 

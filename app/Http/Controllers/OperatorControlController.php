@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Services\AuditService;
 use App\Services\ChatAssignmentService;
 use App\Services\OperatorAvailabilityService;
+use App\Services\WebchatAvailabilityService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
@@ -21,6 +22,7 @@ class OperatorControlController extends Controller
         private readonly AuditService $auditService,
         private readonly ChatAssignmentService $chatAssignmentService,
         private readonly OperatorAvailabilityService $operatorAvailabilityService,
+        private readonly WebchatAvailabilityService $webchatAvailabilityService,
     )
     {
     }
@@ -303,6 +305,10 @@ class OperatorControlController extends Controller
 
         if (! $data['operator_id']) {
             return response()->json(['ok' => false, 'message' => 'Seleccioná un operador o usá la asignación automática.'], 422);
+        }
+
+        if (! $this->webchatAvailabilityService->canAssignOperator($chat)) {
+            return response()->json(['ok' => false, 'message' => 'La atención por operadores para Webchat está fuera de horario. El bot puede continuar atendiendo.'], 422);
         }
 
         $operator = User::query()->with('role')->findOrFail($data['operator_id']);

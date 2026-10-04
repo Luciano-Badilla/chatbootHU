@@ -50,7 +50,7 @@ class SettingsController extends Controller
                 'bot.inactivity_timeout_minutes',
                 'bot.inactivity_timeout_message',
                 'operators.max_assigned_chats',
-                'webchat.enabled', 'webchat.availability_mode', 'webchat.schedule_start', 'webchat.schedule_end', 'webchat.offline_message',
+                'webchat.enabled', 'webchat.availability_mode', 'webchat.schedule_start', 'webchat.schedule_end', 'webchat.bot_available_outside_schedule', 'webchat.offline_message',
                 'webchat.title', 'webchat.subtitle',
                 'webchat.logo_url', 'webchat.default_flow_id', 'webchat.response_delay_seconds',
             ])
@@ -114,6 +114,7 @@ class SettingsController extends Controller
                     'availability_mode' => $settings['webchat.availability_mode'] ?? 'always',
                     'schedule_start' => $settings['webchat.schedule_start'] ?? '08:00',
                     'schedule_end' => $settings['webchat.schedule_end'] ?? '20:00',
+                    'bot_available_outside_schedule' => ($settings['webchat.bot_available_outside_schedule'] ?? '0') === '1',
                     'offline_message' => $settings['webchat.offline_message'] ?? 'En este momento no estamos disponibles. Volvé a intentarlo dentro del horario de atención.',
                     'title' => $settings['webchat.title'] ?? 'Asistente virtual',
                     'subtitle' => $settings['webchat.subtitle'] ?? 'Hospital Universitario',
@@ -661,6 +662,7 @@ class SettingsController extends Controller
         $data = $request->validate([
             'enabled' => ['required', 'boolean'], 'availability_mode' => ['required', 'in:always,schedule'],
             'schedule_start' => ['required', 'date_format:H:i'], 'schedule_end' => ['required', 'date_format:H:i'],
+            'bot_available_outside_schedule' => ['required', 'boolean'],
             'offline_message' => ['required', 'string', 'max:1000'], 'title' => ['required', 'string', 'max:100'],
             'subtitle' => ['nullable', 'string', 'max:100'],
             'logo' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp,svg', 'max:2048'],
@@ -671,6 +673,7 @@ class SettingsController extends Controller
         // value before persisting and returning it so the settings UI receives a
         // real boolean after saving.
         $data['enabled'] = $request->boolean('enabled');
+        $data['bot_available_outside_schedule'] = $request->boolean('bot_available_outside_schedule');
         unset($data['logo']);
 
         if ($request->hasFile('logo')) {

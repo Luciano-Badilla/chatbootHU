@@ -119,7 +119,7 @@ interface SettingsPanelProps {
   }>
 }
 
-type WebchatSettings = { enabled: boolean; availability_mode: "always" | "schedule"; schedule_start: string; schedule_end: string; offline_message: string; title: string; subtitle: string; logo_url: string; default_flow_id: number | null; response_delay_seconds: string }
+type WebchatSettings = { enabled: boolean; availability_mode: "always" | "schedule"; schedule_start: string; schedule_end: string; bot_available_outside_schedule: boolean; offline_message: string; title: string; subtitle: string; logo_url: string; default_flow_id: number | null; response_delay_seconds: string }
 type SettingsSection = "general" | "integrations" | "bot" | "webchat" | "users"
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || ""
@@ -193,7 +193,7 @@ export default function SettingsPanel({
     settings?.bot?.inactivity_timeout_message ??
     "La conversacion se cerro por inactividad. Si queres continuar, escribinos nuevamente y retomamos desde el inicio."
   const initialMaxAssignedChats = settings?.operators?.max_assigned_chats ?? "5"
-  const initialWebchat = useMemo<WebchatSettings>(() => settings?.webchat ?? { enabled: true, availability_mode: "always", schedule_start: "08:00", schedule_end: "20:00", offline_message: "En este momento no estamos disponibles. Volvé a intentarlo dentro del horario de atención.", title: "Asistente virtual", subtitle: "Hospital Universitario", logo_url: "", default_flow_id: null, response_delay_seconds: "1.2" }, [settings?.webchat])
+  const initialWebchat = useMemo<WebchatSettings>(() => settings?.webchat ?? { enabled: true, availability_mode: "always", schedule_start: "08:00", schedule_end: "20:00", bot_available_outside_schedule: false, offline_message: "En este momento no estamos disponibles. Volvé a intentarlo dentro del horario de atención.", title: "Asistente virtual", subtitle: "Hospital Universitario", logo_url: "", default_flow_id: null, response_delay_seconds: "1.2" }, [settings?.webchat])
 
   const [timezone, setTimezone] = useState(initialTimezone)
   const [language, setLanguage] = useState(initialLanguage)
@@ -1117,6 +1117,7 @@ export default function SettingsPanel({
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Disponibilidad</label><Select value={webchat.availability_mode} onValueChange={(value: "always" | "schedule") => setWebchat((v) => ({ ...v, availability_mode: value }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="always">Siempre disponible</SelectItem><SelectItem value="schedule">Según horario</SelectItem></SelectContent></Select></div>
                   {webchat.availability_mode === "schedule" ? <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Horario de atención</label><div className="flex items-center gap-2"><Select value={webchat.schedule_start} onValueChange={(value) => setWebchat((v) => ({ ...v, schedule_start: value }))}><SelectTrigger aria-label="Horario de inicio" className="min-w-0 flex-1 tabular-nums"><SelectValue /></SelectTrigger><SelectContent>{TIME_OPTIONS.map((time) => <SelectItem key={time} value={time}>{time}</SelectItem>)}</SelectContent></Select><ArrowRight className="h-4 w-4 shrink-0 text-[#013765]/55" aria-hidden="true" /><Select value={webchat.schedule_end} onValueChange={(value) => setWebchat((v) => ({ ...v, schedule_end: value }))}><SelectTrigger aria-label="Horario de fin" className="min-w-0 flex-1 tabular-nums"><SelectValue /></SelectTrigger><SelectContent>{TIME_OPTIONS.map((time) => <SelectItem key={time} value={time}>{time}</SelectItem>)}</SelectContent></Select></div></div> : null}
+                  {webchat.availability_mode === "schedule" ? <div className="md:col-span-2 flex items-center justify-between gap-4 rounded-xl border border-[#d7e3ee] bg-[#f7fafc] px-4 py-3"><div><p className="text-sm font-medium text-[#013765]">El bot atiende fuera de horario</p><p className="mt-0.5 text-xs text-[#013765]/65">Las conversaciones seguirán con el bot; las derivaciones a operadores quedarán en espera.</p></div><Button type="button" size="sm" onClick={() => setWebchat((v) => ({ ...v, bot_available_outside_schedule: !v.bot_available_outside_schedule }))} className={cn("shrink-0 gap-2", webchat.bot_available_outside_schedule ? "bg-[#013765] text-white hover:bg-[#024a8a]" : "border border-[#cbd8e5] bg-white text-[#013765] hover:bg-[#013765]/[0.06]")} aria-pressed={webchat.bot_available_outside_schedule}>{webchat.bot_available_outside_schedule ? <Check className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}{webchat.bot_available_outside_schedule ? "Activado" : "Desactivado"}</Button></div> : null}
                   <div className="space-y-1.5 md:col-span-2"><label className="text-sm font-medium text-[#013765]">Mensaje fuera de horario o deshabilitado</label><Textarea rows={2} value={webchat.offline_message} onChange={(e) => setWebchat((v) => ({ ...v, offline_message: e.target.value }))} /></div>
                 </div>
               </section>

@@ -7,6 +7,7 @@ use App\Models\Chat;
 use App\Models\Contact;
 use App\Models\Message;
 use App\Models\SystemSetting;
+use App\Services\WebchatAvailabilityService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Validator;
@@ -14,17 +15,23 @@ use Inertia\Inertia;
 
 class WebchatController extends Controller
 {
+    public function __construct(private readonly WebchatAvailabilityService $availabilityService)
+    {
+    }
+
     public function index()
     {
         $settings = $this->settings();
-        $settings['available'] = $this->isAvailable($settings);
+        $settings['available'] = $this->availabilityService->isBotAvailable($settings);
+        $settings['operators_available'] = $this->availabilityService->areOperatorsAvailable($settings);
         return Inertia::render('Webchat', ['webchat' => $settings]);
     }
 
     public function status()
     {
         $settings = $this->settings();
-        $settings['available'] = $this->isAvailable($settings);
+        $settings['available'] = $this->availabilityService->isBotAvailable($settings);
+        $settings['operators_available'] = $this->availabilityService->areOperatorsAvailable($settings);
 
         return response()->json(['webchat' => $settings]);
     }
@@ -60,19 +67,14 @@ class WebchatController extends Controller
     public function start(Request $request)
     {
         $settings = $this->settings();
-        if (!$this->isAvailable($settings)) {
+        if (! $this->availabilityService->isBotAvailable($settings)) {
             return response()->json(['message' => $settings['offline_message']], 423);
         }
         $data = $request->validate([
             'name' => ['required', 'string', 'max:200'],
         ]);
 
-        $flows = BotFlow::query()
-            ->where('is_active', true)
-            ->whereJsonContains('channels', 'webchat')
-            ->orderByDesc('is_default')->orderBy('id');
-        $flow = $settings['default_flow_id'] ? (clone $flows)->whereKey($settings['default_flow_id'])->first() : null;
-        $flow ??= $flows->first();
+        $flow = $this->webchatFlow($settings);
 
         if (! $flow) {
             return response()->json([
@@ -117,27 +119,39 @@ class WebchatController extends Controller
         ]);
         $chat = $this->requireChat($request, $data['resume_token']);
 
-        if ($chat->status === 'closed') {
+        $shouldRestart = $chat->status === 'closed' || ! $chat->bot_enabled;
+        if ($shouldRestart) {
+            $settings = $this->settings();
+            $flow = $this->webchatFlow($settings);
+
+            if (! $flow) {
+                return response()->json(['message' => 'No hay un flujo activo habilitado para Webchat.'], 422);
+            }
+
             $chat->update([
                 'status' => 'open',
                 'attention_status' => 'bot',
                 'bot_enabled' => true,
                 'operator_id' => null,
                 'assigned_at' => null,
+                'bot_flow_id' => $flow->id,
+                'bot_node_id' => $flow->start_node_id,
+                'bot_step' => null,
+                'bot_state' => [],
                 'closed_at' => null,
                 'closed_by' => null,
                 'closed_by_user_id' => null,
                 'webchat_last_seen_at' => now(),
                 'last_user_message_at' => now(),
             ]);
-            app(WhatsAppController::class)->startWebchatConversation($chat);
+            app(WhatsAppController::class)->startWebchatConversation($chat, $flow);
         }
 
         $chat->refresh();
 
         return response()->json([
             'ok' => true,
-            'restarted' => $chat->status === 'open',
+            'restarted' => $shouldRestart,
             'chat' => $this->payload($chat),
         ]);
     }
@@ -319,6 +333,7 @@ class WebchatController extends Controller
         return [
             'enabled' => ($stored['webchat.enabled'] ?? '1') === '1', 'availability_mode' => $stored['webchat.availability_mode'] ?? 'always',
             'schedule_start' => $stored['webchat.schedule_start'] ?? '08:00', 'schedule_end' => $stored['webchat.schedule_end'] ?? '20:00',
+            'bot_available_outside_schedule' => ($stored['webchat.bot_available_outside_schedule'] ?? '0') === '1',
             'offline_message' => $stored['webchat.offline_message'] ?? 'En este momento no estamos disponibles. Volvé a intentarlo dentro del horario de atención.',
             'title' => $stored['webchat.title'] ?? 'Asistente virtual', 'subtitle' => $stored['webchat.subtitle'] ?? 'Hospital Universitario',
             'logo_url' => $stored['webchat.logo_url'] ?? '',
@@ -327,11 +342,17 @@ class WebchatController extends Controller
         ];
     }
 
-    private function isAvailable(array $settings): bool
+    private function webchatFlow(array $settings): ?BotFlow
     {
-        if (!$settings['enabled']) return false;
-        if ($settings['availability_mode'] !== 'schedule') return true;
-        $now = now(SystemSetting::query()->where('key', 'general.timezone')->value('value') ?: config('app.timezone'))->format('H:i');
-        return $settings['schedule_start'] <= $now && $now <= $settings['schedule_end'];
+        $flows = BotFlow::query()
+            ->where('is_active', true)
+            ->whereJsonContains('channels', 'webchat')
+            ->orderByDesc('is_default')
+            ->orderBy('id');
+
+        return $settings['default_flow_id']
+            ? (clone $flows)->whereKey($settings['default_flow_id'])->first()
+            : $flows->first();
     }
+
 }

@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Services\AuditService;
+use App\Services\ChatAssignmentService;
 use App\Services\OperatorAvailabilityService;
 use Illuminate\Console\Command;
 
@@ -12,7 +13,7 @@ class ReleaseDisconnectedOperatorChats extends Command
 
     protected $description = 'Libera chats y la conversación actual de usuarios que perdieron el heartbeat';
 
-    public function handle(OperatorAvailabilityService $availabilityService, AuditService $auditService): int
+    public function handle(OperatorAvailabilityService $availabilityService, AuditService $auditService, ChatAssignmentService $chatAssignmentService): int
     {
         $results = $availabilityService->releaseDisconnectedOperators();
 
@@ -34,6 +35,8 @@ class ReleaseDisconnectedOperatorChats extends Command
                 );
             }
         }
+
+        $chatAssignmentService->assignAllPending();
 
         $this->info("Operadores procesados por desconexión: {$results->count()}.");
 

@@ -7,6 +7,7 @@ use App\Models\Message;
 use App\Services\AuditService;
 use App\Services\BotInactivityService;
 use App\Services\ChatAssignmentService;
+use App\Services\WebchatAvailabilityService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
@@ -18,6 +19,7 @@ class ChatController extends Controller
         private readonly AuditService $auditService,
         private readonly BotInactivityService $botInactivityService,
         private readonly ChatAssignmentService $chatAssignmentService,
+        private readonly WebchatAvailabilityService $webchatAvailabilityService,
     ) {}
 
     public function index()
@@ -150,6 +152,13 @@ class ChatController extends Controller
         $beforeOperatorName = $chat->operator?->name ?? null;
 
         if ($data['active']) {
+            if (! $this->webchatAvailabilityService->canAssignOperator($chat)) {
+                return response()->json([
+                    'ok' => false,
+                    'message' => 'La atención por operadores para Webchat está fuera de horario. El bot puede continuar atendiendo.',
+                ], 422);
+            }
+
             if (! $operatorId) {
                 return response()->json([
                     'ok' => false,

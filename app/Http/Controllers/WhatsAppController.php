@@ -611,9 +611,9 @@ class WhatsAppController extends Controller
     }
 
     /** Envía el nodo inicial apenas se crea una conversación de webchat. */
-    public function startWebchatConversation(Chat $chat): void
+    public function startWebchatConversation(Chat $chat, ?BotFlow $flow = null): void
     {
-        $flow = $this->getDefaultFlow('webchat');
+        $flow ??= $this->getDefaultFlow('webchat');
         if (! $flow || ! $flow->start_node_id) {
             return;
         }
