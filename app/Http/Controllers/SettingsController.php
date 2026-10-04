@@ -52,7 +52,7 @@ class SettingsController extends Controller
                 'operators.max_assigned_chats',
                 'webchat.enabled', 'webchat.availability_mode', 'webchat.schedule_start', 'webchat.schedule_end', 'webchat.offline_message',
                 'webchat.title', 'webchat.subtitle',
-                'webchat.logo_url', 'webchat.default_flow_id',
+                'webchat.logo_url', 'webchat.default_flow_id', 'webchat.response_delay_seconds',
             ])
             ->pluck('value', 'key');
         $storedWhatsappToken = trim((string) ($settings['integrations.whatsapp.token'] ?? ''));
@@ -121,6 +121,7 @@ class SettingsController extends Controller
                     'default_flow_id' => filled($settings['webchat.default_flow_id'] ?? null)
                         ? (int) $settings['webchat.default_flow_id']
                         : null,
+                    'response_delay_seconds' => $settings['webchat.response_delay_seconds'] ?? '1.2',
                 ],
             ],
             'botFlows' => $activeFlows->map(fn (BotFlow $flow) => [
@@ -664,7 +665,12 @@ class SettingsController extends Controller
             'subtitle' => ['nullable', 'string', 'max:100'],
             'logo' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp,svg', 'max:2048'],
             'default_flow_id' => ['nullable', 'integer', 'exists:bot_flows,id'],
+            'response_delay_seconds' => ['required', 'numeric', 'min:0', 'max:10'],
         ]);
+        // Multipart forms deliver booleans as "0" / "1" strings. Normalize the
+        // value before persisting and returning it so the settings UI receives a
+        // real boolean after saving.
+        $data['enabled'] = $request->boolean('enabled');
         unset($data['logo']);
 
         if ($request->hasFile('logo')) {

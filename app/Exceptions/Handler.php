@@ -3,6 +3,9 @@
 namespace App\Exceptions;
 
 use Illuminate\Foundation\Exceptions\Handler as ExceptionHandler;
+use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 use Throwable;
 
 class Handler extends ExceptionHandler
@@ -26,5 +29,21 @@ class Handler extends ExceptionHandler
         $this->reportable(function (Throwable $e) {
             //
         });
+    }
+
+    public function render($request, Throwable $exception)
+    {
+        if (
+            $request instanceof Request
+            && $request->is('api/webchat/*')
+            && ! $exception instanceof ValidationException
+            && ! $exception instanceof HttpExceptionInterface
+        ) {
+            return response()->json([
+                'message' => 'No se pudo completar la operación. Intentá nuevamente en unos instantes.',
+            ], 500);
+        }
+
+        return parent::render($request, $exception);
     }
 }

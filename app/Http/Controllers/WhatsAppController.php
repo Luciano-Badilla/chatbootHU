@@ -142,7 +142,7 @@ class WhatsAppController extends Controller
         }
     }
 
-    private function publishMessageStatus(Message $message, string $status): void
+    public function publishMessageStatus(Message $message, string $status): void
     {
         $host = env('MQTT_HOST') ?: env('VITE_MOSQUITTO_HOST');
         if (! $host) {
@@ -589,6 +589,11 @@ class WhatsAppController extends Controller
         $this->publishWebchatMessage($chat, $message);
 
         try {
+            if ($chat->bot_enabled) {
+                $storedDelay = SystemSetting::query()->where('key', 'webchat.response_delay_seconds')->value('value');
+                $delay = is_numeric($storedDelay) ? (float) $storedDelay : 1.2;
+                usleep((int) (max(0, min($delay, 10)) * 1000000));
+            }
             $nextNode = $this->handleBotFromDb($chat, $message, $interactiveReplyId);
             if ($nextNode) {
                 $this->sendBotNode($chat, $nextNode);

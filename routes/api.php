@@ -31,12 +31,16 @@ Route::get('/webhook', [WhatsAppController::class, 'verify']);
 Route::post('/webhook', [WhatsAppController::class, 'receiveMessage']);
 
 Route::post('/webchat/session', [WebchatController::class, 'session']);
+Route::post('/webchat/status', [WebchatController::class, 'status']);
 Route::post('/webchat/start', [WebchatController::class, 'start']);
+Route::post('/webchat/restart', [WebchatController::class, 'restart']);
 Route::post('/webchat/messages', [WebchatController::class, 'messages']);
 Route::post('/webchat/send', [WebchatController::class, 'send']);
 Route::post('/webchat/send-media', [WebchatController::class, 'sendMedia']);
 Route::post('/webchat/send-contact', [WebchatController::class, 'sendContact']);
 Route::post('/webchat/send-location', [WebchatController::class, 'sendLocation']);
+Route::post('/webchat/delivery', [WebchatController::class, 'markDelivered']);
+Route::post('/webchat/read', [WebchatController::class, 'markRead']);
 Route::get('/webchat/location/search', [LocationController::class, 'webchatSearch']);
 
 $sessionAuthenticated = [

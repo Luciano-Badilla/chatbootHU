@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\BotFlow;
 use App\Models\Chat;
 use App\Models\Contact;
+use App\Models\Message;
 use App\Models\SystemSetting;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -17,6 +18,14 @@ class WebchatController extends Controller
         $settings = $this->settings();
         $settings['available'] = $this->isAvailable($settings);
         return Inertia::render('Webchat', ['webchat' => $settings]);
+    }
+
+    public function status()
+    {
+        $settings = $this->settings();
+        $settings['available'] = $this->isAvailable($settings);
+
+        return response()->json(['webchat' => $settings]);
     }
 
     public function session(Request $request)
@@ -35,6 +44,16 @@ class WebchatController extends Controller
             'resume_token' => $chat->webchat_token,
             'chat' => $this->payload($chat),
         ]);
+    }
+
+    public function markDelivered(Request $request)
+    {
+        return $this->updateOutgoingMessageStatus($request, ['sent'], 'delivered');
+    }
+
+    public function markRead(Request $request)
+    {
+        return $this->updateOutgoingMessageStatus($request, ['sent', 'delivered'], 'read');
     }
 
     public function start(Request $request)
@@ -88,6 +107,38 @@ class WebchatController extends Controller
             'resume_token' => $token,
             'chat' => $this->payload($chat),
         ], 201);
+    }
+
+    public function restart(Request $request)
+    {
+        $data = $request->validate([
+            'resume_token' => ['required', 'string', 'max:80'],
+        ]);
+        $chat = $this->requireChat($request, $data['resume_token']);
+
+        if ($chat->status === 'closed') {
+            $chat->update([
+                'status' => 'open',
+                'attention_status' => 'bot',
+                'bot_enabled' => true,
+                'operator_id' => null,
+                'assigned_at' => null,
+                'closed_at' => null,
+                'closed_by' => null,
+                'closed_by_user_id' => null,
+                'webchat_last_seen_at' => now(),
+                'last_user_message_at' => now(),
+            ]);
+            app(WhatsAppController::class)->startWebchatConversation($chat);
+        }
+
+        $chat->refresh();
+
+        return response()->json([
+            'ok' => true,
+            'restarted' => $chat->status === 'open',
+            'chat' => $this->payload($chat),
+        ]);
     }
 
     public function messages(Request $request)
@@ -194,6 +245,29 @@ class WebchatController extends Controller
         $chat->contact?->update(['last_interaction_at' => now()]);
     }
 
+    private function updateOutgoingMessageStatus(Request $request, array $fromStatuses, string $status)
+    {
+        $data = $request->validate([
+            'resume_token' => ['required', 'string', 'max:80'],
+            'message_ids' => ['required', 'array', 'min:1', 'max:100'],
+            'message_ids.*' => ['integer'],
+        ]);
+        $chat = $this->requireChat($request, $data['resume_token']);
+        $messages = Message::query()
+            ->where('chat_id', $chat->id)
+            ->where('sender', 'user')
+            ->whereIn('id', $data['message_ids'])
+            ->whereIn('status', $fromStatuses)
+            ->get();
+
+        foreach ($messages as $message) {
+            $message->update(['status' => $status]);
+            app(WhatsAppController::class)->publishMessageStatus($message, $status);
+        }
+
+        return response()->json(['ok' => true, 'updated' => $messages->count()]);
+    }
+
     private function requireChat(Request $request, ?string $token = null): Chat
     {
         $chat = $this->chatForToken($token ?? (string) $request->input('resume_token', ''));
@@ -209,13 +283,15 @@ class WebchatController extends Controller
 
     private function payload(Chat $chat): array
     {
-        $chat->loadMissing('operator');
+        $chat->loadMissing(['operator', 'lastOperator']);
 
         return [
             'id' => $chat->id,
             'name' => $chat->contact?->name,
             'status' => $chat->status,
             'attention_status' => $chat->attention_status,
+            'closed_by' => $chat->closed_by,
+            'closed_by_name' => $chat->closed_by === 'operator' ? $chat->lastOperator?->name : null,
             'bot_enabled' => (bool) $chat->bot_enabled,
             'operator_name' => $chat->operator?->name,
             'messages' => $chat->messages()->orderBy('id')->get(),
@@ -232,6 +308,7 @@ class WebchatController extends Controller
             'title' => $stored['webchat.title'] ?? 'Asistente virtual', 'subtitle' => $stored['webchat.subtitle'] ?? 'Hospital Universitario',
             'logo_url' => $stored['webchat.logo_url'] ?? '',
             'default_flow_id' => !empty($stored['webchat.default_flow_id']) ? (int) $stored['webchat.default_flow_id'] : null,
+            'response_delay_seconds' => $stored['webchat.response_delay_seconds'] ?? '1.2',
         ];
     }
 

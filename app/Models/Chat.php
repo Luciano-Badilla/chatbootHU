@@ -66,4 +66,9 @@ class Chat extends Model
     {
         return $this->belongsTo(User::class, 'operator_id');
     }
+
+    public function lastOperator()
+    {
+        return $this->belongsTo(User::class, 'last_operator_id');
+    }
 }

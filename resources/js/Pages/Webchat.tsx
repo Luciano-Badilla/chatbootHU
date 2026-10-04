@@ -6,7 +6,8 @@ import { ArrowUp, AudioLines, Bell, BellOff, Check, ChevronDown, Clock3, Contact
 import { toast } from "sonner"
 
 type Option = { id: string; label: string; description?: string; kind?: string }
-type Message = { id: number; sender: "contact" | "user"; sender_subtype?: "contact" | "operator" | "bot"; operator_name?: string | null; body: string | null; created_at?: string; timestamp?: string; message_type?: string | null; media_url?: string | null; media_name?: string | null; interactive_options?: Option[] | null }
+type RetryPayload = { message: string; optionId?: string }
+type Message = { id: number | string; sender: "contact" | "user"; sender_subtype?: "contact" | "operator" | "bot"; operator_name?: string | null; body: string | null; created_at?: string; timestamp?: string; message_type?: string | null; media_url?: string | null; media_name?: string | null; interactive_options?: Option[] | null; delivery_status?: "sending" | "failed"; retry_payload?: RetryPayload }
 type WebchatSettings = { enabled: boolean; available: boolean; title: string; subtitle: string; logo_url: string; offline_message: string }
 type PendingMedia = { id: string; file: File; previewUrl: string; type: "image" | "video" }
 type LocationDraft = { latitude: number; longitude: number; name: string; address: string }
@@ -272,6 +273,8 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   const [profileRequired, setProfileRequired] = useState(true)
   const [name, setName] = useState("")
   const [draft, setDraft] = useState("")
+  const [failedOutgoing, setFailedOutgoing] = useState<RetryPayload | null>(null)
+  const [enteringMessageId, setEnteringMessageId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState("")
@@ -279,6 +282,10 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const [operatorName, setOperatorName] = useState("")
   const [botEnabled, setBotEnabled] = useState(true)
+  const [chatStatus, setChatStatus] = useState<"open" | "closed">("open")
+  const [closedBy, setClosedBy] = useState<string | null>(null)
+  const [closedByName, setClosedByName] = useState<string | null>(null)
+  const [channelAvailability, setChannelAvailability] = useState(() => ({ enabled: webchat.enabled, available: webchat.available }))
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported">(() => typeof window === "undefined" || !("Notification" in window) ? "unsupported" : Notification.permission)
   const [isIos, setIsIos] = useState(false)
   const [showIosInstallHelp, setShowIosInstallHelp] = useState(false)
@@ -298,11 +305,12 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   const [locationResults, setLocationResults] = useState<LocationSearchResult[]>([])
   const [locationSearching, setLocationSearching] = useState(false)
   const [locationDetecting, setLocationDetecting] = useState(false)
-  const [mediaDimensions, setMediaDimensions] = useState<Record<number, { width: number; height: number }>>({})
+  const [mediaDimensions, setMediaDimensions] = useState<Record<string, { width: number; height: number }>>({})
   const [pendingMedia, setPendingMedia] = useState<PendingMedia[]>([])
   const [recordingAudio, setRecordingAudio] = useState(false)
   const [recordingSeconds, setRecordingSeconds] = useState(0)
   const messagesContainerRef = useRef<HTMLDivElement | null>(null)
+  const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const scrollToInitialMessagesRef = useRef(false)
   const scrollToNewMessageRef = useRef(false)
   const notifiedMessageIdsRef = useRef(new Set<string>())
@@ -321,6 +329,15 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     const json = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(json.message || "No se pudo completar la operación.")
     return json
+  }
+
+  const acknowledgeIncomingMessages = (incoming: Message[], resumeToken = token) => {
+    const messageIds = incoming.filter((message) => message.sender === "user" && typeof message.id === "number").map((message) => message.id as number)
+    if (!resumeToken || !messageIds.length) return
+
+    void api("delivery", { resume_token: resumeToken, message_ids: messageIds })
+      .then(() => document.visibilityState === "visible" ? api("read", { resume_token: resumeToken, message_ids: messageIds }) : null)
+      .catch(() => undefined)
   }
 
   const formatRecordingTime = (seconds: number) => {
@@ -427,17 +444,33 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     return () => favicon.remove()
   }, [webchat.logo_url])
 
-  const append = (message: Message) => setMessages((current) => {
-    if (current.some((item) => String(item.id) === String(message.id))) return current
-    notifyIncomingMessage(message)
-    scrollToNewMessageRef.current = true
-    return [...current, message]
-  })
+  const append = (message: Message) => {
+    setEnteringMessageId(String(message.id))
+    setMessages((current) => {
+      if (current.some((item) => String(item.id) === String(message.id))) return current
+      const pendingMessageIndex = message.sender === "contact"
+        ? current.findIndex((item) => item.sender === "contact" && item.delivery_status === "sending" && item.body === message.body && item.message_type === message.message_type)
+        : -1
+      if (pendingMessageIndex >= 0) {
+        return current.map((item, index) => index === pendingMessageIndex ? message : item)
+      }
+      notifyIncomingMessage(message)
+      scrollToNewMessageRef.current = true
+      return [...current, message]
+    })
+  }
 
-  const syncChatAssignee = (chat: { bot_enabled?: boolean; operator_name?: string | null }) => {
+  const syncChatAssignee = (chat: { bot_enabled?: boolean; operator_name?: string | null; status?: string; closed_by?: string | null; closed_by_name?: string | null }) => {
     const name = chat.operator_name?.trim() ?? ""
     setOperatorName(name)
     setBotEnabled(chat.bot_enabled !== false)
+    const nextStatus = chat.status === "closed" ? "closed" : "open"
+    setChatStatus((current) => {
+      if (current !== nextStatus) scrollToNewMessageRef.current = true
+      return nextStatus
+    })
+    setClosedBy(chat.closed_by ?? null)
+    setClosedByName(chat.closed_by_name ?? null)
   }
 
   const loadSession = async (resumeToken: string) => {
@@ -448,12 +481,44 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     setProfileRequired(false)
     scrollToInitialMessagesRef.current = true
     setMessages(data.chat.messages ?? [])
+    acknowledgeIncomingMessages(data.chat.messages ?? [], data.resume_token)
   }
 
   useEffect(() => {
     const saved = localStorage.getItem(SESSION_KEY) ?? ""
     loadSession(saved).catch(() => setProfileRequired(true)).finally(() => setLoading(false))
   }, [])
+
+  useEffect(() => {
+    let refreshing = false
+    const refreshChannelStatus = async () => {
+      if (refreshing) return
+      refreshing = true
+      try {
+        const data = await api("status", {})
+        if (typeof data.webchat?.enabled === "boolean" && typeof data.webchat?.available === "boolean") {
+          setChannelAvailability({ enabled: data.webchat.enabled, available: data.webchat.available })
+        }
+      } catch {
+        // La configuración mostrada al cargar sigue disponible si falla la actualización.
+      } finally {
+        refreshing = false
+      }
+    }
+    void refreshChannelStatus()
+    const interval = window.setInterval(() => void refreshChannelStatus(), 2000)
+    return () => window.clearInterval(interval)
+  }, [])
+
+  useEffect(() => {
+    if (!token) return
+    const markVisibleMessagesAsRead = () => {
+      if (document.visibilityState === "visible") acknowledgeIncomingMessages(messages)
+    }
+    document.addEventListener("visibilitychange", markVisibleMessagesAsRead)
+    markVisibleMessagesAsRead()
+    return () => document.removeEventListener("visibilitychange", markVisibleMessagesAsRead)
+  }, [token, messages])
 
   useEffect(() => {
     if (!token) return
@@ -493,6 +558,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
           media_name: data.media_name ?? null,
           interactive_options: Array.isArray(data.interactive_options) ? data.interactive_options : null,
         })
+        if (data.sender === "user") acknowledgeIncomingMessages([{ id: data.message_id ?? data.id, sender: "user", body: data.body ?? null }])
         if (data.sender_subtype === "operator" && data.operator_name) {
           setOperatorName(data.operator_name)
         }
@@ -510,7 +576,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
 
     requestAnimationFrame(() => requestAnimationFrame(() => {
       const container = messagesContainerRef.current
-      if (container) container.scrollTop = container.scrollHeight
+      if (container) container.scrollTo({ top: container.scrollHeight, behavior: "smooth" })
       scrollToInitialMessagesRef.current = false
       setShowScrollToBottom(false)
     }))
@@ -525,7 +591,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
       scrollToNewMessageRef.current = false
       setShowScrollToBottom(false)
     })
-  }, [messages.length])
+  }, [messages.length, chatStatus])
 
   useEffect(() => {
     if (!attachmentMenuOpen) return
@@ -544,7 +610,13 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     setShowScrollToBottom(container.scrollHeight - container.scrollTop - container.clientHeight > 220)
   }
 
-  const scrollToBottom = () => messagesContainerRef.current?.scrollTo({ top: messagesContainerRef.current.scrollHeight, behavior: "smooth" })
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
+  }
+
+  const scrollToNewComposerMessage = () => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => window.setTimeout(scrollToBottom, 80)))
+  }
 
   const goToMessage = (messageId: number) => {
     setInfoSheetOpen(false)
@@ -704,6 +776,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
             if (incomingMessages.length) scrollToNewMessageRef.current = true
             return nextMessages
           })
+          acknowledgeIncomingMessages(nextMessages)
         }
       } catch {
         // MQTT remains the primary channel; the next refresh will retry.
@@ -728,23 +801,51 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
       setProfileRequired(false)
       scrollToInitialMessagesRef.current = true
       setMessages(data.chat.messages ?? [])
+      acknowledgeIncomingMessages(data.chat.messages ?? [], data.resume_token)
     } catch (exception) { setError(exception instanceof Error ? exception.message : "No se pudo iniciar el chat.") } finally { setSending(false) }
+  }
+
+  const restartConversation = async () => {
+    setError("")
+    setSending(true)
+    try {
+      const data = await api("restart", { resume_token: token })
+      syncChatAssignee(data.chat)
+      setMessages(data.chat.messages ?? [])
+      acknowledgeIncomingMessages(data.chat.messages ?? [])
+      scrollToNewMessageRef.current = true
+    } catch (exception) {
+      setError(exception instanceof Error ? exception.message : "No se pudo reiniciar la conversación.")
+    } finally {
+      setSending(false)
+    }
   }
 
   const send = async (message: string, optionId?: string) => {
     if ((!message.trim() && !optionId) || sending) return false
     setAttachmentMenuOpen(false)
     setError("")
+    setFailedOutgoing(null)
     setSending(true)
+    const retryPayload = { message, optionId }
+
     try {
       const data = await api("send", { resume_token: token, message, option_id: optionId })
       append(data.message)
       setDraft("")
+      scrollToNewComposerMessage()
       return true
     } catch (exception) {
-      setError(exception instanceof Error ? exception.message : "No se pudo enviar el mensaje.")
+      const failureMessage = exception instanceof Error ? exception.message : "No se pudo enviar el mensaje."
+      setError(failureMessage)
+      setFailedOutgoing(retryPayload)
       return false
     } finally { setSending(false) }
+  }
+
+  const retryFailedOutgoing = () => {
+    if (!failedOutgoing) return
+    void send(failedOutgoing.message, failedOutgoing.optionId)
   }
 
   const sendMedia = async (files: File[], caption = "") => {
@@ -888,11 +989,11 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   }
 
   const pendingOptionsMessage = messages.map((message, index) => ({ message, index })).reverse().find(({ message, index }) => {
-    if (!message.interactive_options?.length || selectedOptions[String(message.id)]) return false
-    return !messages.slice(index + 1).some((candidate) => candidate.sender === "contact" && message.interactive_options?.some((option) => option.label === candidate.body))
+    if (!message.interactive_options?.length) return false
+    return !messages.slice(index + 1).some((candidate) => candidate.sender === "contact" && !candidate.delivery_status && message.interactive_options?.some((option) => option.label === candidate.body))
   })?.message
   const manualInputLocked = Boolean(pendingOptionsMessage)
-  const showAudioControl = !manualInputLocked && (recordingAudio || (!botEnabled && !draft.trim() && pendingMedia.length === 0))
+  const showAudioControl = !sending && !manualInputLocked && (recordingAudio || (!botEnabled && !draft.trim() && pendingMedia.length === 0))
 
   useEffect(() => {
     if (manualInputLocked) setAttachmentMenuOpen(false)
@@ -1017,7 +1118,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     } finally { setSelectingDeviceContact(false) }
   }
 
-  const selectOption = async (messageId: number, option: Option) => {
+  const selectOption = async (messageId: string | number, option: Option) => {
     const messageKey = String(messageId)
     if (selectedOptions[messageKey] || optionSelectionLockRef.current.has(messageKey)) return
 
@@ -1025,28 +1126,23 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     setSelectedOptions((current) => ({ ...current, [messageKey]: option.id }))
     const sent = await send(option.label, option.id)
 
-    if (!sent) {
-      setSelectedOptions((current) => {
-        const { [messageKey]: _discarded, ...remaining } = current
-        return remaining
-      })
-      optionSelectionLockRef.current.delete(messageKey)
-    }
+    if (!sent) optionSelectionLockRef.current.delete(messageKey)
   }
 
   const hasMqttConnectionIssue = Boolean(token) && ["reconnecting", "offline", "error"].includes(mqttStatus)
   const channelStatus = hasMqttConnectionIssue
     ? { label: "Sin conexión", dot: "bg-red-300" }
-    : !webchat.enabled
+    : !channelAvailability.enabled
       ? { label: "En mantenimiento", dot: "bg-amber-300" }
-      : !webchat.available
+      : !channelAvailability.available
         ? { label: "Fuera de horario", dot: "bg-slate-300" }
         : { label: "En línea", dot: "bg-[#a9d7bd]" }
-  const isOperatorHandling = !botEnabled
+  const conversationUnavailable = !channelAvailability.enabled || !channelAvailability.available
+  const isOperatorHandling = !conversationUnavailable && !botEnabled
   const isWaitingForOperator = isOperatorHandling && !operatorName
   const headerName = isOperatorHandling ? operatorName || "Buscando un operador" : webchat.title
-  const attentionTitle = isWaitingForOperator ? "Buscando un operador" : isOperatorHandling ? `Atiende ${operatorName}` : "Asistente virtual activo"
-  const attentionDescription = isWaitingForOperator ? "Te avisaremos cuando una persona tome la conversación." : isOperatorHandling ? "Podés continuar escribiendo por este mismo chat." : "Podés consultar o seguir las opciones disponibles en la conversación."
+  const attentionTitle = conversationUnavailable ? "Canal temporalmente no disponible" : isWaitingForOperator ? "Buscando un operador" : isOperatorHandling ? `Atiende ${operatorName}` : "Asistente virtual activo"
+  const attentionDescription = conversationUnavailable ? "La conversación se retomará cuando el canal vuelva a estar disponible." : isWaitingForOperator ? "Te avisaremos cuando una persona tome la conversación." : isOperatorHandling ? "Podés continuar escribiendo por este mismo chat." : "Podés consultar o seguir las opciones disponibles en la conversación."
   const sharedMedia = messages.filter((message) => ["image", "video", "audio", "document"].includes(message.message_type ?? "text")).slice(-12).reverse()
 
   return (
@@ -1072,7 +1168,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
           </div>
         ) : null}
 
-        <WebchatBottomSheet open={infoSheetOpen} onClose={() => setInfoSheetOpen(false)}><div className="flex items-start justify-between gap-4 px-5 pb-4 pt-4"><div><p className="text-lg font-bold tracking-tight text-slate-800">Información de la conversación</p><p className="mt-1 text-sm text-slate-500">Todo lo importante de tu atención en un solo lugar.</p></div><button type="button" onClick={() => setInfoSheetOpen(false)} aria-label="Cerrar información" className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-slate-500 transition hover:bg-slate-100"><X className="h-4 w-4" /></button></div><div className="border-t border-slate-100 px-5 py-5"><div className="flex items-center gap-3 rounded-2xl bg-[#e8f0f6] p-4"><span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-white p-2 text-[#003f73] shadow-sm">{isOperatorHandling ? <Headset className="h-6 w-6" /> : <img src={webchat.logo_url ? publicAssetUrl(webchat.logo_url) : `${import.meta.env.VITE_APP_URL}/images/hu_icon_new.png`} alt="" className="h-full w-full object-contain" />}</span><span className="min-w-0"><span className="block text-sm font-bold text-slate-800">{attentionTitle}</span><span className="mt-0.5 block text-xs leading-5 text-slate-600">{attentionDescription}</span></span></div><div className="mt-5 space-y-3"><div className="rounded-2xl border border-slate-200 bg-white p-4"><div className="flex items-start gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e8f0f6] text-[#003f73]"><MessageCircle className="h-5 w-5" /></span><span className="min-w-0 flex-1"><span className="block text-sm font-bold text-slate-800">Estado del canal</span><span className="mt-1 flex items-center gap-1.5 text-xs text-slate-500"><span className={`h-2 w-2 rounded-full ${channelStatus.dot}`} />{channelStatus.label}</span></span></div><p className="mt-3 border-t border-slate-100 pt-3 text-xs leading-5 text-slate-500">{messages.length ? `Esta conversación tiene ${messages.length} mensaje${messages.length === 1 ? "" : "s"}.` : "Todavía no hay mensajes en esta conversación."}</p></div><div className="rounded-2xl border border-slate-200 bg-white p-4"><div className="flex items-start gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e8f0f6] text-[#003f73]"><Bell className="h-5 w-5" /></span><span className="min-w-0 flex-1"><span className="block text-sm font-bold text-slate-800">Notificaciones</span><span className="mt-1 block text-xs leading-5 text-slate-500">{notificationPermission === "granted" ? "Te avisaremos cuando recibas una respuesta con el chat cerrado." : "Activá los avisos para enterarte cuando llegue una respuesta."}</span></span></div>{notificationPermission !== "granted" ? <button type="button" onClick={() => void enableNotifications()} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-[#003f73]/20 bg-[#e8f0f6] px-3 py-2.5 text-sm font-semibold text-[#003f73] transition hover:bg-[#dcebf3]"><Bell className="h-4 w-4" />Activar notificaciones</button> : <div className="mt-3 inline-flex items-center gap-2 text-xs font-semibold text-emerald-700"><Check className="h-4 w-4" />Notificaciones activadas</div>}</div><div className="flex items-start gap-3"><span></span></div></div><div className="mt-5"><div className="mb-3 flex items-center justify-between"><div><p className="text-sm font-bold text-slate-800">Archivos compartidos</p><p className="mt-0.5 text-xs text-slate-500">Fotos, videos, audios y documentos de esta conversación.</p></div><span className="rounded-full bg-[#e8f0f6] px-2.5 py-1 text-xs font-bold text-[#003f73]">{sharedMedia.length}</span></div>{sharedMedia.length ? <div className="grid grid-cols-3 gap-2">{sharedMedia.map((media) => { const mediaUrl = getMessageMediaUrl(media); const label = media.media_name || (media.message_type === "audio" ? "Audio" : media.message_type === "document" ? "Documento" : media.message_type === "video" ? "Video" : "Imagen"); return <button type="button" onClick={() => goToMessage(media.id)} aria-label={`Ir al mensaje: ${label}`} className="relative aspect-square overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-left transition hover:-translate-y-0.5 hover:border-[#003f73]/45 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[#003f73]/35">{media.message_type === "image" && mediaUrl ? <img src={mediaUrl} alt={label} className="h-full w-full object-cover" /> : media.message_type === "video" && mediaUrl ? <><video src={mediaUrl} muted playsInline preload="metadata" className="h-full w-full object-cover" /><span className="absolute inset-0 grid place-items-center bg-black/20 text-white"><Play className="h-5 w-5 fill-current drop-shadow" /></span></> : <div className="flex h-full flex-col items-center justify-center gap-1.5 px-2 text-center text-[#003f73]">{media.message_type === "audio" ? <AudioLines className="h-6 w-6" /> : <FileText className="h-6 w-6" />}<span className="line-clamp-2 text-[10px] font-semibold leading-3">{label}</span></div>}<span className="absolute bottom-1 right-1 rounded bg-black/55 px-1.5 py-0.5 text-[9px] font-medium text-white">{media.message_type === "image" ? "Foto" : media.message_type === "video" ? "Video" : media.message_type === "audio" ? "Audio" : "Doc"}</span></button> })}</div> : <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-center text-xs leading-5 text-slate-500">Los archivos que se compartan aparecerán acá.</div>}</div><button type="button" onClick={() => setInfoSheetOpen(false)} className="mt-5 w-full rounded-xl bg-[#003f73] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#003461]">Volver a la conversación</button></div></WebchatBottomSheet>
+        <WebchatBottomSheet open={infoSheetOpen} onClose={() => setInfoSheetOpen(false)}><div className="flex items-start justify-between gap-4 px-5 pb-4 pt-4"><div><p className="text-lg font-bold tracking-tight text-slate-800">Información de la conversación</p><p className="mt-1 text-sm text-slate-500">Todo lo importante de tu atención en un solo lugar.</p></div><button type="button" onClick={() => setInfoSheetOpen(false)} aria-label="Cerrar información" className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-slate-500 transition hover:bg-slate-100"><X className="h-4 w-4" /></button></div><div className="border-t border-slate-100 px-5 py-5"><div className="flex items-center gap-3 rounded-2xl bg-[#e8f0f6] p-4"><span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-white p-2 text-[#003f73] shadow-sm">{isOperatorHandling ? <Headset className="h-6 w-6" /> : <img src={webchat.logo_url ? publicAssetUrl(webchat.logo_url) : `${import.meta.env.VITE_APP_URL}/images/hu_icon_new.png`} alt="" className="h-full w-full object-contain" />}</span><span className="min-w-0"><span className="block text-sm font-bold text-slate-800">{attentionTitle}</span><span className="mt-0.5 block text-xs leading-5 text-slate-600">{attentionDescription}</span></span></div><div className="mt-5 space-y-3"><div className="rounded-2xl border border-slate-200 bg-white p-4"><div className="flex items-start gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e8f0f6] text-[#003f73]"><MessageCircle className="h-5 w-5" /></span><span className="min-w-0 flex-1"><span className="block text-sm font-bold text-slate-800">Estado del canal</span><span className="mt-1 flex items-center gap-1.5 text-xs text-slate-500"><span className={`h-2 w-2 rounded-full ${channelStatus.dot}`} />{channelStatus.label}</span></span></div><p className="mt-3 border-t border-slate-100 pt-3 text-xs leading-5 text-slate-500">{messages.length ? `Esta conversación tiene ${messages.length} mensaje${messages.length === 1 ? "" : "s"}.` : "Todavía no hay mensajes en esta conversación."}</p></div><div className="rounded-2xl border border-slate-200 bg-white p-4"><div className="flex items-start gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e8f0f6] text-[#003f73]"><Bell className="h-5 w-5" /></span><span className="min-w-0 flex-1"><span className="block text-sm font-bold text-slate-800">Notificaciones</span><span className="mt-1 block text-xs leading-5 text-slate-500">{notificationPermission === "granted" ? "Te avisaremos cuando recibas una respuesta con el chat cerrado." : "Activá los avisos para enterarte cuando llegue una respuesta."}</span></span></div>{notificationPermission !== "granted" ? <button type="button" onClick={() => void enableNotifications()} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-[#003f73]/20 bg-[#e8f0f6] px-3 py-2.5 text-sm font-semibold text-[#003f73] transition hover:bg-[#dcebf3]"><Bell className="h-4 w-4" />Activar notificaciones</button> : <div className="mt-3 inline-flex items-center gap-2 text-xs font-semibold text-emerald-700"><Check className="h-4 w-4" />Notificaciones activadas</div>}</div><div className="flex items-start gap-3"><span></span></div></div><div className="mt-5"><div className="mb-3 flex items-center justify-between"><div><p className="text-sm font-bold text-slate-800">Archivos compartidos</p><p className="mt-0.5 text-xs text-slate-500">Fotos, videos, audios y documentos de esta conversación.</p></div><span className="rounded-full bg-[#e8f0f6] px-2.5 py-1 text-xs font-bold text-[#003f73]">{sharedMedia.length}</span></div>{sharedMedia.length ? <div className="grid grid-cols-3 gap-2">{sharedMedia.map((media) => { const mediaUrl = getMessageMediaUrl(media); const label = media.media_name || (media.message_type === "audio" ? "Audio" : media.message_type === "document" ? "Documento" : media.message_type === "video" ? "Video" : "Imagen"); return <button key={`shared-media-${media.id}`} type="button" onClick={() => goToMessage(media.id)} aria-label={`Ir al mensaje: ${label}`} className="relative aspect-square overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-left transition hover:-translate-y-0.5 hover:border-[#003f73]/45 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[#003f73]/35">{media.message_type === "image" && mediaUrl ? <img src={mediaUrl} alt={label} className="h-full w-full object-cover" /> : media.message_type === "video" && mediaUrl ? <><video src={mediaUrl} muted playsInline preload="metadata" className="h-full w-full object-cover" /><span className="absolute inset-0 grid place-items-center bg-black/20 text-white"><Play className="h-5 w-5 fill-current drop-shadow" /></span></> : <div className="flex h-full flex-col items-center justify-center gap-1.5 px-2 text-center text-[#003f73]">{media.message_type === "audio" ? <AudioLines className="h-6 w-6" /> : <FileText className="h-6 w-6" />}<span className="line-clamp-2 text-[10px] font-semibold leading-3">{label}</span></div>}<span className="absolute bottom-1 right-1 rounded bg-black/55 px-1.5 py-0.5 text-[9px] font-medium text-white">{media.message_type === "image" ? "Foto" : media.message_type === "video" ? "Video" : media.message_type === "audio" ? "Audio" : "Doc"}</span></button> })}</div> : <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-center text-xs leading-5 text-slate-500">Los archivos que se compartan aparecerán acá.</div>}</div><button type="button" onClick={() => setInfoSheetOpen(false)} className="mt-5 w-full rounded-xl bg-[#003f73] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#003461]">Volver a la conversación</button></div></WebchatBottomSheet>
 
         {showIosInstallHelp ? <div className={`webchat-modal-backdrop absolute inset-0 z-30 flex items-center justify-center bg-black/55 p-5 backdrop-blur-[1px]${isClosingIosInstallHelp ? " webchat-modal-backdrop--closing" : ""}`}><div className={`webchat-modal-card w-full max-w-sm rounded-2xl bg-white p-5 text-slate-800 shadow-xl${isClosingIosInstallHelp ? " webchat-modal-card--closing" : ""}`}><div className="flex items-start justify-between gap-4"><div><p className="text-base font-bold">Agregá {webchat.title} a tu iPhone</p><p className="mt-1 text-sm leading-5 text-slate-500">Así podés abrir el chat como una app y habilitar sus notificaciones.</p></div><button type="button" onClick={closeIosInstallHelp} aria-label="Cerrar" className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-500 transition hover:bg-slate-100"><X className="h-4 w-4" /></button></div><ol className="mt-5 space-y-3 text-sm text-slate-600"><li className="flex gap-3"><span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#e8f0f6] text-xs font-bold text-[#003f73]">1</span><span>Tocá el botón de <strong className="font-semibold text-slate-800">menú</strong> <Menu className="inline h-3.5 w-3.5 text-[#003f73]" /> de la barra inferior.</span></li><li className="flex gap-3"><span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#e8f0f6] text-xs font-bold text-[#003f73]">2</span><span>Elegí <strong className="font-semibold text-slate-800">Compartir</strong> <Share className="inline h-3.5 w-3.5 text-[#003f73]" />.</span></li><li className="flex gap-3"><span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#e8f0f6] text-xs font-bold text-[#003f73]">3</span><span>Elegí <strong className="font-semibold text-slate-800">Ver más</strong> <ChevronDown className="inline h-3.5 w-3.5 text-[#003f73]" />.</span></li><li className="flex gap-3"><span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#e8f0f6] text-xs font-bold text-[#003f73]">4</span><span>Tocá <strong className="font-semibold text-slate-800">Agregar a Inicio</strong>.</span></li><li className="flex gap-3"><span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#e8f0f6] text-xs font-bold text-[#003f73]">5</span><span>Abrí {webchat.title} desde el ícono creado y activá la campana.</span></li></ol><button type="button" onClick={closeIosInstallHelp} className="mt-5 w-full rounded-xl bg-[#003f73] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#003461]">Entendido</button></div></div> : null}
 
@@ -1082,7 +1178,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
 
         {loading ? (
           <div className="min-h-0 flex-1 overflow-y-auto bg-[#f5f8fb] px-4 sm:px-8"><WebchatMessagesLoader /></div>
-        ) : !webchat.enabled ? (
+        ) : !channelAvailability.enabled ? (
           <div className="m-auto w-full max-w-lg px-5 text-center sm:px-8">
             <div className="relative overflow-hidden rounded-3xl border border-[#003f73]/15 bg-white px-6 py-9 shadow-[0_18px_45px_rgba(21,49,79,0.1)] sm:px-10">
               <div className="pointer-events-none absolute -right-16 -top-16 h-40 w-40 rounded-full bg-[#003f73]/[0.05]" />
@@ -1090,7 +1186,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
               <div className="relative"><div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-[#003f73] text-white shadow-lg shadow-[#003f73]/20"><Wrench className="h-7 w-7" /></div><p className="mt-6 text-[10px] font-bold uppercase tracking-[0.2em] text-[#003f73]">Mantenimiento programado</p><h2 className="mt-2 text-2xl font-bold tracking-tight text-slate-800">Estamos mejorando este canal</h2><p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-slate-500">Estamos realizando tareas de mantenimiento. Volvé a intentarlo en unos minutos.</p><div className="mx-auto mt-6 h-px w-16 bg-[#003f73]/15" /><p className="mt-4 text-xs text-slate-400">Gracias por tu paciencia.</p></div>
             </div>
           </div>
-        ) : !webchat.available ? (
+        ) : !channelAvailability.available ? (
           <div className="m-auto w-full max-w-lg px-5 text-center sm:px-8">
             <div className="rounded-3xl border border-slate-200 bg-white px-6 py-9 shadow-[0_18px_45px_rgba(21,49,79,0.08)] sm:px-10">
               <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-[#e8f0f6] text-[#003f73]"><Clock3 className="h-7 w-7" /></div><p className="mt-6 text-[10px] font-bold uppercase tracking-[0.2em] text-[#003f73]">Horario de atención</p><h2 className="mt-2 text-2xl font-bold tracking-tight text-slate-800">Ahora no estamos disponibles</h2><p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-slate-500">{webchat.offline_message}</p><div className="mt-7 rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500"><MessageCircle className="mr-1.5 inline h-3.5 w-3.5 text-[#003f73]" /> Podés volver a escribirnos durante el horario de atención.</div>
@@ -1105,6 +1201,14 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
               <button disabled={sending} className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#003f73] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-[#003f73]/20 transition hover:bg-[#003461] disabled:opacity-60">{sending ? "Iniciando..." : <>Comenzar conversación <ArrowUp className="h-4 w-4 rotate-90" /></>}</button>
             </form>
           </div></div>
+        ) : messages.length === 0 ? (
+          <div className="m-auto w-full max-w-lg px-5 text-center sm:px-8">
+            <div className="rounded-3xl border border-slate-200 bg-white px-6 py-9 shadow-[0_18px_45px_rgba(21,49,79,0.08)] sm:px-10">
+              <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-[#e8f0f6] text-[#003f73]"><MessageCircle className="h-7 w-7" /></div>
+              <h2 className="mt-6 text-2xl font-bold tracking-tight text-slate-800">Todavía no hay mensajes</h2>
+              <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-slate-500">Cuando la conversación comience, los mensajes aparecerán en este espacio.</p>
+            </div>
+          </div>
         ) : <>
           <div className="relative min-h-0 flex-1">
             <div ref={messagesContainerRef} onScroll={updateScrollToBottomVisibility} className="h-full overflow-y-auto bg-[#f5f8fb] px-4 py-5 sm:px-8 sm:py-7"><div className="mx-auto max-w-3xl space-y-4">
@@ -1119,7 +1223,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
                     : undefined
                   const selectedOptionId = selectedOptions[String(message.id)] ?? message.interactive_options?.find((option) => option.label === responseToOptions?.body)?.id
 
-                  return <div key={`${message.id}-${index}`} data-message-id={message.id} className={`flex items-start gap-2.5 ${isOwnMessage ? "justify-end" : "justify-start"}`}>
+                  return <div key={`${message.id}-${index}`} data-message-id={message.id} className={`flex items-start gap-2.5 ${isOwnMessage ? "justify-end" : "justify-start"} ${String(message.id) === enteringMessageId ? `webchat-message-enter ${isOwnMessage ? "webchat-message-enter--own" : "webchat-message-enter--incoming"}` : ""}`}>
                     {!isOwnMessage ? <div title={isBotMessage ? "Asistente virtual" : message.operator_name || "Operador"} className={`self-end grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-full border shadow-sm ${isBotMessage ? "border-[#003f73]/15 bg-white p-1" : "border-[#2b5f90]/20 bg-[#e8f0f6] text-[#003f73]"}`}>
                       {isBotMessage ? <img src={webchat.logo_url ? publicAssetUrl(webchat.logo_url) : `${import.meta.env.VITE_APP_URL}/images/hu_icon_new.png`} alt="Asistente virtual" className="h-full w-full object-contain" /> : <Headset className="h-4 w-4" />}
                     </div> : null}
@@ -1133,15 +1237,19 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
                       {time ? <p className={`mt-1.5 text-right text-[10px] leading-none ${isOwnMessage ? "text-white/65" : "text-slate-400"}`}>{time}</p> : null}
                     </div>
                   </div>
-                })}</Gallery>
+                })}
+                {chatStatus === "closed" ? <div className="flex items-center gap-3 py-3 text-center"><span className="h-px flex-1 bg-slate-200" /><span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400"><ShieldCheck className="h-3.5 w-3.5 text-[#003f73]" />{closedBy === "operator" ? `${closedByName || "El operador"} finalizó la atención` : "Atención finalizada"}</span><span className="h-px flex-1 bg-slate-200" /></div> : null}
+              </Gallery><div ref={messagesEndRef} aria-hidden="true" className="h-px" />
             </div></div>
             {showScrollToBottom ? <button type="button" onClick={scrollToBottom} title="Ir al final" aria-label="Ir al final" className="absolute bottom-4 left-1/2 grid h-10 w-10 -translate-x-1/2 place-items-center rounded-full bg-[#003f73] text-white shadow-lg transition hover:bg-[#003461]"><ChevronDown className="h-5 w-5" /></button> : null}
           </div>
           <form onSubmit={(event) => { event.preventDefault(); void sendComposer() }} className="shrink-0 border-t border-slate-200 bg-white px-4 py-3 sm:px-8 sm:py-4"><div className="mx-auto max-w-3xl">
-            {error && <p className="mb-2 text-xs text-red-600">{error}</p>}{manualInputLocked ? <p className="mb-2 text-center text-xs font-medium text-[#003f73]">Elegí una de las opciones del mensaje para continuar.</p> : null}
+            {chatStatus === "closed" ? <div>{error ? <p className="mb-2 text-center text-xs text-red-600">{error}</p> : null}<button type="button" onClick={() => void restartConversation()} disabled={sending} className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#003f73] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-[#003f73]/20 transition hover:bg-[#003461] disabled:opacity-60">{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}Nueva conversación</button></div> : <>
+            {error ? <div className="mb-2 flex items-center justify-between gap-3 text-xs text-red-600"><span>{error}</span>{failedOutgoing ? <button type="button" onClick={retryFailedOutgoing} disabled={sending} className="shrink-0 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 font-semibold text-red-700 transition hover:bg-red-100 disabled:opacity-50">Reintentar</button> : null}</div> : null}{manualInputLocked ? <p className="mb-2 text-center text-xs font-medium text-[#003f73]">Elegí una de las opciones del mensaje para continuar.</p> : null}
             {pendingMedia.length ? <div className="mb-2 flex gap-2 overflow-x-auto pb-1">{pendingMedia.map((media) => <div key={media.id} className="relative h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100"><button type="button" onClick={() => removePendingMedia(media.id)} aria-label={`Quitar ${media.file.name}`} className="absolute right-1 top-1 z-10 grid h-5 w-5 place-items-center rounded-full bg-slate-900/70 text-white"><X className="h-3 w-3" /></button>{media.type === "image" ? <img src={media.previewUrl} alt={media.file.name} className="h-full w-full object-cover" /> : <><video src={media.previewUrl} muted preload="metadata" className="h-full w-full object-cover" /><span className="absolute inset-0 grid place-items-center text-white drop-shadow"><Play className="h-5 w-5 fill-current" /></span></>}</div>)}</div> : null}
             <input ref={fileInputRef} type="file" multiple accept={fileAccept} className="hidden" onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; queueMedia(files) }} />
             <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-1 shadow-sm focus-within:border-[#003f73]/50 focus-within:ring-2 focus-within:ring-[#003f73]/10"><div ref={attachmentMenuRef} className="relative shrink-0"><button type="button" onClick={() => setAttachmentMenuOpen((open) => !open)} disabled={sending || recordingAudio || manualInputLocked} aria-label="Adjuntar" title="Adjuntar" style={attachmentMenuOpen ? { backgroundColor: "#003f73", borderColor: "#003f73", color: "#ffffff" } : undefined} className={`grid h-10 w-10 place-items-center rounded-xl border border-slate-200 text-[#003f73] transition hover:bg-white disabled:opacity-50 ${attachmentMenuOpen ? "rotate-45" : ""}`}><Plus className="h-5 w-5" /></button>{attachmentMenuOpen ? <div className="absolute bottom-14 left-0 z-20 w-56 overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"><button type="button" onClick={() => pickFiles("image/*,video/*")} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-100"><span className="grid h-9 w-9 place-items-center rounded-full bg-fuchsia-100 text-fuchsia-700"><ImageIcon className="h-4 w-4" /></span>Fotos y videos</button><button type="button" onClick={() => pickFiles(".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,application/pdf,text/plain")} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-100"><span className="grid h-9 w-9 place-items-center rounded-full bg-indigo-100 text-indigo-700"><FileText className="h-4 w-4" /></span>Documento</button><button type="button" onClick={openLocationModal} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-100"><span className="grid h-9 w-9 place-items-center rounded-full bg-emerald-100 text-emerald-700"><MapPin className="h-4 w-4" /></span>Ubicación</button><button type="button" onClick={() => { setError(""); setContactModalOpen(true) }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-100"><span className="grid h-9 w-9 place-items-center rounded-full bg-sky-100 text-sky-700"><User className="h-4 w-4" /></span>Contacto</button></div> : null}</div>{recordingAudio ? <div className="flex min-h-10 flex-1 items-center gap-2 px-3 text-sm font-semibold text-red-600"><span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />Grabando audio <span className="ml-auto font-mono text-xs tabular-nums text-red-500">{formatRecordingTime(recordingSeconds)}</span></div> : <textarea value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void sendComposer() } }} rows={1} disabled={manualInputLocked} placeholder={manualInputLocked ? "Escribí un mensaje..." : "Escribí un mensaje..."} className="max-h-28 min-h-10 flex-1 resize-none border-0 bg-transparent px-3 py-2 text-sm shadow-none outline-none placeholder:text-slate-400 focus:border-0 focus:ring-0" />}{showAudioControl ? <button type="button" onClick={() => recordingAudio ? stopAudioRecording() : void startAudioRecording()} disabled={sending} aria-label={recordingAudio ? "Detener grabación" : "Grabar audio"} title={recordingAudio ? "Detener grabación" : "Grabar audio"} className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl text-white shadow-md transition disabled:opacity-50 ${recordingAudio ? "bg-red-600 shadow-red-600/20 hover:bg-red-700" : "bg-[#003f73] shadow-[#003f73]/20 hover:bg-[#003461]"}`}>{recordingAudio ? <Square className="h-4 w-4 fill-current" /> : <Mic className="h-4 w-4" />}</button> : <button type="submit" aria-label={sending ? "Enviando mensaje" : "Enviar mensaje"} disabled={sending || manualInputLocked || (!draft.trim() && !pendingMedia.length)} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#003f73] text-white shadow-md shadow-[#003f73]/20 transition hover:bg-[#003461] disabled:opacity-50">{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</button>}</div>
+            </>}
           </div></form>
         </>}
       </section>
