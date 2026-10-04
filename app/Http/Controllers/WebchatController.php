@@ -9,6 +9,7 @@ use App\Models\Message;
 use App\Models\SystemSetting;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Validator;
 use Inertia\Inertia;
 
 class WebchatController extends Controller
@@ -174,10 +175,24 @@ class WebchatController extends Controller
     {
         $data = $request->validate([
             'resume_token' => ['required', 'string', 'max:80'],
-            'file' => ['required', 'file', 'max:102400'],
+            'file' => ['required', 'file'],
             'media_kind' => ['required', 'in:image,video,audio,document'],
             'caption' => ['nullable', 'string', 'max:4000'],
         ]);
+        $fileRules = match ($data['media_kind']) {
+            'image' => ['image', 'mimes:jpg,jpeg,png,webp,gif', 'max:10240'],
+            'video' => ['mimes:mp4,mov,webm', 'max:51200'],
+            'audio' => ['mimes:ogg,mp3,m4a,wav,webm', 'max:16384'],
+            default => ['mimes:pdf,doc,docx,xls,xlsx,ppt,pptx,txt', 'max:25600'],
+        };
+        $validator = Validator::make(['file' => $request->file('file')], ['file' => $fileRules]);
+        if ($validator->fails()) {
+            $limits = ['image' => '10 MB', 'video' => '50 MB', 'audio' => '16 MB', 'document' => '25 MB'];
+            return response()->json([
+                'message' => "El archivo no se puede enviar. Verificá el formato y que no supere {$limits[$data['media_kind']]}.",
+                'errors' => $validator->errors(),
+            ], 422);
+        }
         $chat = $this->requireChat($request, $data['resume_token']);
         $this->touchWebchat($chat);
         $file = $request->file('file');
