@@ -7,7 +7,8 @@ import { Input } from "shadcn/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "shadcn/components/ui/select"
 import { cn } from "shadcn/lib/utils"
 import { toast } from "sonner"
-import { AppShell, AppShellBackButton } from "../components/AppShell"
+import { AppShell, AppShellBackButton } from "../Components/AppShell"
+
 
 interface AuditEntry {
   id: number

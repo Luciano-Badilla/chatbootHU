@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react"
 import { Contact, Loader2, Plus, Search, Trash2, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 
-import { AppShell } from "../components/AppShell"
+import { AppShell } from "../Components/AppShell"
 import { Button } from "shadcn/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "shadcn/components/ui/card"
 import {

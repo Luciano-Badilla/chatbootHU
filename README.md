@@ -307,11 +307,30 @@ listener 9001
 protocol websockets
 ```
 
+Para desarrollo, el navegador conecta por `ws://HOST:9001`. Para produccion,
+terminar TLS en Nginx y publicar el WebSocket como `wss://DOMINIO/mqtt`.
+Hay plantillas de referencia en `deploy/mosquitto.production.conf.example` y
+`deploy/nginx-mqtt.conf.example`. No deben activarse hasta contar con dominio,
+certificado TLS y autenticacion/ACL del broker.
+
 Variables relacionadas:
 
 ```env
 MQTT_HOST=
 VITE_MOSQUITTO_HOST=
+VITE_MQTT_WS_PROTOCOL=ws
+VITE_MQTT_WS_PORT=9001
+VITE_MQTT_WS_PATH=
+```
+
+Ejemplo de produccion detras de Nginx:
+
+```env
+MQTT_HOST=127.0.0.1
+VITE_MOSQUITTO_HOST=chat.ejemplo.org
+VITE_MQTT_WS_PROTOCOL=wss
+VITE_MQTT_WS_PORT=443
+VITE_MQTT_WS_PATH=/mqtt
 ```
 
 Despues de cambiar variables de entorno:

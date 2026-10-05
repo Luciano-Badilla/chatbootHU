@@ -2892,6 +2892,7 @@ class WhatsAppController extends Controller
         $baseVars = $this->emptyAppointmentVars();
         $targetNextNodeId = null;
         $messageToSend = null;
+        $appointmentsToSend = [];
 
         if ($personId === '') {
             $this->setVars($chat, array_merge($baseVars, ['turnos_lookup_status' => 'missing_person']));
@@ -3095,13 +3096,24 @@ class WhatsAppController extends Controller
         string $replyId,
         string $buttonTitle
     ): void {
+        $body = mb_substr(trim((string) preg_replace('/\s+/u', ' ', $body)), 0, 1024);
+        $buttonTitle = mb_substr($buttonTitle !== '' ? $buttonTitle : 'Cancelar', 0, 20);
+
+        if (($chat->channel ?? 'whatsapp') === 'webchat') {
+            $this->sendWhatsAppText($chat, $body, 'user', 'bot', 'appointment_lookup', [[
+                'id' => $replyId,
+                'label' => $buttonTitle,
+                'kind' => 'button',
+            ]]);
+
+            return;
+        }
+
         $contact = $chat->contact;
         if (! $contact || ! $contact->whatsapp_id) {
             return;
         }
 
-        $body = mb_substr(trim((string) preg_replace('/\s+/u', ' ', $body)), 0, 1024);
-        $buttonTitle = mb_substr($buttonTitle !== '' ? $buttonTitle : 'Cancelar', 0, 20);
         $payload = [
             'messaging_product' => 'whatsapp',
             'to' => $this->formatPhoneNumber($contact->whatsapp_id),
@@ -3493,10 +3505,6 @@ class WhatsAppController extends Controller
 
     private function sendDynamicWhatsAppList(Chat $chat, BotNode $node, array $rows): void
     {
-        $contact = $chat->contact;
-        if (! $contact || ! $contact->whatsapp_id) {
-            return;
-        }
         $settings = $this->nodeSettings($node);
         $body = $this->renderTemplate((string) ($node->body ?: 'Selecciona una opcion.'), $chat, $node);
         $waRows = array_map(fn ($row) => [
@@ -3504,6 +3512,30 @@ class WhatsAppController extends Controller
             'title' => (string) $row['title'],
             'description' => $row['description'] !== '' ? (string) $row['description'] : null,
         ], array_slice($rows, 0, 10));
+
+        if (($chat->channel ?? 'whatsapp') === 'webchat') {
+            $interactiveOptions = array_map(fn ($row) => [
+                'id' => $row['id'],
+                'label' => $row['title'],
+                'description' => $row['description'] ?? '',
+                'kind' => 'list',
+            ], $waRows);
+            $this->sendWhatsAppText(
+                $chat,
+                $body ?: 'Seleccioná una opción',
+                'user',
+                'bot',
+                $node->type,
+                $interactiveOptions,
+            );
+
+            return;
+        }
+
+        $contact = $chat->contact;
+        if (! $contact || ! $contact->whatsapp_id) {
+            return;
+        }
         $payload = [
             'messaging_product' => 'whatsapp',
             'to' => $this->formatPhoneNumber($contact->whatsapp_id),

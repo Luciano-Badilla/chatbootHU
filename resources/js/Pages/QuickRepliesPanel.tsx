@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import { Loader2, MessageSquareText, Pencil, Plus, Search, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
-import { AppShell } from "../components/AppShell"
+import { AppShell } from "../Components/AppShell"
 import { Button } from "shadcn/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "shadcn/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "shadcn/components/ui/dialog"

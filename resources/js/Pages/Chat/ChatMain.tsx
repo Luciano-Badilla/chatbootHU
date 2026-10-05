@@ -11,6 +11,7 @@ import { Badge } from "shadcn/components/ui/badge"
 import type { Chat, Message } from "./ChatPanel"
 import { cn } from "shadcn/lib/utils"
 import mqtt from "mqtt"
+import { mqttWebSocketUrl } from "../../lib/mqtt"
 import { toast } from "sonner"
 import { format, isToday, isYesterday, parseISO } from "date-fns"
 import { es } from "date-fns/locale"
@@ -527,9 +528,10 @@ export default function ChatMain({
   useEffect(() => {
     if (!chat) return
 
-    const mosquitto_host = (import.meta.env.VITE_MOSQUITTO_HOST);
+    const brokerUrl = mqttWebSocketUrl()
+    if (!brokerUrl) return
 
-    const client = mqtt.connect("ws://" + mosquitto_host + ":9001")
+    const client = mqtt.connect(brokerUrl)
 
     client.on("connect", () => {
       const topic = `chat/${chat.id}`

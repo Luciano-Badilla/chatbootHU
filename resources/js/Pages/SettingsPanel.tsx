@@ -44,7 +44,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "s
 import { Textarea } from "shadcn/components/ui/textarea"
 import { toast } from "sonner"
 import { cn } from "shadcn/lib/utils"
-import { AppShell, AppShellBackButton } from "../components/AppShell"
+import { AppShell, AppShellBackButton } from "../Components/AppShell"
 
 interface SettingsPanelProps {
   settings?: {

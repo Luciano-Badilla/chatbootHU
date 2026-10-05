@@ -2,7 +2,7 @@ import { usePage } from "@inertiajs/react"
 import { CircleCheck, PauseCircle } from "lucide-react"
 import { useState } from "react"
 
-import { AppShell, AppShellBackButton } from "../components/AppShell"
+import { AppShell, AppShellBackButton } from "../Components/AppShell"
 import { ChatPanel } from "./Chat/ChatPanel"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "shadcn/components/ui/select"
 

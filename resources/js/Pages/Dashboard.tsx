@@ -21,7 +21,7 @@ import {
   Users,
 } from "lucide-react"
 
-import { AppShell } from "../components/AppShell"
+import { AppShell } from "../Components/AppShell"
 import { Badge } from "shadcn/components/ui/badge"
 import { Button } from "shadcn/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "shadcn/components/ui/card"

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import mqtt from "mqtt"
-import { AppShell, AppShellBackButton } from "../components/AppShell"
+import { mqttWebSocketUrl } from "../lib/mqtt"
+import { AppShell, AppShellBackButton } from "../Components/AppShell"
 import { Badge } from "shadcn/components/ui/badge"
 import { Button } from "shadcn/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "shadcn/components/ui/card"
@@ -69,10 +70,10 @@ export default function OperatorControl({ operators: initialOperators, pendingCo
   }
 
   useEffect(() => {
-    const host = import.meta.env.VITE_MOSQUITTO_HOST
+    const brokerUrl = mqttWebSocketUrl()
     const polling = window.setInterval(() => void refresh(), 30000)
-    if (!host) return () => window.clearInterval(polling)
-    const client = mqtt.connect(`ws://${host}:9001`)
+    if (!brokerUrl) return () => window.clearInterval(polling)
+    const client = mqtt.connect(brokerUrl)
     let timer: number | undefined
     client.on("connect", () => client.subscribe("operator-control/update"))
     client.on("message", () => { window.clearTimeout(timer); timer = window.setTimeout(() => void refresh(), 150) })

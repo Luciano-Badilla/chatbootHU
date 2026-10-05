@@ -5,6 +5,7 @@ import ChatSidebar from "./ChatSidebar"
 import ChatMain from "./ChatMain"
 import ChatInfo from "./ChatInfo"
 import mqtt from "mqtt"
+import { mqttWebSocketUrl } from "../../lib/mqtt"
 import { usePage } from "@inertiajs/react"
 import { AlertTriangle, Eye, WifiOff, X } from "lucide-react"
 import { toast } from "sonner"
@@ -329,8 +330,9 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   }, [dbHydrated, selectedChatId, chats, authUser?.id])
 
   useEffect(() => {
-    const mosquitto_host = (import.meta.env.VITE_MOSQUITTO_HOST);
-    const client = mqtt.connect("ws://" + mosquitto_host + ":9001", {
+    const brokerUrl = mqttWebSocketUrl()
+    if (!brokerUrl) return
+    const client = mqtt.connect(brokerUrl, {
       clean: true,
       reconnectPeriod: 2000,
       clientId: `front_chatpanel_${Math.random().toString(16).slice(2)}`,

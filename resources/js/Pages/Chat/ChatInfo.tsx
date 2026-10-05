@@ -8,6 +8,7 @@ import { Button } from "shadcn/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "shadcn/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "shadcn/components/ui/dialog"
 import mqtt from "mqtt"
+import { mqttWebSocketUrl } from "../../lib/mqtt"
 import { formatDistanceToNow, format, parseISO } from "date-fns"
 import { es } from "date-fns/locale"
 import type { Chat, ChatVariable } from "./ChatPanel"
@@ -709,10 +710,11 @@ export default function ChatInfo({
       clientRef.current?.end?.(true)
     } catch { }
 
-    const host = import.meta.env.VITE_MOSQUITTO_HOST
+    const brokerUrl = mqttWebSocketUrl()
+    if (!brokerUrl) return
     const clientId = `front_chatinfo_${chat.id}_${Math.random().toString(16).slice(2)}`
     setMqttStatus("connecting")
-    const client = mqtt.connect(`ws://${host}:9001`, {
+    const client = mqtt.connect(brokerUrl, {
       clientId,
       clean: true,
       reconnectPeriod: 2000,
