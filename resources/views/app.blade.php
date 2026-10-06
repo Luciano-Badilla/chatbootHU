@@ -4,15 +4,15 @@
 <head>
     <meta charset="UTF-8" />
     <title>{{ env('APP_NAME') }}</title>
-    <link rel="icon" type="image/x-icon" href="{{ asset('favicon.ico') }}">
-    <link rel="icon" type="image/png" sizes="32x32" href="{{ asset('favicon-32x32.png') }}">
-    <link rel="icon" type="image/png" sizes="48x48" href="{{ asset('favicon-48x48.png') }}">
+    <link rel="icon" type="image/png" href="{{ asset('storage/webchat/logos/of0tyT0w2q0PiPPYFiwwHSUsQvVYwERqqDHJIEJW.png') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ asset('storage/webchat/logos/of0tyT0w2q0PiPPYFiwwHSUsQvVYwERqqDHJIEJW.png') }}">
+    <link rel="icon" type="image/png" sizes="48x48" href="{{ asset('storage/webchat/logos/of0tyT0w2q0PiPPYFiwwHSUsQvVYwERqqDHJIEJW.png') }}">
     <link rel="manifest" href="{{ asset('manifest.webmanifest') }}">
     <meta name="theme-color" content="#003f73">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
-    <meta name="apple-mobile-web-app-title" content="HUni">
-    <link rel="apple-touch-icon" href="{{ asset('images/hu_icon_new.png') }}">
+    <meta name="apple-mobile-web-app-title" content="HUni Chat">
+    <link rel="apple-touch-icon" sizes="180x180" href="{{ asset('storage/webchat/logos/of0tyT0w2q0PiPPYFiwwHSUsQvVYwERqqDHJIEJW.png') }}">
 
     <script src="https://cdn.tailwindcss.com"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">

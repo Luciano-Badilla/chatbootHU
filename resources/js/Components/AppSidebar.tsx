@@ -34,7 +34,7 @@ import {
 import { cn } from "shadcn/lib/utils"
 
 const APP_URL = import.meta.env.VITE_APP_URL || ""
-const HOSPITAL_LOGO_URL = `${APP_URL}/storage/images/hu_icon_new.png`
+const HOSPITAL_LOGO_URL = `${APP_URL}/images/hu_icon_new.png`
 const HOSPITAL_FAVICON_URL = `${APP_URL}/favicon-48x48.png`
 
 const navigationItems: Array<{ label: string; href: string; icon: LucideIcon; permission?: string }> = [

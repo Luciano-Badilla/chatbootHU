@@ -52,7 +52,7 @@ export default function Login({ status }) {
                             <h2 className="text-3xl font-bold tracking-tight">Inicia sesión</h2>
                             <div className="absolute top-0 left-0 right-0 p-12 text-white">
                                 <span className="inline-flex rounded-full bg-white/90 px-4 py-1 text-xs font-bold uppercase tracking-[0.14em] text-[#06436f]">
-                                    Chatbot WhatsApp HU
+                                    HUni Chat
                                 </span>
                             </div>
                             <p className="mt-3 text-sm leading-6 text-blue-100">

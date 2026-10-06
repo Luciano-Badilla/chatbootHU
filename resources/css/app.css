@@ -199,4 +199,16 @@
     right: 0;
     transform: translate(35%, -35%);
   }
+
+  /* Avatares del asistente en el webchat público. */
+  img[alt="Hospital Universitario"],
+  img[alt="Asistente virtual"] {
+    border-radius: 9999px;
+    object-fit: cover;
+  }
+
+  /* La campana sólo se muestra mientras aún puede solicitarse el permiso. */
+  button[aria-label="Notificaciones activadas"] {
+    display: none;
+  }
 }
