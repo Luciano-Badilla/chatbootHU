@@ -142,6 +142,108 @@ const validateContactDraft = (draft: AgendaContact) => {
   return ""
 }
 
+const ensureLeaflet = async () => {
+  const win = window as Window & { L?: any; __leafletLoading?: Promise<any> }
+  if (win.L) return win.L
+  if (win.__leafletLoading) return win.__leafletLoading
+
+  win.__leafletLoading = new Promise((resolve, reject) => {
+    if (!document.querySelector('link[data-leaflet="true"]')) {
+      const link = document.createElement("link")
+      link.rel = "stylesheet"
+      link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      link.dataset.leaflet = "true"
+      document.head.appendChild(link)
+    }
+
+    const script = document.createElement("script")
+    script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    script.async = true
+    script.onload = () => win.L ? resolve(win.L) : reject(new Error("Leaflet no disponible"))
+    script.onerror = () => reject(new Error("No se pudo cargar Leaflet"))
+    document.head.appendChild(script)
+  })
+
+  return win.__leafletLoading
+}
+
+function LocationMessageMap({
+  latitude,
+  longitude,
+  className = "h-40",
+  interactive = false,
+}: {
+  latitude: number
+  longitude: number
+  className?: string
+  interactive?: boolean
+}) {
+  const mapRef = useRef<HTMLDivElement | null>(null)
+  const pinRef = useRef<HTMLSpanElement | null>(null)
+
+  useEffect(() => {
+    if (!mapRef.current) return
+
+    let cancelled = false
+    let map: any = null
+    let LRef: any = null
+    let invalidateTimer: ReturnType<typeof setTimeout> | null = null
+
+    const updatePinPosition = () => {
+      if (!map || !pinRef.current || !LRef) return
+      const point = map.latLngToContainerPoint(LRef.latLng(latitude, longitude))
+      pinRef.current.style.left = `${point.x}px`
+      pinRef.current.style.top = `${point.y}px`
+    }
+
+    ensureLeaflet()
+      .then((L) => {
+        if (cancelled || !mapRef.current) return
+        LRef = L
+        map = L.map(mapRef.current, {
+          attributionControl: interactive,
+          zoomControl: interactive,
+          dragging: interactive,
+          scrollWheelZoom: interactive,
+          doubleClickZoom: interactive,
+          boxZoom: interactive,
+          keyboard: interactive,
+          touchZoom: interactive,
+          zoomAnimation: false,
+          markerZoomAnimation: false,
+          fadeAnimation: false,
+        }).setView([latitude, longitude], 15)
+
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map)
+        map.on("move zoom resize viewreset", updatePinPosition)
+        updatePinPosition()
+        invalidateTimer = setTimeout(() => {
+          map?.invalidateSize?.()
+          updatePinPosition()
+        }, 80)
+      })
+      .catch((error) => console.error("Error cargando mini mapa:", error))
+
+    return () => {
+      cancelled = true
+      if (invalidateTimer) clearTimeout(invalidateTimer)
+      map?.off?.("move zoom resize viewreset", updatePinPosition)
+      map?.off?.()
+      map?.remove?.()
+    }
+  }, [latitude, longitude, interactive])
+
+  return (
+    <div className={`relative isolate w-full overflow-hidden bg-slate-200 ${className}`}>
+      <div ref={mapRef} className={`${interactive ? "" : "pointer-events-none"} h-full w-full`} />
+      <span className="pointer-events-none absolute inset-0 z-[900] bg-gradient-to-b from-transparent via-transparent to-black/10" />
+      <span ref={pinRef} className="pointer-events-none absolute z-[910] flex h-10 w-10 -translate-x-1/2 -translate-y-full items-center justify-center rounded-full bg-[#013765] text-white shadow-lg ring-4 ring-white">
+        <MapPin className="h-5 w-5 fill-current" />
+      </span>
+    </div>
+  )
+}
+
 function HoverTooltip({
   label,
   children,
@@ -242,6 +344,7 @@ export default function ChatMain({
   const [quickRepliesOpen, setQuickRepliesOpen] = useState(false)
   const [quickReplies, setQuickReplies] = useState<QuickReply[]>([])
   const [quickRepliesLoading, setQuickRepliesLoading] = useState(false)
+  const [quickRepliesQuery, setQuickRepliesQuery] = useState("")
   const [spellChecker, setSpellChecker] = useState<ReturnType<typeof nspell> | null>(null)
   const [spellingMatches, setSpellingMatches] = useState<SpellingMatch[]>([])
   const [activeSpellingMatch, setActiveSpellingMatch] = useState<SpellingMatch | null>(null)
@@ -281,7 +384,8 @@ export default function ChatMain({
   const previousSearchQueryRef = useRef("")
   const attachmentMenuRef = useRef<HTMLDivElement | null>(null)
   const quickRepliesMenuRef = useRef<HTMLDivElement | null>(null)
-  const messageInputRef = useRef<HTMLInputElement | null>(null)
+  const messageInputRef = useRef<HTMLTextAreaElement | null>(null)
+  const messageOverlayRef = useRef<HTMLDivElement | null>(null)
   const prependingMessagesRef = useRef(false)
   const locationMapRef = useRef<HTMLDivElement | null>(null)
   const leafletMapRef = useRef<any | null>(null)
@@ -297,6 +401,16 @@ export default function ChatMain({
     setAttachmentMenuOpen(false)
     setQuickRepliesOpen(false)
   }
+
+  useEffect(() => {
+    const input = messageInputRef.current
+    if (!input) return
+
+    const maxHeight = 168
+    input.style.height = "auto"
+    input.style.height = `${Math.min(input.scrollHeight, maxHeight)}px`
+    input.style.overflowY = input.scrollHeight > maxHeight ? "auto" : "hidden"
+  }, [newMessage])
 
   useEffect(() => {
     let cancelled = false
@@ -986,31 +1100,6 @@ export default function ChatMain({
     setLocationHistory(next)
   }
 
-  const ensureLeaflet = async () => {
-    const win = window as Window & { L?: any; __leafletLoading?: Promise<any> }
-    if (win.L) return win.L
-    if (win.__leafletLoading) return win.__leafletLoading
-
-    win.__leafletLoading = new Promise((resolve, reject) => {
-      if (!document.querySelector('link[data-leaflet="true"]')) {
-        const link = document.createElement("link")
-        link.rel = "stylesheet"
-        link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-        link.dataset.leaflet = "true"
-        document.head.appendChild(link)
-      }
-
-      const script = document.createElement("script")
-      script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-      script.async = true
-      script.onload = () => win.L ? resolve(win.L) : reject(new Error("Leaflet no disponible"))
-      script.onerror = () => reject(new Error("No se pudo cargar Leaflet"))
-      document.head.appendChild(script)
-    })
-
-    return win.__leafletLoading
-  }
-
   const moveLocationMarker = (latitude: number, longitude: number, zoom = 16) => {
     const map = leafletMapRef.current
     const L = (window as Window & { L?: any }).L
@@ -1263,6 +1352,10 @@ export default function ChatMain({
   }, [quickRepliesOpen])
 
   useEffect(() => {
+    if (!quickRepliesOpen) setQuickRepliesQuery("")
+  }, [quickRepliesOpen])
+
+  useEffect(() => {
     if (!quickRepliesOpen) return
 
     const loadQuickReplies = async () => {
@@ -1286,6 +1379,7 @@ export default function ChatMain({
   const selectQuickReply = (text: string) => {
     setNewMessage(text)
     setQuickRepliesOpen(false)
+    setQuickRepliesQuery("")
     requestAnimationFrame(() => messageInputRef.current?.focus())
   }
 
@@ -1593,6 +1687,33 @@ export default function ChatMain({
     if (e.target) e.target.value = ""
   }
 
+  const handleMessagePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (readOnly || !chat || sending) return
+
+    const images = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null)
+
+    if (images.length === 0) return
+
+    event.preventDefault()
+    const validImages: File[] = []
+    const rejectedImages: string[] = []
+
+    images.forEach((image) => {
+      const validation = validatePendingFile(image)
+      if (validation.ok) {
+        validImages.push(image)
+      } else {
+        rejectedImages.push(validation.reason)
+      }
+    })
+
+    setMediaError(rejectedImages.length > 0 ? rejectedImages.slice(0, 3).join(" ") : null)
+    pushPendingFiles(validImages)
+  }
+
   const removePendingMedia = (index: number) => {
     const target = pendingMediaList[index]
     if (target?.previewUrl) {
@@ -1612,6 +1733,40 @@ export default function ChatMain({
       return []
     })
     setAudioDurations({})
+  }
+
+  const sendRecordedAudio = async (file: File) => {
+    if (!chat || readOnly) return
+
+    setSending(true)
+    try {
+      const formData = new FormData()
+      formData.append("chat_id", String(chat.id))
+      formData.append("file", file)
+      formData.append("media_kind", "audio")
+
+      const response = await fetch(`${import.meta.env.VITE_APP_URL}/api/message/send-media`, {
+        method: "POST",
+        body: formData,
+      })
+
+      if (!response.ok) {
+        const rawError = await response.text()
+        let errorMessage = "No se pudo enviar el audio."
+        try {
+          const payload = rawError ? JSON.parse(rawError) : null
+          errorMessage = String(payload?.error ?? payload?.message ?? errorMessage)
+        } catch {
+          if (rawError) errorMessage = rawError
+        }
+        setMediaError(errorMessage)
+      }
+    } catch (error) {
+      console.error("Error de red al enviar el audio:", error)
+      setMediaError("Error de red al enviar el audio.")
+    } finally {
+      setSending(false)
+    }
   }
 
   const handleToggleRecordAudio = async () => {
@@ -1677,6 +1832,7 @@ export default function ChatMain({
           recordingIntervalRef.current = null
         }
         setRecordingAudio(false)
+        mediaRecorderRef.current = null
 
         const actualMime = recorder.mimeType || selectedMimeType
         if (!actualMime.startsWith("audio/ogg")) {
@@ -1706,7 +1862,7 @@ export default function ChatMain({
           return
         }
 
-        pushPendingFiles([file])
+        await sendRecordedAudio(file)
       }
 
       recorder.start()
@@ -1849,6 +2005,12 @@ export default function ChatMain({
 
   const activeSearchResultId = searchResultIds[activeSearchIndex] ?? null
   const searchResultIdSet = useMemo(() => new Set(searchResultIds), [searchResultIds])
+  const filteredQuickReplies = useMemo(() => {
+    const query = quickRepliesQuery.trim().toLocaleLowerCase()
+    if (!query) return quickReplies
+
+    return quickReplies.filter((reply) => `${reply.title} ${reply.body}`.toLocaleLowerCase().includes(query))
+  }, [quickReplies, quickRepliesQuery])
 
   if (!chat) {
 
@@ -2058,91 +2220,6 @@ export default function ChatMain({
         isValid: false,
       }
     }
-  }
-
-  const LocationMessageMap = ({
-    latitude,
-    longitude,
-    className = "h-40",
-    interactive = false,
-  }: {
-    latitude: number
-    longitude: number
-    className?: string
-    interactive?: boolean
-  }) => {
-    const mapRef = useRef<HTMLDivElement | null>(null)
-    const pinRef = useRef<HTMLSpanElement | null>(null)
-
-    useEffect(() => {
-      if (!mapRef.current) return
-
-      let cancelled = false
-      let map: any = null
-      let LRef: any = null
-      let invalidateTimer: ReturnType<typeof setTimeout> | null = null
-
-      const updatePinPosition = () => {
-        if (!map || !pinRef.current || !LRef) return
-        const point = map.latLngToContainerPoint(LRef.latLng(latitude, longitude))
-        pinRef.current.style.left = `${point.x}px`
-        pinRef.current.style.top = `${point.y}px`
-      }
-
-      ensureLeaflet()
-        .then((L) => {
-          if (cancelled || !mapRef.current) return
-          LRef = L
-
-          map = L.map(mapRef.current, {
-            attributionControl: interactive,
-            zoomControl: interactive,
-            dragging: interactive,
-            scrollWheelZoom: interactive,
-            doubleClickZoom: interactive,
-            boxZoom: interactive,
-            keyboard: interactive,
-            touchZoom: interactive,
-            zoomAnimation: false,
-            markerZoomAnimation: false,
-            fadeAnimation: false,
-          }).setView([latitude, longitude], 15)
-
-          L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map)
-          map.on("move zoom resize viewreset", updatePinPosition)
-          updatePinPosition()
-          invalidateTimer = setTimeout(() => {
-            map?.invalidateSize?.()
-            updatePinPosition()
-          }, 80)
-        })
-        .catch((error) => {
-          console.error("Error cargando mini mapa:", error)
-        })
-
-      return () => {
-        cancelled = true
-        if (invalidateTimer) clearTimeout(invalidateTimer)
-        map?.off?.("move zoom resize viewreset", updatePinPosition)
-        map?.off?.()
-        map?.remove?.()
-        map = null
-        LRef = null
-      }
-    }, [latitude, longitude])
-
-    return (
-      <div className={`relative isolate w-full overflow-hidden bg-slate-200 ${className}`}>
-        <div ref={mapRef} className={`${interactive ? "" : "pointer-events-none"} h-full w-full`} />
-        <span className="pointer-events-none absolute inset-0 z-[900] bg-gradient-to-b from-transparent via-transparent to-black/10" />
-        <span
-          ref={pinRef}
-          className="pointer-events-none absolute z-[910] flex h-10 w-10 -translate-x-1/2 -translate-y-full items-center justify-center rounded-full bg-[#013765] text-white shadow-lg ring-4 ring-white"
-        >
-          <MapPin className="h-5 w-5 fill-current" />
-        </span>
-      </div>
-    )
   }
 
   const ContactPreviewCard = ({ contact }: { contact: NonNullable<PreviewMedia["contact"]> }) => (
@@ -2750,8 +2827,58 @@ export default function ChatMain({
       </div>
 
       {/* Input */}
-      <div className="p-4 border-t border-gray-300">
-        <div className="flex items-end gap-2">
+      <div className="border-t border-slate-200 bg-white px-4 py-3">
+        {pendingMediaList.length > 0 && (
+          <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
+            {pendingMediaList.map((item, index) => (
+              <div key={`${item.file.name}-${item.file.size}-${item.file.lastModified}-${index}`} className="relative h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
+                <button
+                  type="button"
+                  onClick={() => removePendingMedia(index)}
+                  className="absolute right-1 top-1 z-10 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-white"
+                  title="Quitar archivo"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+
+                {item.type === "image" && (
+                  <button type="button" onClick={() => setPreview({ url: item.previewUrl, name: item.file.name, type: "image" })} className="h-full w-full">
+                    <img src={item.previewUrl} alt={item.file.name} className="h-full w-full object-cover" />
+                  </button>
+                )}
+
+                {item.type === "video" && (
+                  <button type="button" onClick={() => setPreview({ url: item.previewUrl, name: item.file.name, type: "video" })} className="h-full w-full">
+                    <video src={item.previewUrl} className="h-full w-full object-cover" />
+                  </button>
+                )}
+
+                {item.type === "audio" && (
+                  <div className="flex h-full flex-col items-center justify-center gap-1 p-1">
+                    <audio
+                      src={item.previewUrl}
+                      controls
+                      className="w-full max-w-[56px]"
+                      onLoadedMetadata={(event) => {
+                        const duration = Number(event.currentTarget.duration)
+                        if (!Number.isFinite(duration) || duration <= 0) return
+                        setAudioDurations((prev) => ({ ...prev, [item.previewUrl]: Math.round(duration) }))
+                      }}
+                    />
+                    <div className="text-[9px] text-slate-500">{formatSeconds(audioDurations[item.previewUrl] ?? 0)}</div>
+                  </div>
+                )}
+
+                {item.type === "document" && (
+                  <button type="button" onClick={() => setPreview({ url: item.previewUrl, name: item.file.name, type: "document" })} className="flex h-full w-full items-center justify-center text-slate-500">
+                    <FileText className="h-6 w-6" />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-1 shadow-sm transition focus-within:border-[#013765]/50 focus-within:ring-2 focus-within:ring-[#013765]/10">
           <input
             ref={fileInputRef}
             type="file"
@@ -2767,8 +2894,8 @@ export default function ChatMain({
               disabled={sending || !chat || recordingAudio || readOnly}
               onClick={() => setAttachmentMenuOpen((open) => !open)}
               className={cn(
-                "h-11 w-11 rounded-full border-gray-300 p-0 transition-transform",
-                attachmentMenuOpen && "rotate-45 bg-[#013765] text-white hover:bg-[#012e54]",
+                "h-10 w-10 shrink-0 rounded-xl border-slate-200 bg-transparent p-0 text-[#013765] transition hover:bg-white hover:text-[#013765]",
+                attachmentMenuOpen && "rotate-45 bg-[#013765] text-white hover:bg-[#012e54] hover:text-white",
               )}
               title="Adjuntar"
             >
@@ -2824,27 +2951,6 @@ export default function ChatMain({
             )}
           </div>
 
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={sending || !chat || readOnly}
-              onClick={handleToggleRecordAudio}
-              className={cn(
-                "h-11 w-11 p-0 border-gray-300",
-                recordingAudio && "border-red-500 text-red-600",
-              )}
-              title={recordingAudio ? "Detener grabación" : "Grabar audio"}
-            >
-              {recordingAudio ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-            </Button>
-            {recordingAudio && (
-              <span className="inline-flex h-8 items-center rounded-md border border-red-200 bg-red-50 px-2 text-xs font-medium text-red-700">
-                {formatSeconds(recordingSeconds)}
-              </span>
-            )}
-          </div>
-
           <div ref={quickRepliesMenuRef} className="relative">
             <Button
               type="button"
@@ -2857,8 +2963,8 @@ export default function ChatMain({
                 setAttachmentMenuOpen(false)
               }}
               className={cn(
-                "h-11 w-11 border-gray-300 p-0",
-                quickRepliesOpen && "border-[#013765] bg-[#013765] text-white hover:bg-[#012e54]",
+                "h-10 w-10 shrink-0 rounded-xl border-slate-200 bg-transparent p-0 text-[#013765] transition hover:bg-white hover:text-[#013765]",
+                quickRepliesOpen && "border-[#013765] bg-[#013765] text-white hover:bg-[#012e54] hover:text-white",
               )}
               title="Respuestas rápidas"
             >
@@ -2870,13 +2976,25 @@ export default function ChatMain({
                 <div className="border-b border-slate-100 px-4 py-3">
                   <p className="text-sm font-semibold text-slate-900">Respuestas rápidas</p>
                   <p className="mt-0.5 text-xs text-slate-500">Elegí una para cargarla en el mensaje.</p>
+                  <div className="relative mt-3">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="search"
+                      value={quickRepliesQuery}
+                      onChange={(event) => setQuickRepliesQuery(event.target.value)}
+                      placeholder="Buscar respuestas..."
+                      className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-xs text-slate-800 outline-none placeholder:text-slate-400 focus:border-[#013765]/50 focus:bg-white focus:ring-2 focus:ring-[#013765]/10"
+                    />
+                  </div>
                 </div>
                 <div className="max-h-80 space-y-1 overflow-y-auto p-2 custom-scrollbar">
                   {quickRepliesLoading ? (
                     <div className="py-6 text-center text-xs text-slate-500">Cargando respuestas...</div>
                   ) : quickReplies.length === 0 ? (
                     <div className="py-6 text-center text-xs text-slate-500">No hay respuestas guardadas.</div>
-                  ) : quickReplies.map((reply) => (
+                  ) : filteredQuickReplies.length === 0 ? (
+                    <div className="py-6 text-center text-xs text-slate-500">No encontramos respuestas para esa búsqueda.</div>
+                  ) : filteredQuickReplies.map((reply) => (
                     <button
                       key={reply.id}
                       type="button"
@@ -2900,7 +3018,15 @@ export default function ChatMain({
           </div>
 
           <div className="flex-1 min-w-0 relative">
-            {activeSpellingMatch &&
+            {recordingAudio ? (
+              <div className="flex min-h-10 items-center gap-2 px-3 text-sm font-semibold text-red-600">
+                <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-red-500" />
+                <span>Grabando audio</span>
+                <span className="ml-auto font-mono text-xs tabular-nums text-red-500">{formatSeconds(recordingSeconds)}</span>
+              </div>
+            ) : (
+              <>
+                {activeSpellingMatch &&
               dismissedSpellingKey !== `${activeSpellingMatch.start}-${activeSpellingMatch.word}` && (
                 <div className="absolute bottom-full left-2 z-[9996] mb-2 w-max max-w-[min(360px,calc(100vw-32px))] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
                   <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2">
@@ -2944,28 +3070,36 @@ export default function ChatMain({
                 <span className="truncate">{inputStatusMessage}</span>
               </div>
             )}
-            <div className="relative h-11">
+            <div className="relative min-h-10 overflow-hidden rounded-xl">
               {newMessage && (
                 <div
+                  ref={messageOverlayRef}
                   aria-hidden="true"
-                  className="pointer-events-none absolute inset-0 z-0 flex items-center overflow-hidden whitespace-pre px-3 pr-20 text-sm text-slate-900"
+                  className="pointer-events-none absolute inset-0 z-0 whitespace-pre-wrap break-words px-3 py-2 text-sm leading-5 text-slate-800"
                 >
                   {renderSpellingOverlay()}
                 </div>
               )}
-              <Input
+              <textarea
                 ref={messageInputRef}
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
                 onKeyDown={handleKeyDown}
+                onPaste={handleMessagePaste}
                 onClick={activateSpellingMatchAtCaret}
                 onKeyUp={(event) => {
                   if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) activateSpellingMatchAtCaret()
+                }}
+                onScroll={(event) => {
+                  if (messageOverlayRef.current) {
+                    messageOverlayRef.current.style.transform = `translateY(-${event.currentTarget.scrollTop}px)`
+                  }
                 }}
                 lang="es-AR"
                 spellCheck={false}
                 autoCorrect="off"
                 autoCapitalize="sentences"
+                rows={1}
                 placeholder={
                   readOnly
                     ? readOnlyReason === "bot"
@@ -2975,99 +3109,38 @@ export default function ChatMain({
                 }
                 disabled={readOnly}
                 className={cn(
-                  "relative z-10 min-h-[44px] resize-none border-gray-300 bg-transparent pr-20",
+                  "relative z-10 block w-full min-h-10 resize-none overflow-y-hidden rounded-xl border-0 bg-transparent px-3 py-2 text-sm leading-5 text-slate-800 shadow-none outline-none placeholder:text-slate-400 focus:border-0 focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50",
                   newMessage && "text-transparent caret-slate-900 selection:bg-blue-200/70",
                 )}
               />
-            </div>
-            {pendingMediaList.length > 0 && (
-              <div className="mt-2 rounded-lg border border-gray-300 bg-white p-2">
-                <div className="text-xs text-muted-foreground mb-2">
-                  Vista previa antes de enviar ({pendingMediaList.length} archivos)
                 </div>
-
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                  {pendingMediaList.map((item, index) => (
-                    <div key={`${item.file.name}-${item.file.size}-${item.file.lastModified}-${index}`} className="relative rounded border border-gray-200 bg-gray-50 p-1">
-                      <button
-                        type="button"
-                        onClick={() => removePendingMedia(index)}
-                        className="absolute right-1 top-1 z-10 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-white"
-                        title="Quitar archivo"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-
-                      {item.type === "image" && (
-                        <button
-                          type="button"
-                          onClick={() => setPreview({ url: item.previewUrl, name: item.file.name, type: "image" })}
-                          className="w-full"
-                        >
-                          <img src={item.previewUrl} alt={item.file.name} className="h-24 w-full rounded object-cover" />
-                        </button>
-                      )}
-
-                      {item.type === "video" && (
-                        <button
-                          type="button"
-                          onClick={() => setPreview({ url: item.previewUrl, name: item.file.name, type: "video" })}
-                          className="w-full"
-                        >
-                          <video src={item.previewUrl} className="h-24 w-full rounded object-cover" />
-                        </button>
-                      )}
-
-                      {item.type === "audio" && (
-                        <div className="space-y-1">
-                          <audio
-                            src={item.previewUrl}
-                            controls
-                            className="w-full"
-                            onLoadedMetadata={(event) => {
-                              const duration = Number(event.currentTarget.duration)
-                              if (!Number.isFinite(duration) || duration <= 0) return
-                              setAudioDurations((prev) => ({
-                                ...prev,
-                                [item.previewUrl]: Math.round(duration),
-                              }))
-                            }}
-                          />
-                          <div className="px-1 text-[10px] text-muted-foreground">
-                            Duración: {formatSeconds(audioDurations[item.previewUrl] ?? 0)}
-                          </div>
-                        </div>
-                      )}
-
-                      {item.type === "document" && (
-                        <button
-                          type="button"
-                          onClick={() => setPreview({ url: item.previewUrl, name: item.file.name, type: "document" })}
-                          className="flex h-24 w-full items-center justify-center rounded bg-gray-50"
-                        >
-                          <FileText className="h-7 w-7 text-gray-600" />
-                        </button>
-                      )}
-
-                      <div className="mt-1 px-1 text-[10px] text-muted-foreground truncate">{item.file.name}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              </>
             )}
           </div>
 
-          <Button
-            disabled={readOnly || ((!newMessage.trim() && pendingMediaList.length === 0) || sending)}
-            onClick={pendingMediaList.length > 0 ? handleSendPendingMedia : handleSendMessage}
-            className="h-11 px-4 bg-[#013765] text-white hover:bg-[#012e54]"
-          >
-            {sending ? (
-              <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" />
-            ) : (
-              <Send className="h-4 w-4 text-white" />
-            )}
-          </Button>
+          {recordingAudio || (!newMessage.trim() && pendingMediaList.length === 0) ? (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={sending || !chat || readOnly}
+              onClick={handleToggleRecordAudio}
+              className={cn(
+                "h-10 w-10 shrink-0 rounded-xl border-0 bg-[#013765] p-0 text-white shadow-md shadow-[#013765]/20 transition hover:bg-[#012e54] hover:text-white",
+                recordingAudio && "bg-red-600 shadow-red-600/20 hover:bg-red-700 hover:text-white",
+              )}
+              title={recordingAudio ? `Detener grabación (${formatSeconds(recordingSeconds)})` : "Grabar audio"}
+            >
+              {recordingAudio ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+            </Button>
+          ) : (
+            <Button
+              disabled={readOnly || sending}
+              onClick={pendingMediaList.length > 0 ? handleSendPendingMedia : handleSendMessage}
+              className="h-10 w-10 shrink-0 rounded-xl bg-[#013765] p-0 text-white shadow-md shadow-[#013765]/20 hover:bg-[#012e54] hover:text-white"
+            >
+              {sending ? <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" /> : <Send className="h-4 w-4 text-white" />}
+            </Button>
+          )}
         </div>
       </div>
 

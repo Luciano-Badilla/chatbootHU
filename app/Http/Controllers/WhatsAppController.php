@@ -1277,7 +1277,7 @@ class WhatsAppController extends Controller
         $contact = $chat->contact;
         $actor = $request->user();
 
-        if (! $contact || ! $contact->whatsapp_id) {
+        if (($chat->channel ?? 'whatsapp') !== 'webchat' && (! $contact || ! $contact->whatsapp_id)) {
             return response()->json(['error' => 'Contacto sin whatsapp_id'], 422);
         }
 
@@ -1293,6 +1293,32 @@ class WhatsAppController extends Controller
         }
         if ($address !== '') {
             $location['address'] = mb_substr($address, 0, 1000);
+        }
+
+        if (($chat->channel ?? 'whatsapp') === 'webchat') {
+            $message = Message::create([
+                'chat_id' => $chat->id,
+                'sender' => 'user',
+                'sender_subtype' => 'operator',
+                'operator_name' => $actor?->name,
+                'bot_node_type' => null,
+                'interactive_options' => null,
+                'message_type' => 'location',
+                'body' => json_encode($location, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'status' => 'sent',
+            ]);
+
+            $this->auditService->recordMessageAction(
+                'location_sent',
+                'Envio ubicacion manual por webchat',
+                $chat,
+                $actor,
+                $message,
+                ['meta' => ['location' => $location, 'message_id' => $message->id]],
+            );
+            $this->publishWebchatMessage($chat, $message);
+
+            return response()->json(['ok' => true, 'message' => $message]);
         }
 
         $payload = [
