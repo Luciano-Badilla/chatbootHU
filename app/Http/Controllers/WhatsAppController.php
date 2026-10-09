@@ -2872,58 +2872,57 @@ class WhatsAppController extends Controller
             $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos porque falta el DNI.');
             $targetNextNodeId = $settings['error_next_node_id'] ?? null;
         } else {
-            $lookupUrl = $this->alephooPersonLookupUrl($dni);
-            $apiKey = $this->alephooApiKey();
+            $baseUrl = $this->alephooV3BaseUrl();
+            $username = $this->alephooV3Username();
+            $password = $this->alephooV3Password();
+            $timeout = $this->alephooV3Timeout();
 
-            if (! $this->isAlephooEndpointEnabled('/personas/{dni}')) {
+            if (! $this->isAlephooEndpointEnabled('/admin/personas')) {
                 $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'endpoint_disabled']));
                 $messageToSend = (string) ($settings['error_message'] ?? 'La consulta de datos personales no esta habilitada en este momento.');
                 $targetNextNodeId = $settings['error_next_node_id'] ?? null;
-            } elseif ($lookupUrl === '' || $apiKey === '') {
+            } elseif ($baseUrl === '' || $username === '' || $password === '') {
                 $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'misconfigured']));
                 $messageToSend = (string) ($settings['error_message'] ?? 'La integracion con Alephoo no esta configurada correctamente.');
                 $targetNextNodeId = $settings['error_next_node_id'] ?? null;
             } else {
                 try {
-                    $response = Http::timeout($this->alephooTimeout())
-                        ->acceptJson()
-                        ->withHeaders([
-                            'X-API-KEY' => $apiKey,
-                        ])
-                        ->get($lookupUrl);
+                    $response = Http::timeout($timeout)
+                        ->accept('application/vnd.api+json')
+                        ->withBasicAuth($username, $password)
+                        ->get($baseUrl.'/admin/personas', [
+                            'filter[documento]' => $dni,
+                            'limit' => 1,
+                            'offset' => 0,
+                        ]);
 
-                    Log::info('Hospital API person lookup response', [
+                    Log::info('Alephoo person lookup response', [
                         'chat_id' => $chat->id,
                         'node_id' => $node->id,
                         'dni' => $dni,
-                        'url' => $lookupUrl,
                         'status' => $response->status(),
                         'ok' => $response->successful(),
-                        'json' => $response->json(),
-                        'body' => $response->body(),
                     ]);
 
                     if ($response->successful()) {
                         $payload = $response->json();
-                        $person = is_array($payload) && isset($payload[0]) && is_array($payload[0]) ? $payload[0] : null;
+                        $data = is_array($payload) ? ($payload['data'] ?? null) : null;
+                        $person = is_array($data) && array_is_list($data) ? ($data[0] ?? null) : $data;
+                        $attributes = is_array($person) && is_array($person['attributes'] ?? null)
+                            ? $person['attributes']
+                            : null;
 
-                        if ($person) {
+                        if (is_array($person) && $attributes !== null) {
                             $this->setVars($chat, array_merge($baseVars, [
                                 'persona_encontrada' => true,
                                 'persona_lookup_status' => 'found',
                                 'persona_id' => $person['id'] ?? null,
-                                'persona_nombres' => $person['nombres'] ?? null,
-                                'persona_apellidos' => $person['apellidos'] ?? null,
-                                'persona_documento' => $person['documento'] ?? null,
-                                'persona_fecha_nacimiento' => $person['fecha_nacimiento'] ?? null,
-                                'persona_genero' => $person['genero'] ?? null,
-                                'persona_obra_social' => $person['obra_social'] ?? null,
-                                'persona_obra_social_id' => $person['obra_social_id'] ?? null,
-                                'persona_plan_id' => $person['plan_id'] ?? null,
-                                'persona_email' => $person['email'] ?? null,
-                                'persona_contacto_telefono' => $person['contacto_telefono'] ?? null,
-                                'persona_contacto_telefono_2' => $person['contacto_telefono_2'] ?? null,
-                                'persona_planes_activos' => is_array($person['planes_activos'] ?? null) ? $person['planes_activos'] : [],
+                                'persona_nombres' => $attributes['nombres'] ?? null,
+                                'persona_apellidos' => $attributes['apellidos'] ?? null,
+                                'persona_documento' => $attributes['documento'] ?? null,
+                                'persona_fecha_nacimiento' => $attributes['fechaNacimiento'] ?? null,
+                                'persona_email' => $attributes['email'] ?? null,
+                                'persona_contacto_telefono' => $attributes['celular'] ?? null,
                             ]));
 
                             $messageToSend = $node->body ? $this->renderTemplate($node->body, $chat, $node) : null;
@@ -2942,7 +2941,7 @@ class WhatsAppController extends Controller
                         $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos en este momento.');
                         $targetNextNodeId = $settings['error_next_node_id'] ?? null;
 
-                        Log::warning('Hospital API person lookup error response', [
+                        Log::warning('Alephoo person lookup error response', [
                             'chat_id' => $chat->id,
                             'node_id' => $node->id,
                             'dni' => $dni,
@@ -2955,7 +2954,7 @@ class WhatsAppController extends Controller
                     $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos en este momento.');
                     $targetNextNodeId = $settings['error_next_node_id'] ?? null;
 
-                    Log::error('Hospital API person lookup failed: '.$e->getMessage(), [
+                    Log::error('Alephoo person lookup failed: '.$e->getMessage(), [
                         'chat_id' => $chat->id,
                         'node_id' => $node->id,
                         'dni' => $dni,
