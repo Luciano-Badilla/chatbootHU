@@ -1,14 +1,15 @@
 "use client"
 // Componente principal del panel de chat.
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import ChatSidebar from "./ChatSidebar"
 import ChatMain from "./ChatMain"
 import ChatInfo from "./ChatInfo"
 import mqtt from "mqtt"
 import { mqttWebSocketUrl } from "../../lib/mqtt"
 import { usePage } from "@inertiajs/react"
-import { AlertTriangle, Eye, WifiOff, X } from "lucide-react"
+import { AlertTriangle, Eye, X } from "lucide-react"
 import { toast } from "sonner"
+import StartupCurtain from "../../Components/StartupCurtain"
 
 export type Chat = {
   id: number | string
@@ -17,6 +18,7 @@ export type Chat = {
   channel?: "whatsapp" | "webchat" | string
   lastMessage: string
   timestamp: string
+  sidebar_timestamp?: string | null
   unread: number
   online: boolean
   avatar?: string | null
@@ -87,6 +89,8 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   const [chats, setChats] = useState<Chat[]>(initialChats)
   const [dbHydrated, setDbHydrated] = useState(false)
   const [panelMqttConnected, setPanelMqttConnected] = useState(false)
+  const [showStartupCurtain, setShowStartupCurtain] = useState(true)
+  const [startupCurtainLeaving, setStartupCurtainLeaving] = useState(false)
 
   // ID del chat seleccionado actualmente en la UI.
   const [selectedChatId, setSelectedChatId] = useState<string>(() => {
@@ -96,6 +100,8 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   const previousSelectedChatIdRef = useRef<string>("")
   const selectedChatIdRef = useRef<string>("")
   const mqttClientRef = useRef<any>(null)
+  const startupCurtainResolvedRef = useRef(false)
+  const startupCurtainStartedAtRef = useRef(Date.now())
   const lastOperatorStateRef = useRef<Record<string, boolean>>({})
   const operatorRequestInFlightRef = useRef<Record<string, boolean>>({})
   const pendingOperatorStateRef = useRef<Record<string, boolean | undefined>>({})
@@ -117,6 +123,45 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     nextChatId: string
   } | null>(null)
   const [finishingAttention, setFinishingAttention] = useState(false)
+
+  const dismissStartupCurtain = useCallback(() => {
+    if (startupCurtainResolvedRef.current) return
+    startupCurtainResolvedRef.current = true
+
+    const elapsed = Date.now() - startupCurtainStartedAtRef.current
+    setShowStartupCurtain(true)
+    setStartupCurtainLeaving(false)
+    window.setTimeout(() => {
+      window.requestAnimationFrame(() => {
+        setStartupCurtainLeaving(true)
+        window.setTimeout(() => setShowStartupCurtain(false), 850)
+      })
+    }, Math.max(0, 600 - elapsed))
+  }, [])
+
+  const showConnectionCurtain = useCallback(() => {
+    startupCurtainResolvedRef.current = false
+    startupCurtainStartedAtRef.current = Date.now()
+    setStartupCurtainLeaving(false)
+    setShowStartupCurtain(true)
+  }, [])
+
+  useEffect(() => {
+    if (!showStartupCurtain) return
+    const fallback = window.setTimeout(dismissStartupCurtain, 3000)
+    return () => window.clearTimeout(fallback)
+  }, [dismissStartupCurtain, showStartupCurtain])
+
+  useEffect(() => {
+    const reconnectWhenVisible = () => {
+      if (document.visibilityState === "visible" && !panelMqttConnected) {
+        showConnectionCurtain()
+      }
+    }
+
+    document.addEventListener("visibilitychange", reconnectWhenVisible)
+    return () => document.removeEventListener("visibilitychange", reconnectWhenVisible)
+  }, [panelMqttConnected, showConnectionCurtain])
 
 
   // Obtenemos el objeto del chat seleccionado a partir del estado.
@@ -331,7 +376,10 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
 
   useEffect(() => {
     const brokerUrl = mqttWebSocketUrl()
-    if (!brokerUrl) return
+    if (!brokerUrl) {
+      dismissStartupCurtain()
+      return
+    }
     const client = mqtt.connect(brokerUrl, {
       clean: true,
       reconnectPeriod: 2000,
@@ -341,6 +389,8 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
 
     client.on("connect", () => {
       setPanelMqttConnected(true)
+      startupCurtainResolvedRef.current = false
+      dismissStartupCurtain()
       client.subscribe("sidebar/chat")
       client.subscribe("status_bot/chat/+")
       client.subscribe("operator/chat/+")
@@ -442,14 +492,17 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
           if (existingChat) {
             const isDuplicateUpdate =
               existingChat.lastMessage === data.lastMessage &&
-              existingChat.timestamp === data.timestamp
+              existingChat.sidebar_timestamp === (data.timestamp ?? null)
 
             return prevChats.map((c) =>
               String(c.id) === chatId
                 ? {
                   ...c,
                   lastMessage: data.lastMessage,
-                  timestamp: data.timestamp,
+                  // La fecha que trae el canal externo puede estar desfasada.
+                  // Para la lista usamos el momento real en que llega al panel.
+                  timestamp: new Date().toISOString(),
+                  sidebar_timestamp: data.timestamp ?? null,
                   avatar: data.avatar ?? c.avatar ?? null,
                   status: data.status ?? c.status,
                   attention_status: data.attention_status ?? c.attention_status,
@@ -471,7 +524,8 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
                 id: chatId,
                 name: data.name,
                 lastMessage: data.lastMessage,
-                timestamp: data.timestamp,
+                timestamp: new Date().toISOString(),
+                sidebar_timestamp: data.timestamp ?? null,
                 unread: 1,
                 online: false,
                 avatar: data.avatar ?? null,
@@ -498,7 +552,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
         mqttClientRef.current = null
       }
     }
-  }, [])
+  }, [dismissStartupCurtain])
 
   const updateOperatorPresence = async (chatId: string, active: boolean, keepalive = false) => {
     // La asignación ya la resuelve el backend al entrar al handoff. Abrir o salir no la modifica.
@@ -851,24 +905,13 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
         </div>
       )}
 
-      {!panelMqttConnected && (
-        <div className="absolute inset-0 z-[9998] flex items-center justify-center bg-black/55 backdrop-blur-[1px]">
-          <div className="rounded-lg border border-white/20 bg-black/55 px-4 py-3 text-center text-white">
-            <div className="mb-2 flex items-center justify-center">
-              <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10">
-                <WifiOff className="h-5 w-5" />
-              </span>
-            </div>
-            <div className="text-sm font-semibold">Error de red</div>
-            <div className="mt-1 text-xs text-white/85">
-              No hay conexión con el servidor MQTT (posible caída del servicio o red inestable).
-            </div>
-            <div className="mt-1 text-xs text-white/85">
-              El panel quedó bloqueado para evitar acciones no sincronizadas. Si persiste, contacta al área de TICs.
-            </div>
-          </div>
-        </div>
-      )}
+      <StartupCurtain
+        visible={showStartupCurtain || !panelMqttConnected}
+        leaving={startupCurtainLeaving && panelMqttConnected}
+        logoSrc={`${import.meta.env.VITE_APP_URL}/images/hu_icon_new.png`}
+        subtitle="Conectando el panel de atención"
+        error={!showStartupCurtain && !panelMqttConnected ? "reconnecting" : undefined}
+      />
     </div>
   )
 }

@@ -56,7 +56,7 @@ export default function Login({ status }) {
                                 </span>
                             </div>
                             <p className="mt-3 text-sm leading-6 text-blue-100">
-                                Accede con tus credenciales para administrar el sistema de turnos.
+                                Accede con tus credenciales para administrar el sistema.
                             </p>
                         </div>
 

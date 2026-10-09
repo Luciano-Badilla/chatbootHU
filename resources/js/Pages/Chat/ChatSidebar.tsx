@@ -1,7 +1,8 @@
 "use client"
 
 import { useState, useMemo, useEffect } from "react"
-import { Bot, ChevronDown, ChevronRight, Headset, Search, User } from "lucide-react"
+import { motion } from "framer-motion"
+import { Archive, Bot, Clock3, Globe2, Headset, MessageCircle, Search, User } from "lucide-react"
 import { Input } from "shadcn/components/ui/input"
 import { Avatar } from "shadcn/components/ui/avatar"
 import { Badge } from "shadcn/components/ui/badge"
@@ -15,35 +16,6 @@ interface ChatSidebarProps {
   selectedChatId: string
   onSelectChat: (chatId: string) => void
   canViewAll?: boolean
-}
-
-function InboxAccordionButton({
-  label,
-  count,
-  active,
-  expanded,
-  onClick,
-}: {
-  label: string
-  count: number
-  active: boolean
-  expanded: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm font-semibold transition-colors",
-        active ? "border-[#013765]/30 bg-[#e8f0f8] text-[#013765]" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
-      )}
-    >
-      {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-      <span className="flex-1">{label}</span>
-      <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-medium text-slate-600">{count}</span>
-    </button>
-  )
 }
 
 function InboxChats({
@@ -79,11 +51,23 @@ function InboxChats({
       {chats.map((chat) => {
         const selected = String(chat.id) === String(selectedChatId)
         return (
-          <button
+          <motion.button
             key={chat.id}
             type="button"
             onClick={() => onSelectChat(chat.id)}
-            className={cn("flex w-full items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-slate-50", selected && "bg-[#dce8f5]")}
+            layout="position"
+            transition={{
+              layout: {
+                duration: 0.42,
+                ease: [0.22, 1, 0.36, 1],
+              },
+            }}
+            className={cn(
+              "group flex w-full items-center gap-3 px-3 py-3 text-left transition-[background-color,color,box-shadow] duration-200 hover:bg-[#013765] hover:text-white",
+              selected
+                ? "bg-[#b9d8ee] shadow-[inset_4px_0_0_#013765]"
+                : "hover:shadow-[inset_3px_0_0_#7fc7ff]",
+            )}
           >
             <Avatar className="h-10 w-10 shrink-0 overflow-hidden bg-[#2b5f90] text-white">
               {chat.avatar && !failedAvatars[String(chat.id)] ? (
@@ -92,34 +76,69 @@ function InboxChats({
             </Avatar>
             <span className="min-w-0 flex-1">
               <span className="flex items-center justify-between gap-2">
-                <span className={cn("truncate text-sm font-semibold", selected ? "text-[#013765]" : "text-slate-800")}>{chat.name}</span>
-                <span className="shrink-0 text-xs text-slate-500">{formatTimestamp(chat.timestamp)}</span>
+                <span className={cn("truncate text-sm font-semibold group-hover:text-white", selected ? "text-[#013765]" : "text-slate-800")}>{chat.name}</span>
+                <span className="shrink-0 text-xs text-slate-500 group-hover:text-slate-200">{formatTimestamp(chat.timestamp)}</span>
               </span>
               <span className="mt-0.5 flex items-center gap-2">
-                <span className="truncate text-sm text-slate-500">{formatPreview(chat.lastMessage)}</span>
-                {chat.bot_enabled && <Bot className="h-3.5 w-3.5 shrink-0 text-blue-700" />}
+                <span className="truncate text-sm text-slate-500 group-hover:text-slate-100">{formatPreview(chat.lastMessage)}</span>
+                {chat.bot_enabled && <Bot className="h-3.5 w-3.5 shrink-0 text-blue-700 group-hover:text-sky-200" />}
                 {(chat.unread ?? 0) > 0 && <Badge className="h-5 min-w-5 bg-[#013765] text-xs text-white">{chat.unread}</Badge>}
               </span>
               {showAssignment && chat.operator_id && (
-                <span className={cn("mt-1 inline-flex max-w-full items-center gap-1 text-xs", selected ? "text-[#013765]/80" : "text-slate-500")}>
+                <span className={cn("mt-1 inline-flex max-w-full items-center gap-1 text-xs group-hover:text-slate-200", selected ? "text-[#013765]/80" : "text-slate-500")}>
                   <Headset className="h-3.5 w-3.5 shrink-0" />
                   <span className="truncate">Asignado a: {chat.operator_name ?? `Operador #${chat.operator_id}`}</span>
                 </span>
               )}
             </span>
-          </button>
+          </motion.button>
         )
       })}
     </div>
   )
 }
 
+function CompactFilterButton({
+  label,
+  count,
+  active,
+  onClick,
+  Icon,
+  tooltipAlign = "center",
+}: {
+  label: string
+  count: number
+  active: boolean
+  onClick: () => void
+  Icon: any
+  tooltipAlign?: "start" | "center"
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      aria-pressed={active}
+      className={cn(
+        "group relative grid h-8 w-8 place-items-center rounded-full border transition",
+        active
+          ? "border-[#013765] bg-[#013765] text-white shadow-sm"
+          : "border-slate-200 bg-white text-slate-500 hover:border-[#013765]/45 hover:bg-[#e8f0f6] hover:text-[#013765]",
+      )}
+    >
+      <Icon className="h-4 w-4" />
+      {count > 0 && <span className={cn("absolute -right-1.5 -top-1.5 grid min-w-4 h-4 place-items-center rounded-full px-1 text-[9px] font-bold", active ? "bg-white text-[#013765]" : "bg-slate-200 text-slate-600")}>{count}</span>}
+      <span role="tooltip" className={cn("pointer-events-none absolute top-full z-40 mt-2 whitespace-nowrap rounded-md bg-[#013765] px-2 py-1 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100", tooltipAlign === "start" ? "left-4" : "left-1/2 -translate-x-1/2")}>{label}</span>
+    </button>
+  )
+}
+
 export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canViewAll = false }: ChatSidebarProps) {
   const [search, setSearch] = useState("")
-  const [inbox, setInbox] = useState<"bot" | "assigned" | "pending_assignment" | "archived">(
-    () => canViewAll ? "bot" : "assigned",
+  const [statusFilters, setStatusFilters] = useState<Array<"bot" | "assigned" | "pending_assignment" | "archived">>(
+    () => canViewAll ? [] : ["assigned"],
   )
-  const [inboxExpanded, setInboxExpanded] = useState(true)
+  const [channelFilters, setChannelFilters] = useState<Array<"whatsapp" | "webchat">>([])
   const [now, setNow] = useState(Date.now())
   const [failedAvatars, setFailedAvatars] = useState<Record<string, boolean>>({})
 
@@ -225,14 +244,19 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canVi
     return () => clearInterval(interval)
   }, [])
 
-  // ðŸ”¹ Filtrar + ordenar: primero no leÃ­dos, luego por timestamp desc
+  // Filtrar + ordenar por la última actividad: abrir un chat no debe bajarlo
+  // solo por haber marcado sus mensajes como leídos.
   const visibleChats = useMemo(() => {
     const query = search.toLowerCase()
     const phoneQuery = normalizePhone(search)
 
     const filtered = chats.filter((chat) => {
-      const belongsToInbox = chat.attention_status === inbox
-      return belongsToInbox && (
+      const chatStatus = chat.attention_status as "bot" | "assigned" | "pending_assignment" | "archived"
+      const chatChannel = chat.channel === "webchat" ? "webchat" : "whatsapp"
+      const matchesStatus = statusFilters.length === 0 || statusFilters.includes(chatStatus)
+      const matchesChannel = channelFilters.length === 0 || channelFilters.includes(chatChannel)
+
+      return matchesStatus && matchesChannel && (
         chat.name.toLowerCase().includes(query) ||
         formatLastMessagePreview(chat.lastMessage).toLowerCase().includes(query) ||
         (phoneQuery.length > 0 && normalizePhone(chat.number).includes(phoneQuery))
@@ -240,24 +264,12 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canVi
     })
 
     return [...filtered].sort((a, b) => {
-      const aHasUnread = (a.unread ?? 0) > 0
-      const bHasUnread = (b.unread ?? 0) > 0
+      const dateA = a.timestamp ? new Date(a.timestamp.replace(" ", "T")).getTime() : 0
+      const dateB = b.timestamp ? new Date(b.timestamp.replace(" ", "T")).getTime() : 0
 
-      // primero los que tienen no leÃ­dos
-      if (aHasUnread !== bHasUnread) {
-        return aHasUnread ? -1 : 1
-      }
-
-      // si ambos estÃ¡n en el mismo estado de unread, ordenar por timestamp (mÃ¡s nuevo primero)
-      if (a.timestamp && b.timestamp) {
-        const dateA = new Date(a.timestamp).getTime()
-        const dateB = new Date(b.timestamp).getTime()
-        return dateB - dateA
-      }
-
-      return 0
+      return dateB - dateA
     })
-  }, [search, chats, inbox])
+  }, [search, chats, statusFilters, channelFilters])
 
   const inboxCounts = useMemo(() => ({
     bot: chats.filter((chat) => chat.attention_status === "bot").length,
@@ -266,21 +278,24 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canVi
     archived: chats.filter((chat) => chat.attention_status === "archived").length,
   }), [chats])
 
-  const toggleInbox = (nextInbox: typeof inbox) => {
-    if (nextInbox === inbox) {
-      setInboxExpanded((expanded) => !expanded)
-      return
-    }
-
-    setInbox(nextInbox)
-    setInboxExpanded(true)
+  const toggleStatusFilter = (filter: "bot" | "assigned" | "pending_assignment" | "archived") => {
+    setStatusFilters((current) => current.includes(filter) ? current.filter((item) => item !== filter) : [...current, filter])
   }
 
-  const inboxOptions = [
-    ...(canViewAll ? [{ key: "bot" as const, label: "Atendidos por el bot", count: inboxCounts.bot }] : []),
-    { key: "assigned" as const, label: canViewAll ? "Asignados" : "Mis asignados", count: inboxCounts.assigned },
-    ...(canViewAll ? [{ key: "pending_assignment" as const, label: "Pendientes", count: inboxCounts.pending_assignment }] : []),
-    { key: "archived" as const, label: canViewAll ? "Archivados" : "Mis archivados", count: inboxCounts.archived },
+  const toggleChannelFilter = (filter: "whatsapp" | "webchat") => {
+    setChannelFilters((current) => current.includes(filter) ? current.filter((item) => item !== filter) : [...current, filter])
+  }
+
+  const statusFilterOptions = [
+    ...(canViewAll ? [{ key: "bot" as const, label: "Atendidos por bot", icon: Bot, count: inboxCounts.bot }] : []),
+    { key: "assigned" as const, label: canViewAll ? "Asignados" : "Mis asignados", icon: Headset, count: inboxCounts.assigned },
+    ...(canViewAll ? [{ key: "pending_assignment" as const, label: "Pendientes de asignación", icon: Clock3, count: inboxCounts.pending_assignment }] : []),
+    { key: "archived" as const, label: canViewAll ? "Archivados" : "Mis archivados", icon: Archive, count: inboxCounts.archived },
+  ]
+
+  const channelFilterOptions = [
+    { key: "whatsapp" as const, label: "WhatsApp", icon: MessageCircle, count: chats.filter((chat) => chat.channel !== "webchat").length },
+    { key: "webchat" as const, label: "Webchat", icon: Globe2, count: chats.filter((chat) => chat.channel === "webchat").length },
   ]
 
   function formatTimestamp(timestamp?: string) {
@@ -329,13 +344,6 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canVi
           <h1 className="text-xl font-semibold text-foreground">Mensajes</h1>
         </div>
 
-        <div className="hidden">
-          {canViewAll && <InboxAccordionButton label="Atendidos por el bot" count={inboxCounts.bot} active={inbox === "bot"} expanded={inbox === "bot" && inboxExpanded} onClick={() => toggleInbox("bot")} />}
-          <InboxAccordionButton label={canViewAll ? "Asignados" : "Mis asignados"} count={inboxCounts.assigned} active={inbox === "assigned"} expanded={inbox === "assigned" && inboxExpanded} onClick={() => toggleInbox("assigned")} />
-          {canViewAll && <InboxAccordionButton label="Pendientes" count={inboxCounts.pending_assignment} active={inbox === "pending_assignment"} expanded={inbox === "pending_assignment" && inboxExpanded} onClick={() => toggleInbox("pending_assignment")} />}
-          <InboxAccordionButton label={canViewAll ? "Archivados" : "Mis archivados"} count={inboxCounts.archived} active={inbox === "archived"} expanded={inbox === "archived" && inboxExpanded} onClick={() => toggleInbox("archived")} />
-        </div>
-
         <div className="relative">
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
@@ -345,28 +353,20 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canVi
             className="pl-10 border-gray-300 bg-white text-black"
           />
         </div>
+
+        <div className="mt-3 flex items-center justify-between gap-3" aria-label="Filtros de conversaciones">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {statusFilterOptions.map((option, index) => <CompactFilterButton key={option.key} label={option.label} count={option.count} active={statusFilters.includes(option.key)} onClick={() => toggleStatusFilter(option.key)} Icon={option.icon} tooltipAlign={index === 0 ? "start" : "center"} />)}
+          </div>
+          <div className="h-6 w-px shrink-0 bg-slate-200" />
+          <div className="flex items-center gap-1.5">
+            {channelFilterOptions.map((option) => <CompactFilterButton key={option.key} label={option.label} count={option.count} active={channelFilters.includes(option.key)} onClick={() => toggleChannelFilter(option.key)} Icon={option.icon} />)}
+          </div>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto custom-scrollbar">
-        {inboxOptions.map((option) => {
-          const expanded = inbox === option.key && inboxExpanded
-          return (
-            <details key={option.key} open={expanded} className="overflow-hidden border-b border-slate-200 last:border-b-0">
-              <summary
-                onClick={(event) => {
-                  event.preventDefault()
-                  toggleInbox(option.key)
-                }}
-                className={cn("flex cursor-pointer list-none items-center gap-2 px-3 py-3 text-sm font-semibold", expanded ? "bg-[#e8f0f8] text-[#013765]" : "text-slate-700 hover:bg-slate-50")}
-              >
-                {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                <span className="flex-1">{option.label}</span>
-                <Badge variant="secondary" className="bg-slate-100 text-slate-600">{option.count}</Badge>
-              </summary>
-              {expanded && <InboxChats chats={visibleChats} selectedChatId={selectedChatId} onSelectChat={handleSelectChat} formatTimestamp={formatTimestamp} formatPreview={formatLastMessagePreview} showAssignment={canViewAll} />}
-            </details>
-          )
-        })}
+        <InboxChats chats={visibleChats} selectedChatId={selectedChatId} onSelectChat={handleSelectChat} formatTimestamp={formatTimestamp} formatPreview={formatLastMessagePreview} showAssignment={canViewAll} />
       </div>
 
       {false && <div className="flex-1 overflow-y-auto custom-scrollbar">

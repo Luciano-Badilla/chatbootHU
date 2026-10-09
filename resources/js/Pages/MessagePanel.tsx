@@ -30,7 +30,7 @@ function OperatorStatusSelect() {
     } finally { setSaving(false) }
   }
 
-  return <Select value={availability} onValueChange={(value) => void changeAvailability(value as Availability)} disabled={saving}><SelectTrigger className="h-9 w-44 border-white/20 bg-white/10 text-sm text-white hover:bg-white/15"><SelectValue /></SelectTrigger><SelectContent>{(Object.keys(statusOptions) as Availability[]).map((value) => { const option = statusOptions[value]; const Icon = option.icon; return <SelectItem key={value} value={value}><span className="flex items-center gap-2"><Icon className={`h-4 w-4 ${option.className.replace("300", "600")}`} />{option.label}</span></SelectItem> })}</SelectContent></Select>
+  return <Select value={availability} onValueChange={(value) => void changeAvailability(value as Availability)} disabled={saving}><SelectTrigger className="h-9 w-44 rounded-xl border-white/20 bg-white/10 text-sm text-white hover:bg-white/15"><SelectValue /></SelectTrigger><SelectContent>{(Object.keys(statusOptions) as Availability[]).map((value) => { const option = statusOptions[value]; const Icon = option.icon; return <SelectItem key={value} value={value}><span className="flex items-center gap-2"><Icon className={`h-4 w-4 ${option.className.replace("300", "600")}`} />{option.label}</span></SelectItem> })}</SelectContent></Select>
 }
 
 export default function MessagePanel() {

@@ -10,8 +10,11 @@ use App\Models\SystemSetting;
 use App\Services\WebchatAvailabilityService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Inertia\Inertia;
+use PhpMqtt\Client\ConnectionSettings;
+use PhpMqtt\Client\MqttClient;
 
 class WebchatController extends Controller
 {
@@ -148,6 +151,12 @@ class WebchatController extends Controller
         }
 
         $chat->refresh();
+
+        if ($shouldRestart) {
+            // El panel interno no conoce la respuesta HTTP del webchat. Avisamos
+            // por MQTT que este chat volvió a ser atendido por el bot.
+            $this->publishRestartedChatStatus($chat);
+        }
 
         return response()->json([
             'ok' => true,
@@ -325,6 +334,50 @@ class WebchatController extends Controller
             'operator_name' => $chat->operator?->name,
             'messages' => $chat->messages()->orderBy('id')->get(),
         ];
+    }
+
+    private function publishRestartedChatStatus(Chat $chat): void
+    {
+        $host = env('MQTT_HOST') ?: env('VITE_MOSQUITTO_HOST');
+        if (! $host) {
+            Log::warning('MQTT host not configured for webchat restart status.', ['chat_id' => $chat->id]);
+
+            return;
+        }
+
+        try {
+            $mqtt = new MqttClient((string) $host, 1883, 'laravel_webchat_restart_'.uniqid());
+            $settings = (new ConnectionSettings())
+                ->setConnectTimeout(2)
+                ->setSocketTimeout(2);
+            $mqtt->connect($settings);
+
+            $mqtt->publish("status_bot/chat/{$chat->id}", json_encode([
+                'chat_id' => $chat->id,
+                'status' => $chat->bot_enabled ? 'enabled' : 'disabled',
+            ]), 0);
+            $mqtt->publish("operator/chat/{$chat->id}", json_encode([
+                'chat_id' => (int) $chat->id,
+                'active' => false,
+                'operator_id' => null,
+                'operator_name' => null,
+                'status' => $chat->status,
+                'attention_status' => $chat->attention_status,
+                'bot_enabled' => (bool) $chat->bot_enabled,
+                'assigned_at' => null,
+                'closed_at' => null,
+                'closed_by' => null,
+                'bot_flow_id' => $chat->bot_flow_id ? (int) $chat->bot_flow_id : null,
+                'bot_node_id' => $chat->bot_node_id ? (int) $chat->bot_node_id : null,
+                'bot_step' => $chat->bot_step,
+                'bot_state' => $chat->bot_state,
+            ]), 0);
+            $mqtt->disconnect();
+        } catch (\Throwable $e) {
+            Log::warning('MQTT Error (webchat restart status): '.$e->getMessage(), [
+                'chat_id' => $chat->id,
+            ]);
+        }
     }
 
     private function settings(): array

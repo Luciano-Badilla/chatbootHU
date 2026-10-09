@@ -612,58 +612,6 @@ export default function ChatMain({
     }
   }, [chat?.id])
 
-  // 🔹 Scroll al último mensaje
-  useEffect(() => {
-    if (!chat) return
-
-    let cancelled = false
-
-    const syncMessages = async () => {
-      try {
-        const res = await fetch(`${import.meta.env.VITE_APP_URL}/api/chat/messages/${chat.id}?limit=50`)
-        if (!res.ok || cancelled) return
-
-        const data = await res.json()
-        const rows = Array.isArray(data) ? data : data.messages
-        if (!Array.isArray(rows)) return
-
-        const syncedMessages = rows.map(mapApiMessage)
-        const syncedById = new Map(syncedMessages.map((message) => [String(message.id), message]))
-
-        setMessages((prev) => {
-          const currentIds = new Set(prev.map((message) => String(message.id)))
-          const updated = prev.map((message) => {
-            const synced = syncedById.get(String(message.id))
-            if (!synced) return message
-
-            return {
-              ...message,
-              ...synced,
-              status: pickNewestMessageStatus(message.status, synced.status),
-            }
-          })
-          const missing = syncedMessages.filter((message) => !currentIds.has(String(message.id)))
-
-          return [...updated, ...missing].sort((a, b) => {
-            return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-          })
-        })
-      } catch (error) {
-        console.error("Error sincronizando mensajes:", error)
-      }
-    }
-
-    void syncMessages()
-    const interval = window.setInterval(() => {
-      void syncMessages()
-    }, 1200)
-
-    return () => {
-      cancelled = true
-      window.clearInterval(interval)
-    }
-  }, [chat?.id])
-
   useEffect(() => {
     if (searchOpen && searchQuery.trim()) return
     if (prependingMessagesRef.current) {

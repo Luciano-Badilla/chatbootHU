@@ -1,10 +1,11 @@
-import { Fragment, FormEvent, type ReactNode, useEffect, useRef, useState } from "react"
+import { Fragment, FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 import mqtt from "mqtt"
 import { Gallery, Item } from "react-photoswipe-gallery"
 import "photoswipe/dist/photoswipe.css"
-import { ArrowUp, AudioLines, Bell, BellOff, Check, ChevronDown, Clock3, Contact, FileText, Headset, ImageIcon, Info, Loader2, MapPin, Menu, MessageCircle, Mic, Play, Plus, Search, Send, Share, Square, User, WifiOff, Wrench, X } from "lucide-react"
+import { ArrowUp, AudioLines, Bell, BellOff, Check, ChevronDown, Clock3, Contact, FileText, Headset, ImageIcon, Info, Loader2, MapPin, Menu, MessageCircle, Mic, Play, Plus, Search, Send, Share, Square, User, Wrench, X } from "lucide-react"
 import { toast } from "sonner"
 import { mqttWebSocketUrl } from "../lib/mqtt"
+import StartupCurtain from "../Components/StartupCurtain"
 
 type Option = { id: string; label: string; description?: string; kind?: string }
 type RetryPayload = { message: string; optionId?: string }
@@ -292,6 +293,9 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState("")
   const [mqttStatus, setMqttStatus] = useState<"connecting" | "connected" | "reconnecting" | "offline" | "error">("connecting")
+  const [mqttStartupPending, setMqttStartupPending] = useState(true)
+  const [showStartupCurtain, setShowStartupCurtain] = useState(true)
+  const [startupCurtainLeaving, setStartupCurtainLeaving] = useState(false)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const [operatorName, setOperatorName] = useState("")
   const [botEnabled, setBotEnabled] = useState(true)
@@ -336,6 +340,30 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   const recordingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const discardAudioRecordingRef = useRef(false)
   const startingAudioRecordingRef = useRef(false)
+  const startupCurtainResolvedRef = useRef(false)
+  const startupCurtainStartedAtRef = useRef(Date.now())
+
+  const dismissStartupCurtain = useCallback(() => {
+    if (startupCurtainResolvedRef.current) return
+    startupCurtainResolvedRef.current = true
+    const elapsed = Date.now() - startupCurtainStartedAtRef.current
+    setShowStartupCurtain(true)
+    setStartupCurtainLeaving(false)
+    window.setTimeout(() => {
+      window.requestAnimationFrame(() => {
+        setStartupCurtainLeaving(true)
+        window.setTimeout(() => setShowStartupCurtain(false), 850)
+      })
+    }, Math.max(0, 600 - elapsed))
+  }, [])
+
+  const showConnectionCurtain = useCallback(() => {
+    startupCurtainResolvedRef.current = false
+    startupCurtainStartedAtRef.current = Date.now()
+    setStartupCurtainLeaving(false)
+    setShowStartupCurtain(true)
+    setMqttStartupPending(true)
+  }, [])
 
   const api = async (path: string, data: Record<string, unknown>) => {
     const response = await fetch(`${import.meta.env.VITE_APP_URL}/api/webchat/${path}`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(data) })
@@ -387,6 +415,17 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current)
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop())
   }, [])
+
+  useEffect(() => {
+    if (loading || (token && mqttStartupPending) || startupCurtainResolvedRef.current) return
+    dismissStartupCurtain()
+  }, [dismissStartupCurtain, loading, mqttStartupPending, token])
+
+  useEffect(() => {
+    if (!showStartupCurtain) return
+    const fallback = window.setTimeout(dismissStartupCurtain, 3000)
+    return () => window.clearTimeout(fallback)
+  }, [dismissStartupCurtain, showStartupCurtain])
 
   const openIosInstallHelp = () => {
     setIsClosingIosInstallHelp(false)
@@ -534,10 +573,33 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   }, [token, messages])
 
   useEffect(() => {
+    if (!token) {
+      setMqttStartupPending(false)
+      return
+    }
+
+    setMqttStartupPending(true)
+    const fallback = window.setTimeout(() => setMqttStartupPending(false), 3000)
+    return () => window.clearTimeout(fallback)
+  }, [token])
+
+  useEffect(() => {
+    const reconnectWhenVisible = () => {
+      if (document.visibilityState !== "visible" || !token || mqttStatus === "connected") return
+      showConnectionCurtain()
+      window.setTimeout(() => setMqttStartupPending(false), 3000)
+    }
+
+    document.addEventListener("visibilitychange", reconnectWhenVisible)
+    return () => document.removeEventListener("visibilitychange", reconnectWhenVisible)
+  }, [mqttStatus, showConnectionCurtain, token])
+
+  useEffect(() => {
     if (!token) return
     const brokerUrl = mqttWebSocketUrl()
     if (!brokerUrl) {
       setMqttStatus("error")
+      setMqttStartupPending(false)
       return
     }
     setMqttStatus("connecting")
@@ -548,6 +610,8 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     })
     client.on("connect", () => {
       setMqttStatus("connected")
+      setMqttStartupPending(false)
+      dismissStartupCurtain()
       client.subscribe(`webchat/${token}`)
     })
     client.on("reconnect", () => setMqttStatus("reconnecting"))
@@ -579,7 +643,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     return () => {
       client.end(true)
     }
-  }, [token])
+  }, [dismissStartupCurtain, token])
 
   useEffect(() => {
     if (loading || profileRequired || !scrollToInitialMessagesRef.current) return
@@ -836,18 +900,21 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     setAttachmentMenuOpen(false)
     setError("")
     setFailedOutgoing(null)
+    // Limpiamos de forma optimista para que el compositor responda de inmediato.
+    // Si el envío falla, se recupera el texto para que no se pierda.
+    setDraft("")
     setSending(true)
     const retryPayload = { message, optionId }
 
     try {
       const data = await api("send", { resume_token: token, message, option_id: optionId })
       append(data.message)
-      setDraft("")
       scrollToNewComposerMessage()
       return true
     } catch (exception) {
       const failureMessage = exception instanceof Error ? exception.message : "No se pudo enviar el mensaje."
       setError(failureMessage)
+      setDraft((current) => current || message)
       setFailedOutgoing(retryPayload)
       return false
     } finally { setSending(false) }
@@ -1178,7 +1245,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     if (!sent) optionSelectionLockRef.current.delete(messageKey)
   }
 
-  const hasMqttConnectionIssue = Boolean(token) && ["reconnecting", "offline", "error"].includes(mqttStatus)
+  const hasMqttConnectionIssue = !mqttStartupPending && Boolean(token) && ["reconnecting", "offline", "error"].includes(mqttStatus)
   const channelStatus = hasMqttConnectionIssue
     ? { label: "Sin conexión", dot: "bg-red-300" }
     : !channelAvailability.enabled
@@ -1199,6 +1266,14 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
 
   return (
     <main className="h-[100dvh] overflow-hidden bg-[#f4f7fa] p-0 font-sans text-slate-800 sm:p-5 lg:p-7">
+      <StartupCurtain
+        visible={showStartupCurtain || hasMqttConnectionIssue}
+        leaving={startupCurtainLeaving && !hasMqttConnectionIssue}
+        logoSrc={webchat.logo_url ? publicAssetUrl(webchat.logo_url) : `${import.meta.env.VITE_APP_URL}/images/hu_icon_new.png`}
+        title={webchat.title}
+        subtitle="Preparando tu conversación"
+        error={hasMqttConnectionIssue ? "reconnecting" : undefined}
+      />
       <section className="relative mx-auto flex h-full w-full max-w-[1060px] flex-col overflow-hidden bg-white shadow-[0_20px_50px_rgba(21,49,79,0.12)] sm:rounded-[24px] sm:border sm:border-slate-200">
         <header className="relative shrink-0 overflow-hidden bg-[#003f73] px-5 py-4 text-white sm:px-7 sm:py-5">
           <div className="pointer-events-none absolute -right-12 -top-24 h-56 w-56 rounded-full border-[28px] border-white/[0.06]" />
@@ -1209,16 +1284,6 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
             <div className="ml-auto flex shrink-0 items-center gap-2"><button type="button" onClick={() => setInfoSheetOpen(true)} title="Información de la conversación" aria-label="Información de la conversación" className="grid h-9 w-9 place-items-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20"><Info className="h-4 w-4" /></button><button type="button" onClick={enableNotifications} title={notificationPermission === "granted" ? "Notificaciones activadas" : notificationPermission === "denied" ? "Notificaciones bloqueadas. Habilitalas desde la configuración del navegador." : "Activar notificaciones"} aria-label={notificationPermission === "granted" ? "Notificaciones activadas" : "Activar notificaciones"} className="grid h-9 w-9 place-items-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20">{notificationPermission === "granted" ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}</button></div>
           </div>
         </header>
-
-        {hasMqttConnectionIssue ? (
-          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/55 px-5 text-center backdrop-blur-[1px]">
-            <div className="max-w-sm rounded-lg border border-white/20 bg-black/55 px-5 py-4 text-white shadow-xl">
-              <span className="mx-auto inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/10"><WifiOff className="h-5 w-5" /></span>
-              <p className="mt-3 text-sm font-semibold">Se interrumpió la conexión</p>
-              <p className="mt-1 text-xs leading-5 text-white/85">Estamos intentando restablecerla para actualizar el chat.</p>
-            </div>
-          </div>
-        ) : null}
 
         <WebchatBottomSheet open={infoSheetOpen} onClose={() => setInfoSheetOpen(false)}><div className="flex items-start justify-between gap-4 px-5 pb-4 pt-4"><div><p className="text-lg font-bold tracking-tight text-slate-800">Información de la conversación</p><p className="mt-1 text-sm text-slate-500">Todo lo importante de tu atención en un solo lugar.</p></div><button type="button" onClick={() => setInfoSheetOpen(false)} aria-label="Cerrar información" className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-slate-500 transition hover:bg-slate-100"><X className="h-4 w-4" /></button></div><div className="border-t border-slate-100 px-5 py-5"><div className="flex items-center gap-3 rounded-2xl bg-[#e8f0f6] p-4"><span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-white p-2 text-[#003f73] shadow-sm">{isOperatorHandling ? <Headset className="h-6 w-6" /> : <img src={webchat.logo_url ? publicAssetUrl(webchat.logo_url) : `${import.meta.env.VITE_APP_URL}/images/hu_icon_new.png`} alt="" className="h-full w-full object-contain" />}</span><span className="min-w-0"><span className="block text-sm font-bold text-slate-800">{attentionTitle}</span><span className="mt-0.5 block text-xs leading-5 text-slate-600">{attentionDescription}</span></span></div><div className="mt-5 space-y-3"><div className="rounded-2xl border border-slate-200 bg-white p-4"><div className="flex items-start gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e8f0f6] text-[#003f73]"><MessageCircle className="h-5 w-5" /></span><span className="min-w-0 flex-1"><span className="block text-sm font-bold text-slate-800">Estado del canal</span><span className="mt-1 flex items-center gap-1.5 text-xs text-slate-500"><span className={`h-2 w-2 rounded-full ${channelStatus.dot}`} />{channelStatus.label}</span></span></div><p className="mt-3 border-t border-slate-100 pt-3 text-xs leading-5 text-slate-500">{messages.length ? `Esta conversación tiene ${messages.length} mensaje${messages.length === 1 ? "" : "s"}.` : "Todavía no hay mensajes en esta conversación."}</p></div><div className="rounded-2xl border border-slate-200 bg-white p-4"><div className="flex items-start gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e8f0f6] text-[#003f73]"><Bell className="h-5 w-5" /></span><span className="min-w-0 flex-1"><span className="block text-sm font-bold text-slate-800">Notificaciones</span><span className="mt-1 block text-xs leading-5 text-slate-500">{notificationPermission === "granted" ? "Te avisaremos cuando recibas una respuesta con el chat cerrado." : "Activá los avisos para enterarte cuando llegue una respuesta."}</span></span></div>{notificationPermission !== "granted" ? <button type="button" onClick={() => void enableNotifications()} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-[#003f73]/20 bg-[#e8f0f6] px-3 py-2.5 text-sm font-semibold text-[#003f73] transition hover:bg-[#dcebf3]"><Bell className="h-4 w-4" />Activar notificaciones</button> : <div className="mt-3 inline-flex items-center gap-2 text-xs font-semibold text-emerald-700"><Check className="h-4 w-4" />Notificaciones activadas</div>}</div><div className="flex items-start gap-3"><span></span></div></div><div className="mt-5"><div className="mb-3 flex items-center justify-between"><div><p className="text-sm font-bold text-slate-800">Archivos compartidos</p><p className="mt-0.5 text-xs text-slate-500">Fotos, videos, audios y documentos de esta conversación.</p></div><span className="rounded-full bg-[#e8f0f6] px-2.5 py-1 text-xs font-bold text-[#003f73]">{sharedMedia.length}</span></div>{sharedMedia.length ? <div className="grid grid-cols-3 gap-2">{sharedMedia.map((media) => { const mediaUrl = getMessageMediaUrl(media); const label = media.media_name || (media.message_type === "audio" ? "Audio" : media.message_type === "document" ? "Documento" : media.message_type === "video" ? "Video" : "Imagen"); return <button key={`shared-media-${media.id}`} type="button" onClick={() => goToMessage(media.id)} aria-label={`Ir al mensaje: ${label}`} className="relative aspect-square overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-left transition hover:-translate-y-0.5 hover:border-[#003f73]/45 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[#003f73]/35">{media.message_type === "image" && mediaUrl ? <img src={mediaUrl} alt={label} className="h-full w-full object-cover" /> : media.message_type === "video" && mediaUrl ? <><video src={mediaUrl} muted playsInline preload="metadata" className="h-full w-full object-cover" /><span className="absolute inset-0 grid place-items-center bg-black/20 text-white"><Play className="h-5 w-5 fill-current drop-shadow" /></span></> : <div className="flex h-full flex-col items-center justify-center gap-1.5 px-2 text-center text-[#003f73]">{media.message_type === "audio" ? <AudioLines className="h-6 w-6" /> : <FileText className="h-6 w-6" />}<span className="line-clamp-2 text-[10px] font-semibold leading-3">{label}</span></div>}<span className="absolute bottom-1 right-1 rounded bg-black/55 px-1.5 py-0.5 text-[9px] font-medium text-white">{media.message_type === "image" ? "Foto" : media.message_type === "video" ? "Video" : media.message_type === "audio" ? "Audio" : "Doc"}</span></button> })}</div> : <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-center text-xs leading-5 text-slate-500">Los archivos que se compartan aparecerán acá.</div>}</div><button type="button" onClick={() => setInfoSheetOpen(false)} className="mt-5 w-full rounded-xl bg-[#003f73] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#003461]">Volver a la conversación</button></div></WebchatBottomSheet>
 

@@ -51,7 +51,10 @@ class ChatController extends Controller
                         : '+'.$chat->contact?->whatsapp_id,
                     'channel' => $chat->channel ?? 'whatsapp',
                     'lastMessage' => $lastMessage?->body ?? '',
-                    'timestamp' => $lastMessage?->created_at,
+                    // `created_at` puede conservar la hora original del proveedor
+                    // (incluso desfasada). La actualización del chat representa la
+                    // actividad real para ordenar el panel.
+                    'timestamp' => $chat->updated_at,
                     'unread' => $chat->messages()->where('status', 'received')->count(),
                     'online' => false,
                     'avatar' => $chat->contact?->profile_pic,

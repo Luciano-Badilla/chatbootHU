@@ -22,6 +22,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use PhpMqtt\Client\ConnectionSettings;
 use PhpMqtt\Client\Exceptions\MqttClientException;
 use PhpMqtt\Client\MqttClient;
 
@@ -707,6 +708,13 @@ class WhatsAppController extends Controller
         $chat = Chat::with('contact')->findOrFail($validated['chat_id']);
         $contact = $chat->contact;
         $actor = $request->user();
+
+        // Desde el mismo panel los operadores pueden contestar chats de
+        // webchat. Esos archivos no deben intentar pasar por la API de Meta:
+        // se guardan localmente y se notifican por el tópico propio del canal.
+        if ($chat->channel === 'webchat') {
+            return $this->sendWebchatMediaFromPanel($chat, $actor, $validated);
+        }
 
         if (! $contact || ! $contact->whatsapp_id) {
             $this->auditService->recordMessageAction(
@@ -1422,9 +1430,63 @@ class WhatsAppController extends Controller
         return match ($normalized) {
             'audio/x-m4a', 'audio/m4a' => 'audio/mp4',
             'audio/mp4a-latm' => 'audio/mp4',
+            // Algunos navegadores/PHP reportan el mismo OGG/Opus grabado como
+            // application/ogg o sin espacio antes de codecs.
+            'application/ogg', 'audio/ogg;codecs=opus', 'audio/ogg; codecs=opus' => 'audio/ogg',
             'audio/x-wav' => 'audio/mpeg', // fallback compatible para algunos navegadores/OS
             default => $normalized !== '' ? $normalized : 'application/octet-stream',
         };
+    }
+
+    /** Guarda y publica multimedia enviada por un operador a un chat webchat. */
+    private function sendWebchatMediaFromPanel(Chat $chat, $actor, array $validated)
+    {
+        $file = request()->file('file');
+        $messageType = $validated['media_kind'] ?? $this->resolveOutgoingMediaType((string) $file->getMimeType());
+        $caption = trim((string) ($validated['caption'] ?? ''));
+        $originalName = (string) ($file->getClientOriginalName() ?: ('file_'.uniqid()));
+        $storedName = uniqid($messageType.'_').'_'.preg_replace('/[^A-Za-z0-9._-]/', '_', $originalName);
+        $localPath = "webchat/{$chat->id}/{$storedName}";
+
+        Storage::disk('public')->put($localPath, file_get_contents($file->getRealPath()));
+
+        $message = Message::create([
+            'chat_id' => $chat->id,
+            'sender' => 'user',
+            'sender_subtype' => 'operator',
+            'operator_name' => $actor?->name,
+            'message_type' => $messageType,
+            'body' => $caption !== '' ? $caption : null,
+            'status' => 'sent',
+            'media_url' => '/storage/'.$localPath,
+            'media_name' => $originalName,
+        ]);
+
+        $this->auditService->recordMessageAction(
+            'media_sent',
+            'Envio archivo manual por webchat',
+            $chat,
+            $actor,
+            $message,
+            ['meta' => ['message_type' => $messageType, 'file_name' => $originalName, 'file_size' => $file->getSize()]],
+        );
+        $this->publishWebchatMessage($chat, $message);
+
+        return response()->json([
+            'ok' => true,
+            'message' => [
+                'id' => $message->id,
+                'chat_id' => $message->chat_id,
+                'sender' => $message->sender,
+                'sender_subtype' => $message->sender_subtype,
+                'operator_name' => $message->operator_name,
+                'message_type' => $message->message_type,
+                'body' => $message->body,
+                'media_url' => $message->media_url,
+                'media_name' => $message->media_name,
+                'timestamp' => $message->created_at->toIso8601String(),
+            ],
+        ]);
     }
 
     private function sniffAudioContainer(string $path): ?string
@@ -1765,6 +1827,14 @@ class WhatsAppController extends Controller
 
     private function handleBotFromDb(Chat $chat, Message $incoming, ?string $interactiveReplyId = null): ?BotNode
     {
+        // El estado puede haber cambiado desde que se recibió el mensaje (por
+        // ejemplo, un operador pausó el bot). Debe validarse antes de tocar un
+        // input pendiente, ya que ese camino también puede generar respuestas.
+        $chat->refresh();
+        if (! $chat->bot_enabled) {
+            return null;
+        }
+
         $pending = $this->getPendingInput($chat);
 
         if ($pending) {
@@ -1847,11 +1917,6 @@ class WhatsAppController extends Controller
             }
 
             return $nextNode;
-        }
-
-        // Ã¢Å“â€¦ 1) Si el bot estÃƒÂ¡ apagado, no respondemos
-        if (! $chat->bot_enabled) {
-            return null;
         }
 
         $flow = $this->ensureChatUsesDefaultFlow($chat);
@@ -4419,12 +4484,23 @@ class WhatsAppController extends Controller
         $actor = $request->user();
         $before = (bool) $chat->bot_enabled;
 
-        try {
-            $chat->bot_enabled = $data['bot_enabled'];
-            $chat->save();
+        // El cambio de estado es la operación principal. MQTT solo propaga el
+        // cambio a las demás pantallas; una caída del broker no debe dejar la
+        // petición HTTP (ni el loader del operador) esperando su conexión.
+        $chat->bot_enabled = $data['bot_enabled'];
+        $chat->save();
 
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_status_bot_'.uniqid());
-            $mqtt->connect();
+        try {
+            $host = env('MQTT_HOST') ?: env('VITE_MOSQUITTO_HOST');
+            if (! $host) {
+                throw new \RuntimeException('MQTT host not configured.');
+            }
+
+            $mqtt = new MqttClient((string) $host, 1883, 'laravel_status_bot_'.uniqid());
+            $settings = (new ConnectionSettings())
+                ->setConnectTimeout(2)
+                ->setSocketTimeout(2);
+            $mqtt->connect($settings);
 
             $mqtt->publish('status_bot/chat/'.$chat->id, json_encode([
                 'chat_id' => $chat->id,
@@ -4433,7 +4509,10 @@ class WhatsAppController extends Controller
 
             $mqtt->disconnect();
         } catch (\Throwable $e) {
-            Log::error('MQTT Error (setVar vars): '.$e->getMessage());
+            Log::warning('MQTT Error (update bot status): '.$e->getMessage(), [
+                'chat_id' => $chat->id,
+                'bot_enabled' => (bool) $chat->bot_enabled,
+            ]);
         }
 
         $this->auditService->recordChatAction(
