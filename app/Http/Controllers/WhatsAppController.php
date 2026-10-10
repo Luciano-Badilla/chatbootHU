@@ -590,11 +590,6 @@ class WhatsAppController extends Controller
         $this->publishWebchatMessage($chat, $message);
 
         try {
-            if ($chat->bot_enabled) {
-                $storedDelay = SystemSetting::query()->where('key', 'webchat.response_delay_seconds')->value('value');
-                $delay = is_numeric($storedDelay) ? (float) $storedDelay : 1.2;
-                usleep((int) (max(0, min($delay, 10)) * 1000000));
-            }
             $nextNode = $this->handleBotFromDb($chat, $message, $interactiveReplyId);
             if ($nextNode) {
                 $this->sendBotNode($chat, $nextNode);
@@ -1671,7 +1666,7 @@ class WhatsAppController extends Controller
                 return;
             }
             $mqtt = new MqttClient((string) $host, 1883, 'laravel_webchat_'.uniqid());
-            $mqtt->connect();
+            $mqtt->connect($this->mqttConnectionSettings());
             $payload = [
                 'chat_id' => $chat->id,
                 'message_id' => $message->id,
@@ -1704,6 +1699,17 @@ class WhatsAppController extends Controller
         } catch (\Throwable $e) {
             Log::error('MQTT Error (webchat): '.$e->getMessage());
         }
+    }
+
+    /**
+     * Las notificaciones MQTT actualizan la interfaz, pero no deben demorar la
+     * respuesta del bot si el broker está fuera de servicio.
+     */
+    private function mqttConnectionSettings(): ConnectionSettings
+    {
+        return (new ConnectionSettings())
+            ->setConnectTimeout(1)
+            ->setSocketTimeout(1);
     }
 
     private function persistAndPublishOutgoing(
@@ -4909,8 +4915,13 @@ class WhatsAppController extends Controller
         $chat->save();
 
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_vars_batch_'.uniqid());
-            $mqtt->connect();
+            $host = env('MQTT_HOST') ?: env('VITE_MOSQUITTO_HOST');
+            if (! $host) {
+                return;
+            }
+
+            $mqtt = new MqttClient((string) $host, 1883, 'laravel_vars_batch_'.uniqid());
+            $mqtt->connect($this->mqttConnectionSettings());
 
             $mqtt->publish("chat/{$chat->id}/vars", json_encode([
                 'chat_id' => $chat->id,

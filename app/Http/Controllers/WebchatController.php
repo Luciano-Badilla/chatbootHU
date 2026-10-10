@@ -391,7 +391,6 @@ class WebchatController extends Controller
             'title' => $stored['webchat.title'] ?? 'Asistente virtual', 'subtitle' => $stored['webchat.subtitle'] ?? 'Hospital Universitario',
             'logo_url' => $stored['webchat.logo_url'] ?? '',
             'default_flow_id' => !empty($stored['webchat.default_flow_id']) ? (int) $stored['webchat.default_flow_id'] : null,
-            'response_delay_seconds' => $stored['webchat.response_delay_seconds'] ?? '1.2',
         ];
     }
 

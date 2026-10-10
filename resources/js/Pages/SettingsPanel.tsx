@@ -119,7 +119,7 @@ interface SettingsPanelProps {
   }>
 }
 
-type WebchatSettings = { enabled: boolean; availability_mode: "always" | "schedule"; schedule_start: string; schedule_end: string; bot_available_outside_schedule: boolean; offline_message: string; title: string; subtitle: string; logo_url: string; default_flow_id: number | null; response_delay_seconds: string }
+type WebchatSettings = { enabled: boolean; availability_mode: "always" | "schedule"; schedule_start: string; schedule_end: string; bot_available_outside_schedule: boolean; offline_message: string; title: string; subtitle: string; logo_url: string; default_flow_id: number | null }
 type SettingsSection = "general" | "integrations" | "bot" | "webchat" | "users"
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || ""
@@ -193,7 +193,7 @@ export default function SettingsPanel({
     settings?.bot?.inactivity_timeout_message ??
     "La conversacion se cerro por inactividad. Si queres continuar, escribinos nuevamente y retomamos desde el inicio."
   const initialMaxAssignedChats = settings?.operators?.max_assigned_chats ?? "5"
-  const initialWebchat = useMemo<WebchatSettings>(() => settings?.webchat ?? { enabled: true, availability_mode: "always", schedule_start: "08:00", schedule_end: "20:00", bot_available_outside_schedule: false, offline_message: "En este momento no estamos disponibles. Volvé a intentarlo dentro del horario de atención.", title: "Asistente virtual", subtitle: "Hospital Universitario", logo_url: "", default_flow_id: null, response_delay_seconds: "1.2" }, [settings?.webchat])
+  const initialWebchat = useMemo<WebchatSettings>(() => settings?.webchat ?? { enabled: true, availability_mode: "always", schedule_start: "08:00", schedule_end: "20:00", bot_available_outside_schedule: false, offline_message: "En este momento no estamos disponibles. Volvé a intentarlo dentro del horario de atención.", title: "Asistente virtual", subtitle: "Hospital Universitario", logo_url: "", default_flow_id: null }, [settings?.webchat])
 
   const [timezone, setTimezone] = useState(initialTimezone)
   const [language, setLanguage] = useState(initialLanguage)
@@ -1121,13 +1121,6 @@ export default function SettingsPanel({
                   <div className="space-y-1.5 md:col-span-2"><label className="text-sm font-medium text-[#013765]">Mensaje fuera de horario o deshabilitado</label><Textarea rows={2} value={webchat.offline_message} onChange={(e) => setWebchat((v) => ({ ...v, offline_message: e.target.value }))} /></div>
                 </div>
               </section>
-              <SettingsGroup title="Respuesta del bot" description="Ajustá el ritmo de las respuestas automáticas en este canal.">
-                <div className="max-w-sm space-y-1.5">
-                  <label className="text-sm font-medium text-[#013765]">Demora de respuesta (segundos)</label>
-                  <Input type="number" min={0} max={10} step={0.1} value={webchat.response_delay_seconds} onChange={(e) => setWebchat((value) => ({ ...value, response_delay_seconds: e.target.value }))} placeholder="1.2" />
-                  <p className="text-xs text-[#013765]/60">Espera antes de enviar una respuesta del bot. Usá 0 para responder sin demora.</p>
-                </div>
-              </SettingsGroup>
               <SettingsGroup title="Experiencia pública" description="Textos que ve la persona antes y durante la conversación.">
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Título</label><Input value={webchat.subtitle} onChange={(e) => setWebchat((v) => ({ ...v, subtitle: e.target.value }))} /></div><div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Nombre</label><Input value={webchat.title} onChange={(e) => setWebchat((v) => ({ ...v, title: e.target.value }))} /></div>
