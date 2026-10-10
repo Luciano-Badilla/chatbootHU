@@ -3664,6 +3664,17 @@ class WhatsAppController extends Controller
             || ($node->type === 'doctor_select' && ! $hasSelectableRows);
 
         if ($hasNoResults) {
+            if (
+                $node->type === 'doctor_select'
+                && $rows !== []
+                && ($chat->channel ?? 'whatsapp') === 'webchat'
+            ) {
+                // Mostrar los profesionales sin disponibilidad como deshabilitados,
+                // pero continuar por la salida "Sin resultados" sin esperar una selección.
+                $this->sendDynamicWhatsAppList($chat, $node, $rows);
+                $this->clearPendingInput($chat);
+            }
+
             $message = $failed
                 ? (string) ($settings['error_message'] ?? 'No pudimos consultar Alephoo en este momento.')
                 : (string) ($settings['empty_message'] ?? 'No encontramos opciones disponibles.');
