@@ -3195,13 +3195,21 @@ class WhatsAppController extends Controller
                 if ($selectionMode) {
                     $replyId = 'cancel_appointment:'.(string) $appointment['id'];
                     $buttonTitle = trim((string) ($settings['cancel_button_text'] ?? 'Cancelar'));
+                    $selectionValue = trim(sprintf(
+                        'Quiero cancelar el turno de %s con %s del %s a las %s',
+                        (string) ($appointment['especialidad'] ?? 'turnos'),
+                        (string) ($appointment['profesional'] ?? ''),
+                        (string) ($appointment['fecha'] ?? ''),
+                        (string) ($appointment['hora'] ?? '')
+                    ));
                     $this->sendAppointmentCancelChoice(
                         $chat,
                         $node,
                         $renderedMessage,
                         $replyId,
                         $buttonTitle,
-                        $selectionGroupId
+                        $selectionGroupId,
+                        $selectionValue
                     );
                     $pendingOptions[] = [
                         'id' => $replyId,
@@ -3269,7 +3277,8 @@ class WhatsAppController extends Controller
         string $body,
         string $replyId,
         string $buttonTitle,
-        ?string $selectionGroupId = null
+        ?string $selectionGroupId = null,
+        ?string $selectionValue = null
     ): void {
         $body = mb_substr(trim((string) preg_replace('/\s+/u', ' ', $body)), 0, 1024);
         $buttonTitle = mb_substr($buttonTitle !== '' ? $buttonTitle : 'Cancelar', 0, 20);
@@ -3278,6 +3287,7 @@ class WhatsAppController extends Controller
             $this->sendWhatsAppText($chat, $body, 'user', 'bot', 'appointment_lookup', [[
                 'id' => $replyId,
                 'label' => $buttonTitle,
+                'value' => $selectionValue,
                 'kind' => 'button',
                 'group_id' => $selectionGroupId,
             ]]);
