@@ -7,7 +7,7 @@ import { toast } from "sonner"
 import { mqttWebSocketUrl } from "../lib/mqtt"
 import StartupCurtain from "../Components/StartupCurtain"
 
-type Option = { id: string; label: string; description?: string; kind?: string }
+type Option = { id: string; label: string; value?: string | null; description?: string; kind?: string; disabled?: boolean }
 type RetryPayload = { message: string; optionId?: string }
 type Message = { id: number | string; sender: "contact" | "user"; sender_subtype?: "contact" | "operator" | "bot"; operator_name?: string | null; body: string | null; created_at?: string; timestamp?: string; message_type?: string | null; media_url?: string | null; media_name?: string | null; interactive_options?: Option[] | null; delivery_status?: "sending" | "failed"; retry_payload?: RetryPayload }
 type WebchatSettings = { enabled: boolean; available: boolean; operators_available?: boolean; title: string; subtitle: string; logo_url: string; offline_message: string }
@@ -1236,11 +1236,11 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
 
   const selectOption = async (messageId: string | number, option: Option) => {
     const messageKey = String(messageId)
-    if (selectedOptions[messageKey] || optionSelectionLockRef.current.has(messageKey)) return
+    if (option.disabled || selectedOptions[messageKey] || optionSelectionLockRef.current.has(messageKey)) return
 
     optionSelectionLockRef.current.add(messageKey)
     setSelectedOptions((current) => ({ ...current, [messageKey]: option.id }))
-    const sent = await send(option.label, option.id)
+    const sent = await send(option.value ?? option.label, option.id)
 
     if (!sent) optionSelectionLockRef.current.delete(messageKey)
   }
@@ -1335,9 +1335,9 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
                   const time = formatMessageTime(message)
                   const richMessage = isRichMessage(message)
                   const responseToOptions = message.interactive_options?.length
-                    ? messages.slice(index + 1).find((candidate) => candidate.sender === "contact" && message.interactive_options?.some((option) => option.label === candidate.body))
+                    ? messages.slice(index + 1).find((candidate) => candidate.sender === "contact" && message.interactive_options?.some((option) => (option.value ?? option.label) === candidate.body))
                     : undefined
-                  const selectedOptionId = selectedOptions[String(message.id)] ?? message.interactive_options?.find((option) => option.label === responseToOptions?.body)?.id
+                  const selectedOptionId = selectedOptions[String(message.id)] ?? message.interactive_options?.find((option) => (option.value ?? option.label) === responseToOptions?.body)?.id
                   const messagesBefore = messages.slice(0, index)
                   const lastHandoffIndex = messagesBefore.reduce((lastIndex, candidate, candidateIndex) => (
                     candidate.sender_subtype === "bot" && candidate.bot_node_type === "handoff"
@@ -1357,7 +1357,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
                         const isSelected = selectedOptionId === option.id
                         const isCurrentOptionsMessage = index === lastMessageIndex
                         const isLocked = Boolean(selectedOptionId) || !isCurrentOptionsMessage
-                        return <button key={option.id} type="button" onClick={() => selectOption(message.id, option)} disabled={isLocked || sending} aria-pressed={isSelected} className={`block w-full rounded-xl border px-3 py-2.5 text-left text-xs font-bold transition ${isSelected ? "border-[#003f73] bg-[#003f73] text-white shadow-sm" : "border-[#003f73]/20 bg-[#edf4f8] text-[#003f73] hover:bg-[#dcebf3]"} ${isLocked && !isSelected ? "cursor-not-allowed opacity-45" : ""}`}>{isSelected ? <span className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5" />{option.label}</span> : option.label}{option.description ? <span className={`mt-0.5 block font-normal leading-5 ${isSelected ? "text-white/80" : "text-slate-500"}`}>{option.description}</span> : null}</button>
+                        return <button key={option.id} type="button" onClick={() => selectOption(message.id, option)} disabled={isLocked || option.disabled || sending} aria-pressed={isSelected} className={`block w-full rounded-xl border px-3 py-2.5 text-left text-xs font-bold transition ${isSelected ? "border-[#003f73] bg-[#003f73] text-white shadow-sm" : option.disabled ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400" : "border-[#003f73]/20 bg-[#edf4f8] text-[#003f73] hover:bg-[#dcebf3]"} ${isLocked && !isSelected ? "cursor-not-allowed opacity-45" : ""}`}>{isSelected ? <span className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5" />{option.label}</span> : option.label}{option.description ? <span className={`mt-0.5 block font-normal leading-5 ${isSelected ? "text-white/80" : option.disabled ? "text-slate-400" : "text-slate-500"}`}>{option.description}</span> : null}</button>
                       })}</div> : null}
                       {time ? <p className={`mt-1.5 text-right text-[10px] leading-none ${isOwnMessage ? "text-white/65" : "text-slate-400"}`}>{time}</p> : null}
                     </div>

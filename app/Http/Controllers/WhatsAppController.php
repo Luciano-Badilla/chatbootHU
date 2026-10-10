@@ -1944,7 +1944,23 @@ class WhatsAppController extends Controller
                     return BotNode::find($pending['node_id']);
                 }
 
-                $value = $option['label'];
+                if ($option['disabled'] ?? false) {
+                    $this->sendWhatsAppText(
+                        $chat,
+                        'Ese profesional no tiene disponibilidad confirmada o no tiene turnos. Elegí otro profesional.',
+                        'user',
+                        'bot',
+                        'doctor_select',
+                    );
+                    $doctorNode = BotNode::find($pending['node_id'] ?? null);
+                    if ($doctorNode) {
+                        $this->sendBotNode($chat, $doctorNode);
+                    }
+
+                    return null;
+                }
+
+                $value = $option['value'] ?? $option['label'];
                 $pending['selected_next_node_id'] = $option['next_node_id'] ?? null;
                 if (is_array($option['vars'] ?? null)) {
                     $this->setVars($chat, $option['vars']);
@@ -3504,11 +3520,10 @@ class WhatsAppController extends Controller
                 $items = array_map(function ($item) use ($availabilityResponses, $agendaDaysByDoctor, $settings) {
                     $doctorId = (string) ($item['id'] ?? '');
                     $availabilityResponse = $availabilityResponses[$doctorId] ?? null;
-                    $availableAppointments = $availabilityResponse instanceof \Illuminate\Http\Client\Response
+                    $availabilityChecked = $availabilityResponse instanceof \Illuminate\Http\Client\Response
                         && $availabilityResponse->successful()
-                        && is_array($availabilityResponse->json())
-                            ? count($availabilityResponse->json())
-                            : 0;
+                        && is_array($availabilityResponse->json());
+                    $availableAppointments = $availabilityChecked ? count($availabilityResponse->json()) : 0;
 
                     $item['agenda_days'] = max(1, min(365, (int) (
                         $agendaDaysByDoctor[$doctorId]
@@ -3517,6 +3532,8 @@ class WhatsAppController extends Controller
                         ?? 28
                     )));
                     $item['available_appointments'] = $availableAppointments;
+                    $item['availability_checked'] = $availabilityChecked;
+                    $item['disabled'] = ! $availabilityChecked || $availableAppointments === 0;
 
                     return $item;
                 }, $items);
@@ -3531,10 +3548,6 @@ class WhatsAppController extends Controller
                     throw new \RuntimeException('No se pudo consultar la disponibilidad de los profesionales.');
                 }
 
-                $items = array_values(array_filter(
-                    $items,
-                    fn ($item) => (int) ($item['available_appointments'] ?? 0) > 0
-                ));
                 usort($items, function ($a, $b) {
                     $availabilityOrder = ((int) ($a['available_appointments'] ?? 0) > 0 ? 0 : 1)
                         <=> ((int) ($b['available_appointments'] ?? 0) > 0 ? 0 : 1);
@@ -3548,7 +3561,10 @@ class WhatsAppController extends Controller
                         trim((string) ($b['apellidos'] ?? '').' '.(string) ($b['nombres'] ?? ''))
                     );
                 });
-                foreach (array_slice($items, 0, 10) as $item) {
+                $doctorsToDisplay = ($chat->channel ?? 'whatsapp') === 'webchat'
+                    ? $items
+                    : array_slice($items, 0, 10); // WhatsApp interactive lists admiten hasta 10 filas.
+                foreach ($doctorsToDisplay as $item) {
                     $id = (string) ($item['id'] ?? '');
                     $name = trim((string) ($item['nombres'] ?? '').' '.(string) ($item['apellidos'] ?? ''));
                     if ($id !== '' && $name !== '') {
@@ -3556,9 +3572,14 @@ class WhatsAppController extends Controller
                         $rows[] = [
                             'id' => 'doctor:'.$id,
                             'title' => Str::limit($name, 24, ''),
-                            'description' => $availableAppointments === 1
-                                ? '1 turno disponible'
-                                : "{$availableAppointments} turnos disponibles",
+                            'description' => ! ($item['availability_checked'] ?? false)
+                                ? 'Disponibilidad no confirmada'
+                                : ($availableAppointments === 0
+                                    ? 'Sin turnos disponibles'
+                                    : ($availableAppointments === 1
+                                        ? '1 turno disponible'
+                                        : "{$availableAppointments} turnos disponibles")),
+                            'disabled' => (bool) ($item['disabled'] ?? false),
                             'vars' => [
                                 'profesional_id' => $id,
                                 'profesional_nombre' => $name,
@@ -3601,6 +3622,7 @@ class WhatsAppController extends Controller
                             'id' => 'slot:'.$index.':'.$agenda,
                             'title' => Str::limit($displayDate, 24, ''),
                             'description' => $displayTime,
+                            'value' => $displayDate.' '.$displayTime,
                             'vars' => [
                                 'turno_fecha' => $displayDate,
                                 'turno_hora' => $displayTime,
@@ -3650,8 +3672,10 @@ class WhatsAppController extends Controller
             'options' => array_map(fn ($row) => [
                 'id' => $row['id'],
                 'label' => $row['title'],
+                'value' => $row['value'] ?? null,
                 'next_node_id' => $node->next_node_id,
                 'vars' => $row['vars'],
+                'disabled' => (bool) ($row['disabled'] ?? false),
             ], $rows),
         ];
         $this->setState($chat, $state);
@@ -3663,19 +3687,22 @@ class WhatsAppController extends Controller
     {
         $settings = $this->nodeSettings($node);
         $body = $this->renderTemplate((string) ($node->body ?: 'Selecciona una opcion.'), $chat, $node);
+        $rowsToSend = ($chat->channel ?? 'whatsapp') === 'webchat' ? $rows : array_slice($rows, 0, 10);
         $waRows = array_map(fn ($row) => [
             'id' => (string) $row['id'],
             'title' => (string) $row['title'],
             'description' => $row['description'] !== '' ? (string) $row['description'] : null,
-        ], array_slice($rows, 0, 10));
+        ], $rowsToSend);
 
         if (($chat->channel ?? 'whatsapp') === 'webchat') {
             $interactiveOptions = array_map(fn ($row) => [
-                'id' => $row['id'],
-                'label' => $row['title'],
+                'id' => (string) $row['id'],
+                'label' => (string) $row['title'],
+                'value' => $row['value'] ?? null,
                 'description' => $row['description'] ?? '',
                 'kind' => 'list',
-            ], $waRows);
+                'disabled' => (bool) ($row['disabled'] ?? false),
+            ], $rowsToSend);
             $this->sendWhatsAppText(
                 $chat,
                 $body ?: 'Seleccioná una opción',
@@ -3718,9 +3745,11 @@ class WhatsAppController extends Controller
         $interactiveOptions = array_map(fn ($row) => [
             'id' => $row['id'],
             'label' => $row['title'],
+            'value' => $row['value'] ?? null,
             'description' => $row['description'] ?? '',
             'kind' => 'list',
-        ], $waRows);
+            'disabled' => (bool) ($row['disabled'] ?? false),
+        ], $rowsToSend);
         $this->persistAndPublishOutgoing($chat, $body, $response->json('messages.0.id'), $node->type, $interactiveOptions);
     }
 
@@ -5083,8 +5112,10 @@ class WhatsAppController extends Controller
                 return [
                     'id' => (string) ($option['id'] ?? ''),
                     'label' => (string) ($option['label'] ?? ''),
+                    'value' => $option['value'] ?? null,
                     'next_node_id' => $option['next_node_id'] ?? null,
                     'vars' => is_array($option['vars'] ?? null) ? $option['vars'] : [],
+                    'disabled' => (bool) ($option['disabled'] ?? false),
                 ];
             }
         }
@@ -5096,8 +5127,10 @@ class WhatsAppController extends Controller
                 return [
                     'id' => (string) ($option['id'] ?? ''),
                     'label' => (string) ($option['label'] ?? ''),
+                    'value' => $option['value'] ?? null,
                     'next_node_id' => $option['next_node_id'] ?? null,
                     'vars' => is_array($option['vars'] ?? null) ? $option['vars'] : [],
+                    'disabled' => (bool) ($option['disabled'] ?? false),
                 ];
             }
         }

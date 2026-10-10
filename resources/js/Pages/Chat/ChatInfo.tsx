@@ -303,7 +303,9 @@ export default function ChatInfo({
       : {}
   })
 
-  // rehidrata vars al cambiar chat
+  // La DB es la fuente de verdad: ChatPanel refresca bot_state periódicamente.
+  // MQTT mantiene la actualización inmediata, pero si algún evento se pierde,
+  // esta sincronización recupera las variables sin tener que reabrir el chat.
   useEffect(() => {
     if (Array.isArray(variables) && variables.length > 0) {
       const m: Record<string, any> = {}
@@ -320,7 +322,7 @@ export default function ChatInfo({
       const flat = v && typeof v === "object" && !Array.isArray(v) ? v : {}
       setVarsByDateMap(deriveVarsByDateFromFlat(flat))
     }
-  }, [chat?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [chat?.id, chat?.bot_state]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const varGroups = useMemo(() => {
     return Object.entries(varsByDateMap)
@@ -1633,7 +1635,7 @@ export default function ChatInfo({
             </h4>
 
             {!hasVars ? (
-              <div className="rounded-lg p-3 border border-gray-300">
+              <div className="rounded-lg p-3 border border-gray-300 bg-white">
                 <p className="text-sm text-muted-foreground">Todavía no hay variables capturadas en este chat.</p>
               </div>
             ) : (
