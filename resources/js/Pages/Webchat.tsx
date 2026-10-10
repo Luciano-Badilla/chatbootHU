@@ -7,7 +7,7 @@ import { toast } from "sonner"
 import { mqttWebSocketUrl } from "../lib/mqtt"
 import StartupCurtain from "../Components/StartupCurtain"
 
-type Option = { id: string; label: string; value?: string | null; description?: string; kind?: string; disabled?: boolean }
+type Option = { id: string; label: string; value?: string | null; description?: string; kind?: string; disabled?: boolean; group_id?: string | null }
 type RetryPayload = { message: string; optionId?: string }
 type Message = { id: number | string; sender: "contact" | "user"; sender_subtype?: "contact" | "operator" | "bot"; operator_name?: string | null; body: string | null; created_at?: string; timestamp?: string; message_type?: string | null; media_url?: string | null; media_name?: string | null; interactive_options?: Option[] | null; delivery_status?: "sending" | "failed"; retry_payload?: RetryPayload }
 type WebchatSettings = { enabled: boolean; available: boolean; operators_available?: boolean; title: string; subtitle: string; logo_url: string; offline_message: string }
@@ -1092,6 +1092,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   }
 
   const lastMessageIndex = messages.length - 1
+  const activeOptionGroupId = messages[lastMessageIndex]?.interactive_options?.find((option) => option.group_id)?.group_id
   const pendingOptionsMessage = messages[lastMessageIndex]?.interactive_options?.length
     ? messages[lastMessageIndex]
     : undefined
@@ -1355,7 +1356,9 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
                       {renderMessageContent(message)}
                       {!isOwnMessage && message.interactive_options?.length ? <div className="mt-3 space-y-2">{message.interactive_options.map((option) => {
                         const isSelected = selectedOptionId === option.id
+                        const optionGroupId = message.interactive_options?.find((option) => option.group_id)?.group_id
                         const isCurrentOptionsMessage = index === lastMessageIndex
+                          || Boolean(activeOptionGroupId && optionGroupId === activeOptionGroupId)
                         const isLocked = Boolean(selectedOptionId) || !isCurrentOptionsMessage
                         return <button key={option.id} type="button" onClick={() => selectOption(message.id, option)} disabled={isLocked || option.disabled || sending} aria-pressed={isSelected} className={`block w-full rounded-xl border px-3 py-2.5 text-left text-xs font-bold transition ${isSelected ? "border-[#003f73] bg-[#003f73] text-white shadow-sm" : option.disabled ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400" : "border-[#003f73]/20 bg-[#edf4f8] text-[#003f73] hover:bg-[#dcebf3]"} ${isLocked && !isSelected ? "cursor-not-allowed opacity-45" : ""}`}>{isSelected ? <span className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5" />{option.label}</span> : option.label}{option.description ? <span className={`mt-0.5 block font-normal leading-5 ${isSelected ? "text-white/80" : option.disabled ? "text-slate-400" : "text-slate-500"}`}>{option.description}</span> : null}</button>
                       })}</div> : null}

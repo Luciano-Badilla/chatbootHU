@@ -3181,6 +3181,7 @@ class WhatsAppController extends Controller
         if ($appointmentsToSend !== []) {
             $selectionMode = ($settings['result_mode'] ?? 'messages') === 'cancel_buttons';
             $pendingOptions = [];
+            $selectionGroupId = $selectionMode ? (string) Str::uuid() : null;
 
             foreach ($appointmentsToSend as $appointment) {
                 $appointmentVars = $this->appointmentTemplateVars($appointment);
@@ -3199,7 +3200,8 @@ class WhatsAppController extends Controller
                         $node,
                         $renderedMessage,
                         $replyId,
-                        $buttonTitle
+                        $buttonTitle,
+                        $selectionGroupId
                     );
                     $pendingOptions[] = [
                         'id' => $replyId,
@@ -3266,7 +3268,8 @@ class WhatsAppController extends Controller
         BotNode $node,
         string $body,
         string $replyId,
-        string $buttonTitle
+        string $buttonTitle,
+        ?string $selectionGroupId = null
     ): void {
         $body = mb_substr(trim((string) preg_replace('/\s+/u', ' ', $body)), 0, 1024);
         $buttonTitle = mb_substr($buttonTitle !== '' ? $buttonTitle : 'Cancelar', 0, 20);
@@ -3276,6 +3279,7 @@ class WhatsAppController extends Controller
                 'id' => $replyId,
                 'label' => $buttonTitle,
                 'kind' => 'button',
+                'group_id' => $selectionGroupId,
             ]]);
 
             return;
@@ -3642,7 +3646,14 @@ class WhatsAppController extends Controller
             ]);
         }
 
-        if ($rows === []) {
+        $hasSelectableRows = count(array_filter(
+            $rows,
+            fn ($row) => ! ($row['disabled'] ?? false)
+        )) > 0;
+        $hasNoResults = $rows === []
+            || ($node->type === 'doctor_select' && ! $hasSelectableRows);
+
+        if ($hasNoResults) {
             $message = $failed
                 ? (string) ($settings['error_message'] ?? 'No pudimos consultar Alephoo en este momento.')
                 : (string) ($settings['empty_message'] ?? 'No encontramos opciones disponibles.');
