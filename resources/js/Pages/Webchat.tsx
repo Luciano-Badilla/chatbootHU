@@ -1091,13 +1091,10 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     await send(draft)
   }
 
-  const pendingOptionsMessage = messages.map((message, index) => ({ message, index })).reverse().find(({ message, index }) => {
-    if (!message.interactive_options?.length) return false
-    return !messages.slice(index + 1).some((candidate) =>
-      candidate.sender_subtype === "operator" ||
-      (candidate.sender === "contact" && !candidate.delivery_status && message.interactive_options?.some((option) => option.label === candidate.body)),
-    )
-  })?.message
+  const lastMessageIndex = messages.length - 1
+  const pendingOptionsMessage = messages[lastMessageIndex]?.interactive_options?.length
+    ? messages[lastMessageIndex]
+    : undefined
   const manualInputLocked = Boolean(pendingOptionsMessage)
   const showAudioControl = !sending && !manualInputLocked && (recordingAudio || (!botEnabled && !draft.trim() && pendingMedia.length === 0))
 
@@ -1358,7 +1355,8 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
                       {renderMessageContent(message)}
                       {!isOwnMessage && message.interactive_options?.length ? <div className="mt-3 space-y-2">{message.interactive_options.map((option) => {
                         const isSelected = selectedOptionId === option.id
-                        const isLocked = Boolean(selectedOptionId)
+                        const isCurrentOptionsMessage = index === lastMessageIndex
+                        const isLocked = Boolean(selectedOptionId) || !isCurrentOptionsMessage
                         return <button key={option.id} type="button" onClick={() => selectOption(message.id, option)} disabled={isLocked || sending} aria-pressed={isSelected} className={`block w-full rounded-xl border px-3 py-2.5 text-left text-xs font-bold transition ${isSelected ? "border-[#003f73] bg-[#003f73] text-white shadow-sm" : "border-[#003f73]/20 bg-[#edf4f8] text-[#003f73] hover:bg-[#dcebf3]"} ${isLocked && !isSelected ? "cursor-not-allowed opacity-45" : ""}`}>{isSelected ? <span className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5" />{option.label}</span> : option.label}{option.description ? <span className={`mt-0.5 block font-normal leading-5 ${isSelected ? "text-white/80" : "text-slate-500"}`}>{option.description}</span> : null}</button>
                       })}</div> : null}
                       {time ? <p className={`mt-1.5 text-right text-[10px] leading-none ${isOwnMessage ? "text-white/65" : "text-slate-400"}`}>{time}</p> : null}
