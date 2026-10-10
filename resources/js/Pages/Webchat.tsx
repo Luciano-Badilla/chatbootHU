@@ -2,7 +2,7 @@ import { Fragment, FormEvent, type ReactNode, useCallback, useEffect, useRef, us
 import mqtt from "mqtt"
 import { Gallery, Item } from "react-photoswipe-gallery"
 import "photoswipe/dist/photoswipe.css"
-import { ArrowUp, AudioLines, Bell, BellOff, Check, ChevronDown, Clock3, Contact, FileText, Headset, ImageIcon, Info, Loader2, MapPin, Menu, MessageCircle, Mic, Play, Plus, Search, Send, Share, Square, User, Wrench, X } from "lucide-react"
+import { ArrowUp, ArrowUpRight, AudioLines, Bell, BellOff, Check, ChevronDown, Clock3, Contact, FileText, Headset, ImageIcon, Info, Loader2, MapPin, Menu, MessageCircle, Mic, Play, Plus, Search, Send, Share, Square, User, Wrench, X } from "lucide-react"
 import { toast } from "sonner"
 import { mqttWebSocketUrl } from "../lib/mqtt"
 import StartupCurtain from "../Components/StartupCurtain"
@@ -1093,7 +1093,10 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
 
   const pendingOptionsMessage = messages.map((message, index) => ({ message, index })).reverse().find(({ message, index }) => {
     if (!message.interactive_options?.length) return false
-    return !messages.slice(index + 1).some((candidate) => candidate.sender === "contact" && !candidate.delivery_status && message.interactive_options?.some((option) => option.label === candidate.body))
+    return !messages.slice(index + 1).some((candidate) =>
+      candidate.sender_subtype === "operator" ||
+      (candidate.sender === "contact" && !candidate.delivery_status && message.interactive_options?.some((option) => option.label === candidate.body)),
+    )
   })?.message
   const manualInputLocked = Boolean(pendingOptionsMessage)
   const showAudioControl = !sending && !manualInputLocked && (recordingAudio || (!botEnabled && !draft.trim() && pendingMedia.length === 0))
@@ -1300,13 +1303,13 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
             <div className="relative overflow-hidden rounded-3xl border border-[#003f73]/15 bg-white px-6 py-9 shadow-[0_18px_45px_rgba(21,49,79,0.1)] sm:px-10">
               <div className="pointer-events-none absolute -right-16 -top-16 h-40 w-40 rounded-full bg-[#003f73]/[0.05]" />
               <div className="pointer-events-none absolute -bottom-20 -left-16 h-40 w-40 rounded-full border-[20px] border-[#003f73]/[0.04]" />
-              <div className="relative"><div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-[#003f73] text-white shadow-lg shadow-[#003f73]/20"><Wrench className="h-7 w-7" /></div><p className="mt-6 text-[10px] font-bold uppercase tracking-[0.2em] text-[#003f73]">Mantenimiento programado</p><h2 className="mt-2 text-2xl font-bold tracking-tight text-slate-800">Estamos mejorando este canal</h2><p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-slate-500">Estamos realizando tareas de mantenimiento. Volvé a intentarlo en unos minutos.</p><div className="mx-auto mt-6 h-px w-16 bg-[#003f73]/15" /><p className="mt-4 text-xs text-slate-400">Gracias por tu paciencia.</p></div>
+              <div className="relative"><div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-[#003f73] text-white shadow-lg shadow-[#003f73]/20"><Wrench className="h-7 w-7" /></div><p className="mt-6 text-[10px] font-bold uppercase tracking-[0.2em] text-[#003f73]">Mantenimiento programado</p><h2 className="mt-2 text-2xl font-bold tracking-tight text-slate-800">Estamos mejorando este canal</h2><p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-slate-500">Estamos realizando tareas de mantenimiento. Volvé a intentarlo en unos minutos.</p><a href="https://turnos.hospital.uncu.edu.ar/formulario" target="_blank" rel="noopener noreferrer" className="mt-6 inline-flex items-center justify-center gap-2 rounded-xl bg-[#003f73] px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-[#003461] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#003f73] focus-visible:ring-offset-2">Solicitar turno mediante autogestión<ArrowUpRight className="h-4 w-4" /></a><div className="mx-auto mt-6 h-px w-16 bg-[#003f73]/15" /><p className="mt-4 text-xs text-slate-400">Gracias por tu paciencia.</p></div>
             </div>
           </div>
         ) : !channelAvailability.available ? (
           <div className="m-auto w-full max-w-lg px-5 text-center sm:px-8">
             <div className="rounded-3xl border border-slate-200 bg-white px-6 py-9 shadow-[0_18px_45px_rgba(21,49,79,0.08)] sm:px-10">
-              <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-[#e8f0f6] text-[#003f73]"><Clock3 className="h-7 w-7" /></div><p className="mt-6 text-[10px] font-bold uppercase tracking-[0.2em] text-[#003f73]">Horario de atención</p><h2 className="mt-2 text-2xl font-bold tracking-tight text-slate-800">Ahora no estamos disponibles</h2><p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-slate-500">{webchat.offline_message}</p><div className="mt-7 rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500"><MessageCircle className="mr-1.5 inline h-3.5 w-3.5 text-[#003f73]" /> Podés volver a escribirnos durante el horario de atención.</div>
+              <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-[#e8f0f6] text-[#003f73]"><Clock3 className="h-7 w-7" /></div><p className="mt-6 text-[10px] font-bold uppercase tracking-[0.2em] text-[#003f73]">Horario de atención</p><h2 className="mt-2 text-2xl font-bold tracking-tight text-slate-800">Ahora no estamos disponibles</h2><p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-slate-500">{webchat.offline_message}</p><a href="https://turnos.hospital.uncu.edu.ar/formulario" target="_blank" rel="noopener noreferrer" className="mt-6 inline-flex items-center justify-center gap-2 rounded-xl bg-[#003f73] px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-[#003461] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#003f73] focus-visible:ring-offset-2">Solicitar turno mediante autogestión<ArrowUpRight className="h-4 w-4" /></a><div className="mt-7 rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500"><MessageCircle className="mr-1.5 inline h-3.5 w-3.5 text-[#003f73]" /> Podés volver a escribirnos durante el horario de atención.</div>
             </div>
           </div>
         ) : profileRequired ? (

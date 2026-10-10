@@ -110,13 +110,15 @@ class BotFlowController extends Controller
     {
         $data = $request->validate([
             'name' => 'required|string',
+            'channels' => 'nullable|array|min:1',
+            'channels.*' => 'in:whatsapp,webchat',
         ]);
 
         $flow = BotFlow::create([
             'name' => $data['name'],
             'description' => null,
             'is_active' => true,
-            'channels' => ['whatsapp'],
+            'channels' => $data['channels'] ?? ['whatsapp'],
         ]);
 
         $this->auditService->recordFlowChange(

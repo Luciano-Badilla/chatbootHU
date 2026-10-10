@@ -266,14 +266,20 @@ class OperatorControlController extends Controller
         ]);
 
         $isAdminAction = (bool) $request->route('admin_action');
-        $auditReason = $isAdminAction
+        $auditReason = $data['reason'] ?? ($isAdminAction
             ? ($request->boolean('automatic')
                 ? 'Intervención administrativa: liberó el chat para reasignación automática.'
                 : 'Intervención administrativa: reasignó el chat a un operador.')
-            : ($data['reason'] ?? null);
+            : null);
 
         if ($chat->status !== 'open') {
             return response()->json(['ok' => false, 'message' => 'Solo se pueden reasignar chats abiertos.'], 422);
+        }
+
+        $actor = $request->user();
+        if (! $actor?->hasPermission('can_administer_chats')
+            && (int) ($chat->operator_id ?? 0) !== (int) ($actor?->id ?? 0)) {
+            return response()->json(['ok' => false, 'message' => 'Solo el operador asignado o un administrador puede reasignar este chat.'], 403);
         }
 
         $before = ['operator_id' => $chat->operator_id, 'attention_status' => $chat->attention_status];

@@ -12,6 +12,7 @@ import {
   EyeOff,
   ExternalLink,
   Globe2,
+  MessageCircle,
   Loader2,
   KeyRound,
   Pencil,
@@ -49,6 +50,7 @@ import { AppShell, AppShellBackButton } from "../Components/AppShell"
 interface SettingsPanelProps {
   settings?: {
     webchat?: WebchatSettings
+    whatsapp?: { default_flow_id: number | null }
     general?: {
       timezone?: string
       language?: string
@@ -81,7 +83,6 @@ interface SettingsPanelProps {
       }
     }
     bot?: {
-      default_flow_id?: number | null
       inactivity_timeout_minutes?: string
       inactivity_timeout_message?: string
     }
@@ -119,8 +120,27 @@ interface SettingsPanelProps {
   }>
 }
 
-type WebchatSettings = { enabled: boolean; availability_mode: "always" | "schedule"; schedule_start: string; schedule_end: string; bot_available_outside_schedule: boolean; offline_message: string; title: string; subtitle: string; logo_url: string; default_flow_id: number | null }
-type SettingsSection = "general" | "integrations" | "bot" | "webchat" | "users"
+type FlowSchedule = Record<"monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday", number | null>
+type WebchatSettings = { enabled: boolean; availability_mode: "always" | "schedule"; schedule_start: string; schedule_end: string; bot_available_outside_schedule: boolean; offline_message: string; title: string; subtitle: string; logo_url: string; flow_schedule: FlowSchedule }
+type SettingsSection = "general" | "integrations" | "bot" | "whatsapp" | "webchat" | "users"
+
+const WEEKDAYS: Array<{ key: keyof FlowSchedule; label: string }> = [
+  { key: "monday", label: "Lunes" },
+  { key: "tuesday", label: "Martes" },
+  { key: "wednesday", label: "Miércoles" },
+  { key: "thursday", label: "Jueves" },
+  { key: "friday", label: "Viernes" },
+  { key: "saturday", label: "Sábado" },
+  { key: "sunday", label: "Domingo" },
+]
+const FLOW_DAY_GROUPS: Array<{ key: "weekdays" | "weekend"; label: string; daysLabel: string; days: Array<keyof FlowSchedule> }> = [
+  { key: "weekdays", label: "Días hábiles", daysLabel: "Lunes a viernes", days: ["monday", "tuesday", "wednesday", "thursday", "friday"] },
+  { key: "weekend", label: "Fin de semana", daysLabel: "Sábado y domingo", days: ["saturday", "sunday"] },
+]
+const EMPTY_FLOW_SCHEDULE: FlowSchedule = {
+  monday: null, tuesday: null, wednesday: null, thursday: null,
+  friday: null, saturday: null, sunday: null,
+}
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || ""
 const webchatLogoUrl = (path: string) => path.startsWith("http") ? path : `${import.meta.env.VITE_APP_URL}${path}`
@@ -186,14 +206,31 @@ export default function SettingsPanel({
   const initialAutogestionBaseUrl = settings?.integrations?.autogestion?.base_url ?? ""
   const initialAutogestionToken = settings?.integrations?.autogestion?.token ?? ""
   const initialAutogestionTimeout = settings?.integrations?.autogestion?.timeout ?? "15"
-  const initialDefaultFlowId =
-    settings?.bot?.default_flow_id ?? botFlows.find((flow) => flow.is_default)?.id ?? botFlows[0]?.id ?? null
+  const initialWhatsAppFlowId = settings?.whatsapp?.default_flow_id
+    ?? botFlows.find((flow) => flow.is_default && flow.channels?.includes("whatsapp"))?.id
+    ?? botFlows.find((flow) => flow.channels?.includes("whatsapp"))?.id
+    ?? null
   const initialInactivityTimeoutMinutes = settings?.bot?.inactivity_timeout_minutes ?? "1440"
   const initialInactivityTimeoutMessage =
     settings?.bot?.inactivity_timeout_message ??
     "La conversacion se cerro por inactividad. Si queres continuar, escribinos nuevamente y retomamos desde el inicio."
   const initialMaxAssignedChats = settings?.operators?.max_assigned_chats ?? "5"
-  const initialWebchat = useMemo<WebchatSettings>(() => settings?.webchat ?? { enabled: true, availability_mode: "always", schedule_start: "08:00", schedule_end: "20:00", bot_available_outside_schedule: false, offline_message: "En este momento no estamos disponibles. Volvé a intentarlo dentro del horario de atención.", title: "Asistente virtual", subtitle: "Hospital Universitario", logo_url: "", default_flow_id: null }, [settings?.webchat])
+  const initialWebchat = useMemo<WebchatSettings>(() => {
+    const current = settings?.webchat
+    return {
+      enabled: true,
+      availability_mode: "always",
+      schedule_start: "08:00",
+      schedule_end: "20:00",
+      bot_available_outside_schedule: false,
+      offline_message: "En este momento no estamos disponibles. Volvé a intentarlo dentro del horario de atención.",
+      title: "Asistente virtual",
+      subtitle: "Hospital Universitario",
+      logo_url: "",
+      ...current,
+      flow_schedule: { ...EMPTY_FLOW_SCHEDULE, ...(current?.flow_schedule ?? {}) },
+    }
+  }, [settings?.webchat])
 
   const [timezone, setTimezone] = useState(initialTimezone)
   const [language, setLanguage] = useState(initialLanguage)
@@ -241,15 +278,18 @@ export default function SettingsPanel({
   const [savedAlephooEndpoints, setSavedAlephooEndpoints] = useState(initialAlephooEndpoints)
   const [savedAlephooV3, setSavedAlephooV3] = useState([initialAlephooV3BaseUrl, initialAlephooV3Username, initialAlephooV3Password, initialAlephooV3Timeout])
   const [savedAutogestion, setSavedAutogestion] = useState([initialAutogestionBaseUrl, initialAutogestionToken, initialAutogestionTimeout])
-  const [defaultFlowId, setDefaultFlowId] = useState<number | null>(initialDefaultFlowId)
+  const [whatsappFlowId, setWhatsappFlowId] = useState<number | null>(initialWhatsAppFlowId)
+  const [savedWhatsappFlowId, setSavedWhatsappFlowId] = useState<number | null>(initialWhatsAppFlowId)
+  const [savingWhatsappFlow, setSavingWhatsappFlow] = useState(false)
+  const [whatsappFlowSaved, setWhatsappFlowSaved] = useState(false)
   const [inactivityTimeoutMinutes, setInactivityTimeoutMinutes] = useState(initialInactivityTimeoutMinutes)
   const [inactivityTimeoutMessage, setInactivityTimeoutMessage] = useState(initialInactivityTimeoutMessage)
-  const [savedDefaultFlowId, setSavedDefaultFlowId] = useState<number | null>(initialDefaultFlowId)
   const [savedInactivityTimeoutMinutes, setSavedInactivityTimeoutMinutes] = useState(initialInactivityTimeoutMinutes)
   const [savedInactivityTimeoutMessage, setSavedInactivityTimeoutMessage] = useState(initialInactivityTimeoutMessage)
   const [maxAssignedChats, setMaxAssignedChats] = useState(initialMaxAssignedChats)
   const [savedMaxAssignedChats, setSavedMaxAssignedChats] = useState(initialMaxAssignedChats)
   const [webchat, setWebchat] = useState<WebchatSettings>(initialWebchat)
+  const [showDailyWebchatFlows, setShowDailyWebchatFlows] = useState(false)
   const [webchatLogoFile, setWebchatLogoFile] = useState<File | null>(null)
   const [webchatLogoPreview, setWebchatLogoPreview] = useState("")
   const [savedWebchat, setSavedWebchat] = useState(JSON.stringify(initialWebchat))
@@ -306,15 +346,16 @@ export default function SettingsPanel({
     setSavedAlephooApiKey(initialAlephooApiKey)
     setSavedAlephooTimeout(initialAlephooTimeout)
     setSavedAlephooEndpoints(initialAlephooEndpoints)
-    setDefaultFlowId(initialDefaultFlowId)
+    setWhatsappFlowId(initialWhatsAppFlowId)
+    setSavedWhatsappFlowId(initialWhatsAppFlowId)
     setInactivityTimeoutMinutes(initialInactivityTimeoutMinutes)
     setInactivityTimeoutMessage(initialInactivityTimeoutMessage)
-    setSavedDefaultFlowId(initialDefaultFlowId)
     setSavedInactivityTimeoutMinutes(initialInactivityTimeoutMinutes)
     setSavedInactivityTimeoutMessage(initialInactivityTimeoutMessage)
     setMaxAssignedChats(initialMaxAssignedChats)
     setSavedMaxAssignedChats(initialMaxAssignedChats)
     setWebchat(initialWebchat)
+    setShowDailyWebchatFlows(false)
     setWebchatLogoFile(null)
     setWebchatLogoPreview("")
     setSavedWebchat(JSON.stringify(initialWebchat))
@@ -330,7 +371,7 @@ export default function SettingsPanel({
     initialAlephooApiKey,
     initialAlephooTimeout,
     initialAlephooEndpoints,
-    initialDefaultFlowId,
+    initialWhatsAppFlowId,
     initialInactivityTimeoutMinutes,
     initialInactivityTimeoutMessage,
     initialMaxAssignedChats,
@@ -395,27 +436,24 @@ export default function SettingsPanel({
 
   const hasUnsavedBotChanges = useMemo(() => {
     return (
-      defaultFlowId !== savedDefaultFlowId ||
       inactivityTimeoutMinutes !== savedInactivityTimeoutMinutes ||
       inactivityTimeoutMessage !== savedInactivityTimeoutMessage ||
       maxAssignedChats !== savedMaxAssignedChats
     )
   }, [
-    defaultFlowId,
     inactivityTimeoutMinutes,
     inactivityTimeoutMessage,
-    savedDefaultFlowId,
     savedInactivityTimeoutMinutes,
     savedInactivityTimeoutMessage,
     maxAssignedChats,
     savedMaxAssignedChats,
   ])
+  const hasUnsavedWhatsappFlowChanges = whatsappFlowId !== savedWhatsappFlowId
   const hasUnsavedWebchatChanges = JSON.stringify(webchat) !== savedWebchat || webchatLogoFile !== null
-  const selectedWebchatFlowLabel = webchat.default_flow_id
-    ? botFlows.find((flow) => flow.id === webchat.default_flow_id)?.name ?? "Flujo seleccionado"
-    : "Usar flujo predeterminado"
+  const isWebchatFlowScheduleComplete = WEEKDAYS.every(({ key }) => Boolean(webchat.flow_schedule[key]))
+  const hasCustomWebchatFlowSchedule = FLOW_DAY_GROUPS.some(({ days }) => new Set(days.map((day) => webchat.flow_schedule[day])).size > 1)
 
-  const hasUnsavedSettingsChanges = hasUnsavedGeneralChanges || hasUnsavedIntegrationsChanges || hasUnsavedBotChanges || hasUnsavedWebchatChanges
+  const hasUnsavedSettingsChanges = hasUnsavedGeneralChanges || hasUnsavedIntegrationsChanges || hasUnsavedBotChanges || hasUnsavedWhatsappFlowChanges || hasUnsavedWebchatChanges
 
   const requestNavigation = (navigation: () => void) => {
     if (!hasUnsavedSettingsChanges) {
@@ -474,10 +512,6 @@ export default function SettingsPanel({
   }
 
   const handleSaveBot = async () => {
-    if (!defaultFlowId) {
-      return
-    }
-
     setSavingBot(true)
     setBotSaved(false)
 
@@ -494,7 +528,6 @@ export default function SettingsPanel({
           ...(csrfToken ? { "X-CSRF-TOKEN": csrfToken } : {}),
         },
         body: JSON.stringify({
-          default_flow_id: defaultFlowId,
           inactivity_timeout_minutes: Number(inactivityTimeoutMinutes || 1440),
           inactivity_timeout_message: inactivityTimeoutMessage,
           max_assigned_chats: Number(maxAssignedChats),
@@ -510,13 +543,12 @@ export default function SettingsPanel({
         return
       }
 
-      setSavedDefaultFlowId(defaultFlowId)
       setSavedInactivityTimeoutMinutes(inactivityTimeoutMinutes)
       setSavedInactivityTimeoutMessage(inactivityTimeoutMessage)
       setSavedMaxAssignedChats(maxAssignedChats)
       setBotSaved(true)
       toast.success("Configuracion del bot guardada", {
-        description: "Se actualizaron el flujo por defecto y la politica de inactividad.",
+        description: "Se actualizo la politica de inactividad del bot.",
       })
     } catch (err) {
       console.error("Error de red guardando configuracion del bot:", err)
@@ -525,6 +557,39 @@ export default function SettingsPanel({
       })
     } finally {
       setSavingBot(false)
+    }
+  }
+
+  const handleSaveWhatsappFlow = async () => {
+    if (!whatsappFlowId) return
+    setSavingWhatsappFlow(true)
+    setWhatsappFlowSaved(false)
+    try {
+      const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content")
+      const res = await fetch(`${API_BASE}/api/settings/whatsapp-flow`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          ...(csrfToken ? { "X-CSRF-TOKEN": csrfToken } : {}),
+        },
+        body: JSON.stringify({ default_flow_id: whatsappFlowId }),
+      })
+      const payload = await res.json().catch(() => null)
+      if (!res.ok) {
+        toast.error("No se pudo guardar el flujo de WhatsApp", {
+          description: getErrorMessage(payload, "Elegí un flujo habilitado para WhatsApp."),
+        })
+        return
+      }
+      setSavedWhatsappFlowId(whatsappFlowId)
+      setWhatsappFlowSaved(true)
+      toast.success("Flujo de WhatsApp guardado")
+    } catch (error) {
+      console.error("Error guardando flujo de WhatsApp:", error)
+      toast.error("Error de red", { description: "No se pudo guardar el flujo de WhatsApp." })
+    } finally {
+      setSavingWhatsappFlow(false)
     }
   }
 
@@ -902,7 +967,7 @@ export default function SettingsPanel({
     try {
       const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content")
       const formData = new FormData()
-      Object.entries(webchat).forEach(([key, value]) => formData.append(key, typeof value === "boolean" ? (value ? "1" : "0") : value === null ? "" : String(value)))
+      Object.entries(webchat).forEach(([key, value]) => formData.append(key, typeof value === "boolean" ? (value ? "1" : "0") : value === null ? "" : typeof value === "object" ? JSON.stringify(value) : String(value)))
       if (webchatLogoFile) formData.append("logo", webchatLogoFile)
       const res = await fetch(`${API_BASE}/api/settings/webchat`, { method: "POST", headers: { Accept: "application/json", ...(csrfToken ? { "X-CSRF-TOKEN": csrfToken } : {}) }, body: formData })
       if (!res.ok) { toast.error("No se pudo guardar Webchat", { description: getErrorMessage(await res.json().catch(() => null), "Revisá los datos e intentá nuevamente.") }); return }
@@ -1031,6 +1096,7 @@ export default function SettingsPanel({
                 ["general", "General", Settings, hasUnsavedGeneralChanges],
                 ["integrations", "Integraciones", Waypoints, hasUnsavedIntegrationsChanges],
                 ["bot", "Bot", Bot, hasUnsavedBotChanges],
+                ["whatsapp", "WhatsApp", MessageCircle, hasUnsavedWhatsappFlowChanges],
                 ["webchat", "Webchat", Globe2, hasUnsavedWebchatChanges],
                 ["users", "Usuarios", UsersRound, false],
               ] as const).map(([section, label, Icon, hasChanges]) => (
@@ -1063,8 +1129,14 @@ export default function SettingsPanel({
             ) : null}
             {activeSettingsSection === "bot" ? (
               <div className="flex flex-col items-center gap-1.5 text-center">
-                <Button className="bg-[#013765] text-white hover:bg-[#024a8a]" onClick={handleSaveBot} disabled={savingBot || !hasUnsavedBotChanges || !defaultFlowId}>{savingBot ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Guardando...</> : "Guardar configuración del bot"}</Button>
+                <Button className="bg-[#013765] text-white hover:bg-[#024a8a]" onClick={handleSaveBot} disabled={savingBot || !hasUnsavedBotChanges}>{savingBot ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Guardando...</> : "Guardar configuración del bot"}</Button>
                 <p className="text-xs text-[#013765]/70">{hasUnsavedBotChanges ? "Hay cambios sin guardar." : botSaved ? "Configuración guardada." : "Sin cambios pendientes."}</p>
+              </div>
+            ) : null}
+            {activeSettingsSection === "whatsapp" ? (
+              <div className="flex flex-col items-center gap-1.5 text-center">
+                <Button className="bg-[#013765] text-white hover:bg-[#024a8a]" onClick={handleSaveWhatsappFlow} disabled={savingWhatsappFlow || !hasUnsavedWhatsappFlowChanges || !whatsappFlowId}>{savingWhatsappFlow ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Guardando...</> : "Guardar flujo de WhatsApp"}</Button>
+                <p className="text-xs text-[#013765]/70">{hasUnsavedWhatsappFlowChanges ? "Hay cambios sin guardar." : whatsappFlowSaved ? "Configuración guardada." : "Sin cambios pendientes."}</p>
               </div>
             ) : null}
             {activeSettingsSection === "integrations" ? (
@@ -1075,11 +1147,50 @@ export default function SettingsPanel({
             ) : null}
             {activeSettingsSection === "webchat" ? (
               <div className="flex flex-col items-center gap-1.5 text-center">
-                <Button className="bg-[#013765] text-white hover:bg-[#024a8a]" onClick={handleSaveWebchat} disabled={savingWebchat || !hasUnsavedWebchatChanges}>{savingWebchat ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Guardando...</> : "Guardar configuración de Webchat"}</Button>
+                <Button className="bg-[#013765] text-white hover:bg-[#024a8a]" onClick={handleSaveWebchat} disabled={savingWebchat || !hasUnsavedWebchatChanges || !isWebchatFlowScheduleComplete}>{savingWebchat ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Guardando...</> : "Guardar configuración de Webchat"}</Button>
                 <p className="text-xs text-[#013765]/70">{hasUnsavedWebchatChanges ? "Hay cambios sin guardar." : webchatSaved ? "Configuración guardada." : "Sin cambios pendientes."}</p>
               </div>
             ) : null}
           </div>
+        ) : null}
+
+        {activeSettingsSection === "whatsapp" ? (
+          <Card className="border-[#dbe5ef] bg-white">
+            <CardHeader>
+              <CardTitle className="text-[#013765]">Configuración de WhatsApp</CardTitle>
+              <CardDescription className="text-[#013765]/70">Elegí el flujo que iniciará las conversaciones nuevas de WhatsApp.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <SettingsGroup title="Flujo del canal" description="Solo aparecen flujos activos y habilitados para WhatsApp.">
+                <div className="max-w-xl space-y-2">
+                  <label className="text-sm font-medium text-[#013765]">Flujo asignado</label>
+                  <Select
+                    value={whatsappFlowId ? String(whatsappFlowId) : undefined}
+                    onValueChange={(value) => setWhatsappFlowId(Number(value))}
+                    disabled={botFlows.filter((flow) => flow.channels?.includes("whatsapp")).length === 0}
+                  >
+                    <SelectTrigger className="h-20 border-dashed border-[#013765]/25 bg-[#013765]/[0.03] px-3 hover:border-[#013765]/45 hover:bg-[#013765]/[0.06]">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className="grid h-14 w-14 shrink-0 place-items-center rounded-xl bg-white text-[#013765] shadow-sm"><MessageCircle className="h-5 w-5" /></span>
+                        <span className="min-w-0 text-left">
+                          <span className="block truncate text-sm font-medium text-[#013765]">{botFlows.find((flow) => flow.id === whatsappFlowId)?.name ?? "Seleccioná un flujo"}</span>
+                          <span className="mt-0.5 block text-xs text-[#013765]/65">Hacé clic para cambiarlo</span>
+                        </span>
+                      </div>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {botFlows.filter((flow) => flow.channels?.includes("whatsapp")).map((flow) => (
+                        <SelectItem key={flow.id} value={String(flow.id)}>{flow.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {botFlows.filter((flow) => flow.channels?.includes("whatsapp")).length === 0 ? (
+                    <p className="text-xs text-amber-700">No hay flujos activos habilitados para WhatsApp.</p>
+                  ) : null}
+                </div>
+              </SettingsGroup>
+            </CardContent>
+          </Card>
         ) : null}
 
         {activeSettingsSection === "webchat" ? (
@@ -1118,18 +1229,100 @@ export default function SettingsPanel({
                   <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Disponibilidad</label><Select value={webchat.availability_mode} onValueChange={(value: "always" | "schedule") => setWebchat((v) => ({ ...v, availability_mode: value }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="always">Siempre disponible</SelectItem><SelectItem value="schedule">Según horario</SelectItem></SelectContent></Select></div>
                   {webchat.availability_mode === "schedule" ? <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Horario de atención</label><div className="flex items-center gap-2"><Select value={webchat.schedule_start} onValueChange={(value) => setWebchat((v) => ({ ...v, schedule_start: value }))}><SelectTrigger aria-label="Horario de inicio" className="min-w-0 flex-1 tabular-nums"><SelectValue /></SelectTrigger><SelectContent>{TIME_OPTIONS.map((time) => <SelectItem key={time} value={time}>{time}</SelectItem>)}</SelectContent></Select><ArrowRight className="h-4 w-4 shrink-0 text-[#013765]/55" aria-hidden="true" /><Select value={webchat.schedule_end} onValueChange={(value) => setWebchat((v) => ({ ...v, schedule_end: value }))}><SelectTrigger aria-label="Horario de fin" className="min-w-0 flex-1 tabular-nums"><SelectValue /></SelectTrigger><SelectContent>{TIME_OPTIONS.map((time) => <SelectItem key={time} value={time}>{time}</SelectItem>)}</SelectContent></Select></div></div> : null}
                   {webchat.availability_mode === "schedule" ? <div className="md:col-span-2 flex items-center justify-between gap-4 rounded-xl border border-[#d7e3ee] bg-[#f7fafc] px-4 py-3"><div><p className="text-sm font-medium text-[#013765]">El bot atiende fuera de horario</p><p className="mt-0.5 text-xs text-[#013765]/65">Las conversaciones seguirán con el bot; las derivaciones a operadores quedarán en espera.</p></div><Button type="button" size="sm" onClick={() => setWebchat((v) => ({ ...v, bot_available_outside_schedule: !v.bot_available_outside_schedule }))} className={cn("shrink-0 gap-2", webchat.bot_available_outside_schedule ? "bg-[#013765] text-white hover:bg-[#024a8a]" : "border border-[#cbd8e5] bg-white text-[#013765] hover:bg-[#013765]/[0.06]")} aria-pressed={webchat.bot_available_outside_schedule}>{webchat.bot_available_outside_schedule ? <Check className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}{webchat.bot_available_outside_schedule ? "Activado" : "Desactivado"}</Button></div> : null}
-                  <div className="space-y-1.5 md:col-span-2"><label className="text-sm font-medium text-[#013765]">Mensaje fuera de horario o deshabilitado</label><Textarea rows={2} value={webchat.offline_message} onChange={(e) => setWebchat((v) => ({ ...v, offline_message: e.target.value }))} /></div>
+                  <div className="space-y-1.5 md:col-span-2"><label className="text-sm font-medium text-[#013765]">Mensaje fuera de horario o deshabilitado</label><Textarea className="w-1/2" rows={2} value={webchat.offline_message} onChange={(e) => setWebchat((v) => ({ ...v, offline_message: e.target.value }))} /></div>
                 </div>
               </section>
+              <SettingsGroup title="Flujos por día" description="Asigná un flujo para los días hábiles y otro para el fin de semana.">
+                <div className="grid gap-4 lg:grid-cols-2">
+                  {FLOW_DAY_GROUPS.map(({ key, label, daysLabel, days }) => {
+                    const selectedIds = new Set(days.map((day) => webchat.flow_schedule[day]))
+                    const selectedId = selectedIds.size === 1 ? webchat.flow_schedule[days[0]] : null
+                    return (
+                      <div key={key} className="rounded-2xl border border-[#dbe5ef] bg-[#f8fafc] p-4 sm:p-5">
+                        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <h3 className="text-sm font-semibold text-[#013765]">{label}</h3>
+                            <p className="mt-0.5 text-xs text-[#013765]/60">{daysLabel}</p>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {days.map((day) => {
+                              const dayLabel = WEEKDAYS.find((item) => item.key === day)?.label ?? day
+                              return <span key={day} className="rounded-full border border-[#d5e1ec] bg-white px-2.5 py-1 text-[11px] font-medium text-[#013765]/75">{dayLabel}</span>
+                            })}
+                          </div>
+                        </div>
+                        <Select
+                          value={selectedId ? String(selectedId) : ""}
+                          onValueChange={(value) => setWebchat((current) => ({
+                            ...current,
+                            flow_schedule: days.reduce((schedule, day) => ({ ...schedule, [day]: Number(value) }), current.flow_schedule),
+                          }))}
+                        >
+                          <SelectTrigger className="h-[72px] border-dashed border-[#013765]/25 bg-[#013765]/[0.03] px-3 hover:border-[#013765]/45 hover:bg-[#013765]/[0.06]">
+                            <div className="flex min-w-0 items-center gap-3 text-left">
+                              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-white text-[#013765] shadow-sm"><Waypoints className="h-5 w-5" /></span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-sm font-medium text-[#013765]">{selectedId ? botFlows.find((flow) => flow.id === selectedId)?.name : selectedIds.size > 1 ? "Varios flujos asignados" : "Seleccioná un flujo"}</span>
+                                <span className="mt-0.5 block truncate text-xs text-[#013765]/65">{selectedIds.size > 1 ? "Hacé clic para aplicar uno a todos estos días" : "Hacé clic para cambiarlo"}</span>
+                              </span>
+                            </div>
+                          </SelectTrigger>
+                          <SelectContent>
+                            {botFlows.filter((flow) => flow.channels?.includes("webchat")).map((flow) => (
+                              <SelectItem key={flow.id} value={String(flow.id)}>{flow.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )
+                  })}
+                </div>
+                <button type="button" onClick={() => setShowDailyWebchatFlows((value) => !value)} className="mt-4 text-sm font-medium text-[#013765] underline decoration-[#013765]/30 underline-offset-4 transition hover:decoration-[#013765]">
+                  {showDailyWebchatFlows ? "Ocultar configuración por día" : hasCustomWebchatFlowSchedule ? "Ver configuración personalizada por día" : "Personalizar por día"}
+                </button>
+                {showDailyWebchatFlows ? (
+                  <div className="mt-4 grid gap-3 rounded-2xl border border-[#dbe5ef] bg-white p-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {WEEKDAYS.map(({ key, label }) => (
+                      <div key={key} className="space-y-1.5">
+                        <label className="text-sm font-medium text-[#013765]">{label}</label>
+                        <Select
+                          value={webchat.flow_schedule[key] ? String(webchat.flow_schedule[key]) : ""}
+                          onValueChange={(value) => setWebchat((current) => ({
+                            ...current,
+                            flow_schedule: { ...current.flow_schedule, [key]: Number(value) },
+                          }))}
+                        >
+                          <SelectTrigger className="h-[72px] border-dashed border-[#013765]/25 bg-[#013765]/[0.03] px-3 hover:border-[#013765]/45 hover:bg-[#013765]/[0.06]">
+                            <div className="flex min-w-0 items-center gap-3 text-left">
+                              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-white text-[#013765] shadow-sm"><Waypoints className="h-5 w-5" /></span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-sm font-medium text-[#013765]">{botFlows.find((flow) => flow.id === webchat.flow_schedule[key])?.name ?? "Seleccioná un flujo"}</span>
+                                <span className="mt-0.5 block truncate text-xs text-[#013765]/65">Hacé clic para cambiarlo</span>
+                              </span>
+                            </div>
+                          </SelectTrigger>
+                          <SelectContent>
+                            {botFlows.filter((flow) => flow.channels?.includes("webchat")).map((flow) => (
+                              <SelectItem key={flow.id} value={String(flow.id)}>{flow.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {!isWebchatFlowScheduleComplete ? (
+                  <p className="mt-2 text-xs text-amber-700">Seleccioná un flujo para cada día antes de guardar.</p>
+                ) : null}
+              </SettingsGroup>
               <SettingsGroup title="Experiencia pública" description="Textos que ve la persona antes y durante la conversación.">
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Título</label><Input value={webchat.subtitle} onChange={(e) => setWebchat((v) => ({ ...v, subtitle: e.target.value }))} /></div><div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Nombre</label><Input value={webchat.title} onChange={(e) => setWebchat((v) => ({ ...v, title: e.target.value }))} /></div>
                 </div>
               </SettingsGroup>
-              <SettingsGroup title="Publicación" description="Elegí el flujo y el logo que se mostrará en el canal público.">
+              <SettingsGroup title="Publicación" description="Configurá el logo que se mostrará en el canal público.">
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Logo</label><label className="flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-[#013765]/25 bg-[#013765]/[0.03] p-3 transition-colors hover:border-[#013765]/45 hover:bg-[#013765]/[0.06]"><input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" className="sr-only" onChange={(event) => { const file = event.target.files?.[0] ?? null; setWebchatLogoFile(file); setWebchatLogoPreview(file ? URL.createObjectURL(file) : "") }} /><span className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-xl bg-white p-2 text-[#013765] shadow-sm"><img src={webchatLogoPreview || (webchat.logo_url ? webchatLogoUrl(webchat.logo_url) : `${import.meta.env.VITE_APP_URL}/images/hu_icon_new.png`)} alt="Vista previa del logo" className="h-full w-full object-contain" onError={(event) => { event.currentTarget.src = `${import.meta.env.VITE_APP_URL}/images/hu_icon_new.png` }} /></span><span className="min-w-0"><span className="block text-sm font-medium text-[#013765]">{webchatLogoFile ? webchatLogoFile.name : webchat.logo_url ? "Logo actual" : "Seleccionar imagen"}</span><span className="mt-0.5 block text-xs text-[#013765]/65">Hacé clic para cambiarlo · PNG, JPG, WebP o SVG</span></span><Upload className="ml-auto h-4 w-4 shrink-0 text-[#013765]/65" /></label></div>
-                  <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Flujo</label><Select value={webchat.default_flow_id ? String(webchat.default_flow_id) : "auto"} onValueChange={(value) => setWebchat((v) => ({ ...v, default_flow_id: value === "auto" ? null : Number(value) }))}><SelectTrigger className="h-20 border-dashed border-[#013765]/25 bg-[#013765]/[0.03] px-3 hover:border-[#013765]/45 hover:bg-[#013765]/[0.06]"><div className="flex min-w-0 items-center gap-3"><span className="grid h-14 w-14 shrink-0 place-items-center rounded-xl bg-white text-[#013765] shadow-sm"><Waypoints className="h-5 w-5" /></span><span className="min-w-0 text-left"><span className="block truncate text-sm font-medium text-[#013765]">{selectedWebchatFlowLabel}</span><span className="mt-0.5 block text-xs text-[#013765]/65">Hacé clic para cambiarlo</span></span></div></SelectTrigger><SelectContent><SelectItem value="auto">Usar flujo Webchat predeterminado</SelectItem>{botFlows.filter((flow) => flow.channels?.includes("webchat")).map((flow) => <SelectItem key={flow.id} value={String(flow.id)}>{flow.name}</SelectItem>)}</SelectContent></Select></div>
                 </div>
               </SettingsGroup>
             </CardContent>
@@ -1327,7 +1520,7 @@ export default function SettingsPanel({
               <div>
                 <CardTitle className="text-[#013765]">Bot</CardTitle>
                 <CardDescription className="text-[#013765]/70">
-                  Define el flujo principal y como debe cerrarse una conversacion que queda pendiente.
+                  Configurá cuánto tiempo puede quedar pendiente una conversación antes de archivarse.
                 </CardDescription>
               </div>
             </div>
@@ -1335,32 +1528,9 @@ export default function SettingsPanel({
           <CardContent className="space-y-5">
             <SettingsGroup
               title="Comportamiento del bot"
-              description="Definí el flujo inicial y cuándo debe cerrarse una conversación pendiente."
+              description="Definí cuándo debe cerrarse una conversación pendiente por inactividad."
             >
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium text-[#013765]">Flujo por defecto</label>
-                <Select
-                  value={defaultFlowId ? String(defaultFlowId) : undefined}
-                  onValueChange={(value) => setDefaultFlowId(Number(value))}
-                  disabled={botFlows.length === 0}
-                >
-                  <SelectTrigger className="bg-white">
-                    <SelectValue placeholder="Selecciona un flujo activo" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {botFlows.map((flow) => (
-                      <SelectItem key={flow.id} value={String(flow.id)}>
-                        {flow.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-[#013765]/60">
-                  Es el flujo que se usa para iniciar nuevas conversaciones y para reiniciar chats vencidos.
-                </p>
-              </div>
-
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-[#013765]">Tiempo de inactividad (minutos)</label>
                 <Input
@@ -1379,6 +1549,7 @@ export default function SettingsPanel({
               <div className="space-y-1.5 md:col-span-2">
                 <label className="text-sm font-medium text-[#013765]">Mensaje por inactividad</label>
                 <Textarea
+                  className="w-1/2"
                   rows={4}
                   value={inactivityTimeoutMessage}
                   onChange={(e) => setInactivityTimeoutMessage(e.target.value)}

@@ -2,8 +2,10 @@
 
 namespace App\Http\Controllers;
 
+use Carbon\Carbon;
 use App\Models\Chat;
 use App\Models\Message;
+use App\Models\SystemSetting;
 use App\Services\AuditService;
 use App\Services\BotInactivityService;
 use App\Services\ChatAssignmentService;
@@ -24,23 +26,11 @@ class ChatController extends Controller
 
     public function index()
     {
-        $actor = request()->user();
-        $canViewAll = (bool) $actor?->hasPermission('can_view_all_chats');
-
+        $botName = SystemSetting::query()->where('key', 'webchat.title')->value('value') ?: 'Asistente virtual';
         $chats = Chat::query()
-            ->with(['contact', 'messages' => fn ($query) => $query->latest(), 'operator', 'botFlow', 'botNode'])
-            ->when(! $canViewAll, function ($query) use ($actor) {
-                $query->where(function ($scope) use ($actor) {
-                    $scope->where('operator_id', $actor->id)
-                        ->orWhere(function ($archived) use ($actor) {
-                            $archived->where('status', 'closed')->where('last_operator_id', $actor->id);
-                        });
-                });
-            })
-            // Administración y supervisión pueden auditar también conversaciones atendidas por bot.
-            ->when(! $canViewAll, fn ($query) => $query->whereIn('attention_status', ['assigned', 'archived']))
+            ->with(['contact', 'messages' => fn ($query) => $query->latest(), 'operator', 'lastOperator', 'botFlow', 'botNode'])
             ->get()
-            ->map(function (Chat $chat) {
+            ->map(function (Chat $chat) use ($botName) {
                 $lastMessage = $chat->messages->first();
 
                 return [
@@ -51,16 +41,18 @@ class ChatController extends Controller
                         : '+'.$chat->contact?->whatsapp_id,
                     'channel' => $chat->channel ?? 'whatsapp',
                     'lastMessage' => $lastMessage?->body ?? '',
-                    // `created_at` puede conservar la hora original del proveedor
-                    // (incluso desfasada). La actualización del chat representa la
-                    // actividad real para ordenar el panel.
-                    'timestamp' => $chat->updated_at,
+                    // La hora de la lista debe corresponder al ultimo mensaje.
+                    // `updated_at` tambien cambia al actualizar estados operativos.
+                    'timestamp' => $lastMessage?->created_at?->toIso8601String(),
                     'unread' => $chat->messages()->where('status', 'received')->count(),
                     'online' => false,
                     'avatar' => $chat->contact?->profile_pic,
                     'bot_enabled' => (bool) $chat->bot_enabled,
+                    'bot_name' => $botName,
                     'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null,
                     'operator_name' => $chat->operator?->name,
+                    'last_operator_id' => $chat->last_operator_id ? (int) $chat->last_operator_id : null,
+                    'last_operator_name' => $chat->lastOperator?->name,
                     'bot_state' => $chat->bot_state ?? [],
                     'status' => $chat->status,
                     'attention_status' => $chat->attention_status,
@@ -207,6 +199,7 @@ class ChatController extends Controller
             $chat->last_operator_id = (int) $operatorId;
             $chat->assigned_at = now();
             $chat->attention_status = 'assigned';
+            $chat->bot_enabled = false;
         } else {
             $chat->operator_id = null;
             $chat->assigned_at = null;
@@ -247,6 +240,9 @@ class ChatController extends Controller
         ];
 
         $this->publishOperatorStatus((int) $chat->id, $payload);
+        if ($data['active']) {
+            $this->publishBotStatus((int) $chat->id, false);
+        }
 
         return response()->json([
             'ok' => true,
@@ -277,7 +273,7 @@ class ChatController extends Controller
             'bot_node_id' => $chat->bot_node_id,
         ];
 
-        $flow = $this->botInactivityService->getDefaultFlow();
+        $flow = $this->botInactivityService->getDefaultFlow($chat->channel ?? 'whatsapp');
         if (! $flow || ! $flow->start_node_id) {
             return response()->json([
                 'ok' => false,
@@ -342,11 +338,13 @@ class ChatController extends Controller
 
     public function archiveByAdmin(Request $request, Chat $chat)
     {
+        $data = $request->validate(['reason' => ['required', 'string', 'max:500']]);
+
         if ($chat->status === 'closed') {
             return response()->json(['ok' => false, 'message' => 'El chat ya esta archivado.'], 422);
         }
 
-        $flow = $this->botInactivityService->getDefaultFlow();
+        $flow = $this->botInactivityService->getDefaultFlow($chat->channel ?? 'whatsapp');
         if (! $flow || ! $flow->start_node_id) {
             return response()->json(['ok' => false, 'message' => 'No hay un flujo activo para reactivar el bot.'], 422);
         }
@@ -367,7 +365,7 @@ class ChatController extends Controller
         $chat->load('operator');
 
         $this->auditService->recordChatAction('admin_archived_chat', 'Archivo el chat y reactivo el bot', $chat, $request->user(), [
-            'before' => $before, 'after' => $this->adminChatState($chat), 'meta' => ['reason' => 'Intervención administrativa: archivó el chat y reactivó el bot.'],
+            'before' => $before, 'after' => $this->adminChatState($chat), 'meta' => ['reason' => $data['reason']],
         ]);
         $this->publishChatLifecycle($chat);
 
@@ -376,11 +374,13 @@ class ChatController extends Controller
 
     public function reopenByAdmin(Request $request, Chat $chat)
     {
+        $data = $request->validate(['reason' => ['required', 'string', 'max:500']]);
+
         if ($chat->status !== 'closed') {
             return response()->json(['ok' => false, 'message' => 'Solo se pueden reabrir chats archivados.'], 422);
         }
 
-        $flow = $this->botInactivityService->getDefaultFlow();
+        $flow = $this->botInactivityService->getDefaultFlow($chat->channel ?? 'whatsapp');
         if (! $flow || ! $flow->start_node_id) {
             return response()->json(['ok' => false, 'message' => 'No hay un flujo activo para reabrir el chat.'], 422);
         }
@@ -397,7 +397,7 @@ class ChatController extends Controller
         $chat->save();
 
         $this->auditService->recordChatAction('admin_reopened_chat', 'Reabrio el chat con el bot activo', $chat, $request->user(), [
-            'before' => $before, 'after' => $this->adminChatState($chat), 'meta' => ['reason' => 'Intervención administrativa: reabrió el chat con el bot activo.'],
+            'before' => $before, 'after' => $this->adminChatState($chat), 'meta' => ['reason' => $data['reason']],
         ]);
         $this->publishChatLifecycle($chat);
 
@@ -430,16 +430,52 @@ class ChatController extends Controller
 
     public function snapshot()
     {
-        $rows = Chat::with('operator:id,name')
-            ->get(['id', 'operator_id', 'bot_enabled', 'status', 'attention_status'])
-            ->map(function (Chat $chat) {
+        $botName = SystemSetting::query()->where('key', 'webchat.title')->value('value') ?: 'Asistente virtual';
+        $rows = Chat::query()
+            ->with(['contact', 'operator:id,name', 'lastOperator:id,name', 'botFlow', 'botNode'])
+            ->addSelect([
+                'last_message_body' => Message::query()
+                    ->select('body')
+                    ->whereColumn('messages.chat_id', 'chats.id')
+                    ->latest('id')
+                    ->limit(1),
+                'last_message_at' => Message::query()
+                    ->select('created_at')
+                    ->whereColumn('messages.chat_id', 'chats.id')
+                    ->latest('id')
+                    ->limit(1),
+            ])
+            ->get()
+            ->map(function (Chat $chat) use ($botName) {
                 return [
                     'chat_id' => (int) $chat->id,
+                    'name' => $chat->contact?->name ?? $chat->contact?->whatsapp_id,
+                    'number' => ($chat->channel ?? 'whatsapp') === 'webchat'
+                        ? 'Webchat'
+                        : '+'.$chat->contact?->whatsapp_id,
+                    'channel' => $chat->channel ?? 'whatsapp',
+                    'lastMessage' => $chat->last_message_body ?? '',
+                    'timestamp' => $chat->last_message_at
+                        ? Carbon::parse($chat->last_message_at)->toIso8601String()
+                        : null,
+                    'avatar' => $chat->contact?->profile_pic,
                     'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null,
                     'operator_name' => $chat->operator?->name,
+                    'last_operator_id' => $chat->last_operator_id ? (int) $chat->last_operator_id : null,
+                    'last_operator_name' => $chat->lastOperator?->name,
                     'bot_enabled' => (bool) $chat->bot_enabled,
+                    'bot_name' => $botName,
                     'status' => $chat->status,
                     'attention_status' => $chat->attention_status,
+                    'assigned_at' => $chat->assigned_at?->toIso8601String(),
+                    'closed_at' => $chat->closed_at?->toIso8601String(),
+                    'closed_by' => $chat->closed_by,
+                    'bot_flow_id' => $chat->bot_flow_id ? (int) $chat->bot_flow_id : null,
+                    'bot_flow_name' => $chat->botFlow?->name,
+                    'bot_node_id' => $chat->bot_node_id ? (int) $chat->bot_node_id : null,
+                    'bot_node_name' => $chat->botNode?->key,
+                    'bot_step' => $chat->bot_step,
+                    'bot_state' => $chat->bot_state ?? [],
                 ];
             })
             ->values();
@@ -476,9 +512,9 @@ class ChatController extends Controller
 
     private function adminChatPayload(Chat $chat): array
     {
-        $chat->loadMissing(['botFlow', 'botNode']);
+        $chat->loadMissing(['operator', 'lastOperator', 'botFlow', 'botNode']);
 
-        return ['chat_id' => (int) $chat->id, 'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null, 'operator_name' => null, 'bot_enabled' => (bool) $chat->bot_enabled, 'status' => $chat->status, 'attention_status' => $chat->attention_status, 'assigned_at' => $chat->assigned_at?->toIso8601String(), 'closed_at' => $chat->closed_at?->toIso8601String(), 'closed_by' => $chat->closed_by, 'bot_flow_id' => $chat->bot_flow_id ? (int) $chat->bot_flow_id : null, 'bot_flow_name' => $chat->botFlow?->name, 'bot_node_id' => $chat->bot_node_id ? (int) $chat->bot_node_id : null, 'bot_node_name' => $chat->botNode?->key, 'bot_step' => $chat->bot_step, 'bot_state' => $chat->bot_state];
+        return ['chat_id' => (int) $chat->id, 'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null, 'operator_name' => $chat->operator?->name, 'last_operator_id' => $chat->last_operator_id ? (int) $chat->last_operator_id : null, 'last_operator_name' => $chat->lastOperator?->name, 'bot_enabled' => (bool) $chat->bot_enabled, 'status' => $chat->status, 'attention_status' => $chat->attention_status, 'assigned_at' => $chat->assigned_at?->toIso8601String(), 'closed_at' => $chat->closed_at?->toIso8601String(), 'closed_by' => $chat->closed_by, 'bot_flow_id' => $chat->bot_flow_id ? (int) $chat->bot_flow_id : null, 'bot_flow_name' => $chat->botFlow?->name, 'bot_node_id' => $chat->bot_node_id ? (int) $chat->bot_node_id : null, 'bot_node_name' => $chat->botNode?->key, 'bot_step' => $chat->bot_step, 'bot_state' => $chat->bot_state];
     }
 
     private function publishChatLifecycle(Chat $chat): void

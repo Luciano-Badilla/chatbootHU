@@ -36,6 +36,7 @@ class SettingsController extends Controller
                 'integrations.whatsapp.waba_id',
                 'integrations.whatsapp.phone_number_id',
                 'integrations.whatsapp.webhook_verify_token',
+                'whatsapp.default_flow_id',
                 'integrations.alephoo.base_url',
                 'integrations.alephoo.api_key',
                 'integrations.alephoo.timeout',
@@ -53,6 +54,7 @@ class SettingsController extends Controller
                 'webchat.enabled', 'webchat.availability_mode', 'webchat.schedule_start', 'webchat.schedule_end', 'webchat.bot_available_outside_schedule', 'webchat.offline_message',
                 'webchat.title', 'webchat.subtitle',
                 'webchat.logo_url', 'webchat.default_flow_id',
+                'webchat.flow_schedule',
             ])
             ->pluck('value', 'key');
         $storedWhatsappToken = trim((string) ($settings['integrations.whatsapp.token'] ?? ''));
@@ -65,7 +67,37 @@ class SettingsController extends Controller
             ->orderBy('name')
             ->get(['id', 'name', 'is_default', 'channels']);
 
-        $defaultFlow = $activeFlows->firstWhere('is_default', true);
+        $whatsappDefaultFlowId = $activeFlows->first(fn (BotFlow $flow) => (int) $flow->id === (int) ($settings['whatsapp.default_flow_id'] ?? 0)
+            && in_array('whatsapp', $flow->channels ?? [], true))?->id
+            ?? $activeFlows->first(fn (BotFlow $flow) => $flow->is_default && in_array('whatsapp', $flow->channels ?? [], true))?->id
+            ?? $activeFlows->first(fn (BotFlow $flow) => in_array('whatsapp', $flow->channels ?? [], true))?->id;
+        $fallbackWebchatFlowId = $activeFlows->first(fn (BotFlow $flow) => $flow->is_default && in_array('webchat', $flow->channels ?? [], true))?->id
+            ?? $activeFlows->first(fn (BotFlow $flow) => in_array('webchat', $flow->channels ?? [], true))?->id;
+        $webchatFlowSchedule = json_decode((string) ($settings['webchat.flow_schedule'] ?? ''), true);
+        if (!is_array($webchatFlowSchedule)) {
+            $legacyWebchatFlowId = filled($settings['webchat.default_flow_id'] ?? null)
+                ? (int) $settings['webchat.default_flow_id']
+                : $fallbackWebchatFlowId;
+            $webchatFlowSchedule = array_fill_keys(
+                ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+                $legacyWebchatFlowId,
+            );
+        } else {
+            $webchatFlowSchedule = array_replace(
+                array_fill_keys(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'], null),
+                array_intersect_key($webchatFlowSchedule, array_flip(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'])),
+            );
+        }
+        $eligibleWebchatFlowIds = $activeFlows
+            ->filter(fn (BotFlow $flow) => in_array('webchat', $flow->channels ?? [], true))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+        foreach ($webchatFlowSchedule as $day => $flowId) {
+            $webchatFlowSchedule[$day] = $flowId && in_array((int) $flowId, $eligibleWebchatFlowIds, true)
+                ? (int) $flowId
+                : $fallbackWebchatFlowId;
+        }
 
         return Inertia::render('SettingsPanel', [
             'settings' => [
@@ -101,7 +133,6 @@ class SettingsController extends Controller
                     ],
                 ],
                 'bot' => [
-                    'default_flow_id' => $defaultFlow?->id,
                     'inactivity_timeout_minutes' => $settings['bot.inactivity_timeout_minutes'] ?? '1440',
                     'inactivity_timeout_message' => $settings['bot.inactivity_timeout_message']
                         ?? 'La conversacion se cerro por inactividad. Si queres continuar, escribinos nuevamente y retomamos desde el inicio.',
@@ -119,10 +150,9 @@ class SettingsController extends Controller
                     'title' => $settings['webchat.title'] ?? 'Asistente virtual',
                     'subtitle' => $settings['webchat.subtitle'] ?? 'Hospital Universitario',
                     'logo_url' => $settings['webchat.logo_url'] ?? '',
-                    'default_flow_id' => filled($settings['webchat.default_flow_id'] ?? null)
-                        ? (int) $settings['webchat.default_flow_id']
-                        : null,
+                    'flow_schedule' => $webchatFlowSchedule,
                 ],
+                'whatsapp' => ['default_flow_id' => $whatsappDefaultFlowId],
             ],
             'botFlows' => $activeFlows->map(fn (BotFlow $flow) => [
                 'id' => $flow->id,
@@ -578,16 +608,12 @@ class SettingsController extends Controller
     public function saveBot(Request $request)
     {
         $data = $request->validate([
-            'default_flow_id' => ['required', 'integer', 'exists:bot_flows,id'],
             'inactivity_timeout_minutes' => ['required', 'integer', 'min:1', 'max:10080'],
             'inactivity_timeout_message' => ['required', 'string', 'max:2000'],
             'max_assigned_chats' => ['required', 'integer', 'min:1', 'max:100'],
         ]);
 
-        $beforeDefaultFlow = BotFlow::query()->where('is_default', true)->first();
         $before = [
-            'default_flow_id' => $beforeDefaultFlow?->id,
-            'default_flow_name' => $beforeDefaultFlow?->name,
             'inactivity_timeout_minutes' => $this->settingValue('bot.inactivity_timeout_minutes', '1440'),
             'inactivity_timeout_message' => $this->settingValue(
                 'bot.inactivity_timeout_message',
@@ -596,19 +622,7 @@ class SettingsController extends Controller
             'max_assigned_chats' => $this->settingValue('operators.max_assigned_chats', '5'),
         ];
 
-        $flow = BotFlow::query()->findOrFail($data['default_flow_id']);
-
-        if (!$flow->is_active) {
-            return response()->json([
-                'ok' => false,
-                'message' => 'Solo podes seleccionar un flujo activo como flujo por defecto.',
-            ], 422);
-        }
-
-        \DB::transaction(function () use ($flow, $data) {
-            BotFlow::query()->where('is_default', true)->update(['is_default' => false]);
-            $flow->update(['is_default' => true]);
-
+        \DB::transaction(function () use ($data) {
             SystemSetting::updateOrCreate(
                 ['key' => 'bot.inactivity_timeout_minutes'],
                 ['value' => (string) $data['inactivity_timeout_minutes']],
@@ -626,8 +640,6 @@ class SettingsController extends Controller
         });
 
         $after = [
-            'default_flow_id' => $flow->id,
-            'default_flow_name' => $flow->name,
             'inactivity_timeout_minutes' => (string) $data['inactivity_timeout_minutes'],
             'inactivity_timeout_message' => trim($data['inactivity_timeout_message']),
             'max_assigned_chats' => (string) $data['max_assigned_chats'],
@@ -639,7 +651,6 @@ class SettingsController extends Controller
             'ok' => true,
             'settings' => [
                 'bot' => [
-                    'default_flow_id' => $flow->id,
                     'inactivity_timeout_minutes' => (string) $data['inactivity_timeout_minutes'],
                     'inactivity_timeout_message' => trim($data['inactivity_timeout_message']),
                 ],
@@ -650,14 +661,45 @@ class SettingsController extends Controller
         ]);
     }
 
-    public function saveWebchat(Request $request)
+    public function saveWhatsAppFlow(Request $request)
     {
-        // A blank value represents the automatic Webchat flow. Older saved values
-        // are stored as an empty string, which must not be validated as flow ID 0.
-        if (in_array($request->input('default_flow_id'), ['', '0', 0, null], true)) {
-            $request->merge(['default_flow_id' => null]);
+        $data = $request->validate([
+            'default_flow_id' => ['required', 'integer', 'exists:bot_flows,id'],
+        ]);
+        $flow = BotFlow::query()
+            ->whereKey($data['default_flow_id'])
+            ->where('is_active', true)
+            ->whereJsonContains('channels', 'whatsapp')
+            ->first();
+
+        if (!$flow) {
+            return response()->json(['message' => 'El flujo seleccionado debe estar activo y habilitado para WhatsApp.'], 422);
         }
 
+        $before = ['default_flow_id' => $this->settingValue('whatsapp.default_flow_id')];
+        SystemSetting::updateOrCreate(
+            ['key' => 'whatsapp.default_flow_id'],
+            ['value' => (string) $flow->id],
+        );
+        $after = ['default_flow_id' => $flow->id, 'flow_name' => $flow->name];
+        $this->auditService->recordSettingsChange('whatsapp', $before, $after, $request->user());
+
+        return response()->json(['ok' => true, 'settings' => ['whatsapp' => ['default_flow_id' => $flow->id]]]);
+    }
+
+    public function saveWebchat(Request $request)
+    {
+        if (is_string($request->input('flow_schedule'))) {
+            $schedule = json_decode($request->input('flow_schedule'), true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $request->merge(['flow_schedule' => $schedule]);
+            }
+        }
+
+        $flowScheduleRules = [];
+        foreach (['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as $day) {
+            $flowScheduleRules["flow_schedule.{$day}"] = ['required', 'integer', 'exists:bot_flows,id'];
+        }
         $data = $request->validate([
             'enabled' => ['required', 'boolean'], 'availability_mode' => ['required', 'in:always,schedule'],
             'schedule_start' => ['required', 'date_format:H:i'], 'schedule_end' => ['required', 'date_format:H:i'],
@@ -665,7 +707,8 @@ class SettingsController extends Controller
             'offline_message' => ['required', 'string', 'max:1000'], 'title' => ['required', 'string', 'max:100'],
             'subtitle' => ['nullable', 'string', 'max:100'],
             'logo' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp,svg', 'max:2048'],
-            'default_flow_id' => ['nullable', 'integer', 'exists:bot_flows,id'],
+            'flow_schedule' => ['required', 'array'],
+            ...$flowScheduleRules,
         ]);
         // Multipart forms deliver booleans as "0" / "1" strings. Normalize the
         // value before persisting and returning it so the settings UI receives a
@@ -683,13 +726,28 @@ class SettingsController extends Controller
                 Storage::disk('public')->delete(ltrim(substr($currentLogo, strlen('/storage/')), '/'));
             }
         }
-        if (!empty($data['default_flow_id']) && !BotFlow::query()->whereKey($data['default_flow_id'])->where('is_active', true)->whereJsonContains('channels', 'webchat')->exists()) {
-            return response()->json(['message' => 'El flujo seleccionado debe estar activo y habilitado para Webchat.'], 422);
+        $flowIds = collect($data['flow_schedule'])->filter()->unique()->values();
+        if ($flowIds->isNotEmpty()) {
+            $eligibleFlowCount = BotFlow::query()
+                ->whereIn('id', $flowIds)
+                ->where('is_active', true)
+                ->whereJsonContains('channels', 'webchat')
+                ->count();
+            if ($eligibleFlowCount !== $flowIds->count()) {
+                return response()->json(['message' => 'Los flujos seleccionados deben estar activos y habilitados para Webchat.'], 422);
+            }
         }
         $before = SystemSetting::query()->where('key', 'like', 'webchat.%')->pluck('value', 'key')->all();
+        $flowSchedule = $data['flow_schedule'];
+        unset($data['flow_schedule']);
         foreach ($data as $key => $value) {
             SystemSetting::updateOrCreate(['key' => 'webchat.'.$key], ['value' => is_bool($value) ? ($value ? '1' : '0') : (string) ($value ?? '')]);
         }
+        SystemSetting::updateOrCreate(
+            ['key' => 'webchat.flow_schedule'],
+            ['value' => json_encode($flowSchedule, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)],
+        );
+        $data['flow_schedule'] = $flowSchedule;
         $this->auditService->recordSettingsChange('webchat', $before, $data, $request->user());
         return response()->json(['ok' => true, 'settings' => ['webchat' => $data]]);
     }
@@ -964,6 +1022,7 @@ class SettingsController extends Controller
                 'description' => $flow->description,
                 'is_active' => (bool) $flow->is_active,
                 'is_default' => (bool) $flow->is_default,
+                'channels' => $flow->channels ?? ['whatsapp'],
                 'start_node_id' => $flow->start_node_id,
                 'nodes' => $flow->nodes->map(fn (BotNode $node) => [
                     'id' => $node->id,
@@ -979,7 +1038,7 @@ class SettingsController extends Controller
 
     protected function importSettings(array $settings): array
     {
-        $allowedPrefixes = ['general.', 'integrations.', 'bot.', 'operators.'];
+        $allowedPrefixes = ['general.', 'integrations.', 'bot.', 'operators.', 'whatsapp.', 'webchat.'];
         $imported = 0;
 
         foreach ($settings as $key => $value) {
@@ -1039,6 +1098,7 @@ class SettingsController extends Controller
                     'start_node_id' => null,
                     'is_active' => (bool) ($flowData['is_active'] ?? true),
                     'is_default' => false,
+                    'channels' => $flowData['channels'] ?? ['whatsapp'],
                 ]);
             } else {
                 $flow = BotFlow::query()->create([
@@ -1047,6 +1107,7 @@ class SettingsController extends Controller
                     'start_node_id' => null,
                     'is_active' => (bool) ($flowData['is_active'] ?? true),
                     'is_default' => false,
+                    'channels' => $flowData['channels'] ?? ['whatsapp'],
                 ]);
             }
 

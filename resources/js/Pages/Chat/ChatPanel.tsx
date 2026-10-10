@@ -23,8 +23,11 @@ export type Chat = {
   online: boolean
   avatar?: string | null
   bot_enabled: boolean
+  bot_name?: string | null
   operator_id?: number | null
   operator_name?: string | null
+  last_operator_id?: number | null
+  last_operator_name?: string | null
   status?: "open" | "closed" | string
   attention_status?: "bot" | "pending_assignment" | "assigned" | "archived" | string
   assigned_at?: string | null
@@ -100,6 +103,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   const previousSelectedChatIdRef = useRef<string>("")
   const selectedChatIdRef = useRef<string>("")
   const mqttClientRef = useRef<any>(null)
+  const syncChatsInFlightRef = useRef(false)
   const startupCurtainResolvedRef = useRef(false)
   const startupCurtainStartedAtRef = useRef(Date.now())
   const lastOperatorStateRef = useRef<Record<string, boolean>>({})
@@ -108,10 +112,6 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   const didRestoreSelectionFromDbRef = useRef(false)
   const waitingForChatReleaseRef = useRef<Record<string, boolean>>({})
   const [viewerReadOnlyChatId, setViewerReadOnlyChatId] = useState<string | null>(null)
-  const [operatorLeftPrompt, setOperatorLeftPrompt] = useState<{
-    chatId: string
-    operatorName?: string | null
-  } | null>(null)
   const [operatorConflict, setOperatorConflict] = useState<{
     chatId: string
     operatorId?: number | null
@@ -123,6 +123,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     nextChatId: string
   } | null>(null)
   const [finishingAttention, setFinishingAttention] = useState(false)
+  const [takingChat, setTakingChat] = useState(false)
 
   const dismissStartupCurtain = useCallback(() => {
     if (startupCurtainResolvedRef.current) return
@@ -178,12 +179,19 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   const isReadOnly = readOnlyByOperator || readOnlyByViewerLock || readOnlyByBot
   const readOnlyReason: "operator" | "bot" | null = readOnlyByBot ? "bot" : (isReadOnly ? "operator" : null)
   const canToggleBot = Boolean(
-    props?.auth?.permissions?.can_administer_chats,
+    props?.auth?.permissions?.can_toggle_bot,
   )
   const canFinishAttention = Boolean(
     selectedChat?.status === "open" &&
     selectedChat?.attention_status === "assigned" &&
     Number(selectedChat?.operator_id ?? 0) === Number(authUser?.id ?? 0),
+  )
+  const canTakeChat = Boolean(
+    authUser?.id &&
+    selectedChat?.status === "open" &&
+    !selectedChat?.operator_id &&
+    selectedChat?.attention_status !== "archived" &&
+    props?.auth?.permissions?.can_assign_chats,
   )
 
   useEffect(() => {
@@ -290,6 +298,28 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     }
   }
 
+  const takeSelectedChat = async () => {
+    if (!selectedChatId || !authUser?.id || takingChat) return
+    setTakingChat(true)
+    try {
+      const res = await fetch(`${import.meta.env.VITE_APP_URL}/api/chats/${selectedChatId}/operator`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: true }),
+      })
+      const payload = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(payload.message || "No se pudo tomar el chat.")
+      setChats((current) => current.map((chat) => String(chat.id) === String(selectedChatId)
+        ? { ...chat, operator_id: payload.operator_id ?? authUser.id, operator_name: payload.operator_name ?? authUser.name ?? null, attention_status: "assigned", status: "open", bot_enabled: false, assigned_at: new Date().toISOString() }
+        : chat,
+      ))
+    } catch (error) {
+      console.error("Error tomando chat:", error)
+    } finally {
+      setTakingChat(false)
+    }
+  }
+
   // NUEVO: marcar como leídos al abrir el chat
   useEffect(() => {
     if (!selectedChatId) return
@@ -307,49 +337,109 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     selectedChatIdRef.current = String(selectedChatId || "")
   }, [selectedChatId])
 
-  // Sincroniza estado local con DB al cargar (prioriza DB sobre memoria del front).
-  useEffect(() => {
-    let cancelled = false
+  // Sincroniza estado local con DB al cargar y después de reconectar MQTT.
+  const syncChatsFromDb = useCallback(async () => {
+    if (syncChatsInFlightRef.current) return
+    syncChatsInFlightRef.current = true
 
-    const hydrateFromDb = async () => {
-      try {
-        const res = await fetch(`${import.meta.env.VITE_APP_URL}/api/chats/snapshot`)
-        if (!res.ok) {
-          console.error("Error cargando snapshot de chats:", await res.text())
-          return
-        }
+    try {
+      const res = await fetch(`${import.meta.env.VITE_APP_URL}/api/chats/snapshot`)
+      if (!res.ok) {
+        console.error("Error cargando snapshot de chats:", await res.text())
+        return
+      }
 
-        const payload = await res.json()
-        const rows = Array.isArray(payload?.data) ? payload.data : []
-        const byChatId = new Map<string, any>(
-          rows.map((row: any) => [String(row.chat_id), row]),
-        )
+      const payload = await res.json()
+      const rows = Array.isArray(payload?.data) ? payload.data : []
+      const byChatId = new Map<string, any>(
+        rows.map((row: any) => [String(row.chat_id), row]),
+      )
 
-        if (cancelled) return
-        setChats((prevChats) =>
-          prevChats.map((chat) => {
+      setChats((prevChats) => {
+          const currentIds = new Set(prevChats.map((chat) => String(chat.id)))
+          const merged = prevChats.map((chat) => {
             const row = byChatId.get(String(chat.id))
             if (!row) return chat
             return {
               ...chat,
+              name: row.name ?? chat.name,
+              number: row.number ?? chat.number,
+              channel: row.channel ?? chat.channel,
+              lastMessage: row.lastMessage ?? chat.lastMessage,
+              timestamp: row.timestamp ?? chat.timestamp,
+              avatar: row.avatar ?? chat.avatar,
               operator_id: row.operator_id ?? null,
               operator_name: row.operator_name ?? null,
+              last_operator_id: row.last_operator_id ?? null,
+              last_operator_name: row.last_operator_name ?? null,
               bot_enabled: typeof row.bot_enabled === "boolean" ? row.bot_enabled : chat.bot_enabled,
+              bot_name: row.bot_name ?? chat.bot_name,
+              status: row.status ?? chat.status,
+              attention_status: row.attention_status ?? chat.attention_status,
+              assigned_at: row.assigned_at ?? null,
+              closed_at: row.closed_at ?? null,
+              closed_by: row.closed_by ?? null,
+              bot_flow_id: row.bot_flow_id ?? null,
+              bot_flow_name: row.bot_flow_name ?? null,
+              bot_node_id: row.bot_node_id ?? null,
+              bot_node_name: row.bot_node_name ?? null,
+              bot_step: row.bot_step ?? null,
+              bot_state: row.bot_state ?? {},
             }
-          }),
-        )
-      } catch (error) {
-        console.error("Error de red cargando snapshot de chats:", error)
-      } finally {
-        if (!cancelled) setDbHydrated(true)
-      }
-    }
+          })
 
-    hydrateFromDb()
-    return () => {
-      cancelled = true
+          const missing = rows
+            .filter((row: any) => !currentIds.has(String(row.chat_id)))
+            .map((row: any) => ({
+              id: row.chat_id,
+              name: row.name ?? "Sin nombre",
+              number: row.number ?? "",
+              channel: row.channel ?? "whatsapp",
+              lastMessage: row.lastMessage ?? "",
+              timestamp: row.timestamp ?? new Date().toISOString(),
+              unread: 0,
+              online: false,
+              avatar: row.avatar ?? null,
+              bot_enabled: typeof row.bot_enabled === "boolean" ? row.bot_enabled : true,
+              bot_name: row.bot_name ?? "Asistente virtual",
+              operator_id: row.operator_id ?? null,
+              operator_name: row.operator_name ?? null,
+              last_operator_id: row.last_operator_id ?? null,
+              last_operator_name: row.last_operator_name ?? null,
+              status: row.status ?? "open",
+              attention_status: row.attention_status ?? "bot",
+              assigned_at: row.assigned_at ?? null,
+              closed_at: row.closed_at ?? null,
+              closed_by: row.closed_by ?? null,
+              bot_flow_id: row.bot_flow_id ?? null,
+              bot_flow_name: row.bot_flow_name ?? null,
+              bot_node_id: row.bot_node_id ?? null,
+              bot_node_name: row.bot_node_name ?? null,
+              bot_step: row.bot_step ?? null,
+              bot_state: row.bot_state ?? {},
+            }))
+
+          return [...missing, ...merged]
+      })
+    } catch (error) {
+      console.error("Error de red cargando snapshot de chats:", error)
+    } finally {
+      syncChatsInFlightRef.current = false
+      setDbHydrated(true)
     }
   }, [])
+
+  useEffect(() => {
+    syncChatsFromDb()
+  }, [syncChatsFromDb])
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      syncChatsFromDb()
+    }, 3000)
+
+    return () => window.clearInterval(interval)
+  }, [syncChatsFromDb])
 
   // En F5/hard reload priorizamos el estado de DB (Inertia): abrir ultimo chat asignado al operador.
   useEffect(() => {
@@ -394,6 +484,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
       client.subscribe("sidebar/chat")
       client.subscribe("status_bot/chat/+")
       client.subscribe("operator/chat/+")
+      syncChatsFromDb()
     })
 
     client.on("reconnect", () => {
@@ -440,12 +531,10 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
           if (!chatId) return
 
           const active = Boolean(data.active)
-          let previousOperatorName: string | null = null
           setChats((prevChats) =>
             prevChats.map((c) =>
               String(c.id) === chatId
                 ? (() => {
-                  previousOperatorName = c.operator_name ?? null
                   return {
                     ...c,
                     operator_id: active ? (data.operator_id ?? null) : null,
@@ -474,10 +563,6 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
             waitingForChatReleaseRef.current[chatId] = false
             setOperatorConflict(null)
             setViewerReadOnlyChatId(chatId)
-            setOperatorLeftPrompt({
-              chatId,
-              operatorName: previousOperatorName || operatorConflict?.operatorName || null,
-            })
           }
           return
         }
@@ -498,14 +583,29 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
               String(c.id) === chatId
                 ? {
                   ...c,
+                  name: data.name ?? c.name,
+                  number: data.number ?? c.number,
+                  channel: data.channel ?? c.channel,
                   lastMessage: data.lastMessage,
                   // La fecha que trae el canal externo puede estar desfasada.
                   // Para la lista usamos el momento real en que llega al panel.
                   timestamp: new Date().toISOString(),
                   sidebar_timestamp: data.timestamp ?? null,
                   avatar: data.avatar ?? c.avatar ?? null,
+                  bot_enabled: typeof data.bot_enabled === "boolean" ? data.bot_enabled : c.bot_enabled,
+                  operator_id: data.operator_id ?? c.operator_id,
+                  operator_name: data.operator_name ?? c.operator_name,
+                  last_operator_id: data.last_operator_id ?? c.last_operator_id,
+                  last_operator_name: data.last_operator_name ?? c.last_operator_name,
                   status: data.status ?? c.status,
                   attention_status: data.attention_status ?? c.attention_status,
+                  assigned_at: Object.prototype.hasOwnProperty.call(data, "assigned_at") ? data.assigned_at : c.assigned_at,
+                  closed_at: Object.prototype.hasOwnProperty.call(data, "closed_at") ? data.closed_at : c.closed_at,
+                  closed_by: Object.prototype.hasOwnProperty.call(data, "closed_by") ? data.closed_by : c.closed_by,
+                  bot_flow_id: data.bot_flow_id ?? c.bot_flow_id,
+                  bot_node_id: data.bot_node_id ?? c.bot_node_id,
+                  bot_step: Object.prototype.hasOwnProperty.call(data, "bot_step") ? data.bot_step : c.bot_step,
+                  bot_state: data.bot_state ?? c.bot_state,
                   unread:
                     // si está abierto, siempre 0
                     chatId === selectedChatIdRef.current
@@ -522,7 +622,9 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
             return [
               {
                 id: chatId,
-                name: data.name,
+                name: data.name ?? "Webchat",
+                number: data.number ?? (data.channel === "webchat" ? "Webchat" : ""),
+                channel: data.channel ?? "whatsapp",
                 lastMessage: data.lastMessage,
                 timestamp: new Date().toISOString(),
                 sidebar_timestamp: data.timestamp ?? null,
@@ -532,8 +634,19 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
                 bot_enabled: typeof data.bot_enabled === "boolean" ? data.bot_enabled : true,
                 operator_id: data.operator_id ?? null,
                 operator_name: data.operator_name ?? null,
+                last_operator_id: data.last_operator_id ?? null,
+                last_operator_name: data.last_operator_name ?? null,
                 status: data.status ?? "open",
                 attention_status: data.attention_status ?? "bot",
+                assigned_at: data.assigned_at ?? null,
+                closed_at: data.closed_at ?? null,
+                closed_by: data.closed_by ?? null,
+                bot_flow_id: data.bot_flow_id ?? null,
+                bot_flow_name: data.bot_flow_name ?? null,
+                bot_node_id: data.bot_node_id ?? null,
+                bot_node_name: data.bot_node_name ?? null,
+                bot_step: data.bot_step ?? null,
+                bot_state: data.bot_state ?? {},
               },
               ...prevChats,
             ]
@@ -552,7 +665,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
         mqttClientRef.current = null
       }
     }
-  }, [dismissStartupCurtain])
+  }, [dismissStartupCurtain, syncChatsFromDb])
 
   const updateOperatorPresence = async (chatId: string, active: boolean, keepalive = false) => {
     // La asignación ya la resuelve el backend al entrar al handoff. Abrir o salir no la modifica.
@@ -671,9 +784,6 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
       if (viewerReadOnlyChatId === previousChatId) {
         setViewerReadOnlyChatId(null)
       }
-      if (operatorLeftPrompt?.chatId === previousChatId) {
-        setOperatorLeftPrompt(null)
-      }
       updateOperatorPresence(previousChatId, false)
     }
     if (currentChatId && previousChatId !== currentChatId) {
@@ -729,6 +839,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
           selectedChatId={selectedChatId}
           onSelectChat={requestChatSelection}
           canViewAll={Boolean(props?.auth?.permissions?.can_view_all_chats)}
+          currentOperatorId={authUser?.id ?? null}
         />
       </div>
 
@@ -738,11 +849,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
           chat={selectedChat}
           readOnly={isReadOnly}
           readOnlyOperatorName={
-            selectedChat?.operator_name ??
-            (viewerReadOnlyChatId &&
-            String(viewerReadOnlyChatId) === String(selectedChat?.id ?? "")
-              ? operatorLeftPrompt?.operatorName ?? null
-              : null)
+            selectedChat?.operator_name ?? null
           }
           readOnlyReason={readOnlyReason}
         />
@@ -754,12 +861,24 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
         <ChatInfo
           chat={selectedChat}
           readOnly={isReadOnly}
-          canToggleBot={canToggleBot}
+          canToggleBot={canToggleBot && (
+            Boolean(props?.auth?.permissions?.can_administer_chats) ||
+            (!readOnlyByOperator && !readOnlyByViewerLock)
+          )}
+          canReassign={Boolean(
+            props?.auth?.permissions?.can_administer_chats ||
+            (props?.auth?.permissions?.can_assign_chats &&
+              selectedChat?.attention_status === "assigned" &&
+              Number(selectedChat?.operator_id ?? 0) === Number(authUser?.id ?? 0)),
+          )}
           canAdminister={Boolean(props?.auth?.permissions?.can_administer_chats)}
-          canViewAudit={Boolean(props?.auth?.permissions?.can_view_audit)}
+          canViewAudit={Boolean(props?.auth?.permissions?.can_view_chat_audit)}
           canFinishAttention={canFinishAttention}
+          canTakeChat={canTakeChat}
+          takingChat={takingChat}
           finishingAttention={finishingAttention}
           onFinishAttention={finishSelectedAttention}
+          onTakeChat={takeSelectedChat}
           onChatUpdated={(update) => setChats((current) => current.map((item) => String(item.id) === String(selectedChat?.id) ? { ...item, ...update } : item))}
         />
       </div>
@@ -851,54 +970,6 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
                 className="inline-flex items-center rounded-lg bg-[#013765] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#012e54] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {finishingAttention ? "Finalizando..." : "Si, finalizar y activar bot"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {operatorLeftPrompt && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]">
-          <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
-            <div className="flex items-start gap-3 border-b border-slate-200 bg-slate-50 px-5 py-4">
-              <div className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-700">
-                <Eye className="h-5 w-5" />
-              </div>
-              <div className="min-w-0">
-                <h3 className="text-base font-semibold text-slate-900">El operador abandono el chat</h3>
-                <p className="mt-0.5 text-sm text-slate-600">Puedes seguir en solo lectura o tomar la atencion.</p>
-              </div>
-            </div>
-            <div className="space-y-3 px-5 py-4 text-sm text-slate-700">
-              <p>
-                {operatorLeftPrompt.operatorName
-                  ? `${operatorLeftPrompt.operatorName} ya no esta atendiendo este chat.`
-                  : "El operador anterior ya no esta atendiendo este chat."}
-              </p>
-            </div>
-            <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
-              <button
-                type="button"
-                onClick={() => {
-                  waitingForChatReleaseRef.current[operatorLeftPrompt.chatId] = false
-                  setOperatorLeftPrompt(null)
-                }}
-                className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-              >
-                Seguir viendo
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const chatId = operatorLeftPrompt.chatId
-                  waitingForChatReleaseRef.current[chatId] = false
-                  setOperatorLeftPrompt(null)
-                  setViewerReadOnlyChatId(null)
-                  updateOperatorPresence(chatId, true)
-                }}
-                className="inline-flex items-center rounded-lg bg-[#013765] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#012e54]"
-              >
-                Tomar chat
               </button>
             </div>
           </div>

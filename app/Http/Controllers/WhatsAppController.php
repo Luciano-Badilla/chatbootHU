@@ -374,7 +374,8 @@ class WhatsAppController extends Controller
             ]);
         } else {
             // Un mensaje nuevo reabre una conversación archivada y devuelve la atención al bot.
-            if ($chat->status === 'closed') {
+            $wasClosed = $chat->status === 'closed';
+            if ($wasClosed) {
                 $chat->status = 'open';
                 $chat->attention_status = 'bot';
                 $chat->closed_at = null;
@@ -385,7 +386,7 @@ class WhatsAppController extends Controller
             }
 
             // 1) Asegurar que use flow default y que tenga nodo
-            $flow = $this->ensureChatUsesDefaultFlow($chat) ?? $flow;
+            $flow = $this->ensureChatUsesDefaultFlow($chat, $wasClosed) ?? $flow;
 
             // 2) Reset por timeout configurable (ANTES de procesar el bot)
             $this->botInactivityService->processExpiredChat($chat, $flow);
@@ -606,6 +607,29 @@ class WhatsAppController extends Controller
         return $message;
     }
 
+    /** Persists and publishes a bot/system message to a Webchat conversation. */
+    public function sendWebchatSystemMessage(Chat $chat, string $body): Message
+    {
+        if (($chat->channel ?? 'whatsapp') !== 'webchat') {
+            throw new \InvalidArgumentException('El chat no pertenece al canal webchat.');
+        }
+
+        $message = Message::create([
+            'chat_id' => $chat->id,
+            'sender' => 'user',
+            'sender_subtype' => 'bot',
+            'bot_node_type' => 'text',
+            'message_type' => 'text',
+            'body' => $body,
+            'status' => 'sent',
+        ]);
+
+        $chat->loadMissing('contact', 'operator');
+        $this->publishWebchatMessage($chat, $message);
+
+        return $message;
+    }
+
     /** Envía el nodo inicial apenas se crea una conversación de webchat. */
     public function startWebchatConversation(Chat $chat, ?BotFlow $flow = null): void
     {
@@ -683,6 +707,8 @@ class WhatsAppController extends Controller
                 'sender_subtype' => $message->sender_subtype,
                 'operator_name' => $message->operator_name,
                 'body' => $message->body,
+                'message_type' => $message->message_type,
+                'status' => $message->status,
                 'timestamp' => $message->created_at->toIso8601String(),
             ],
         ], 200);
@@ -1151,7 +1177,10 @@ class WhatsAppController extends Controller
             ]);
             $this->publishWebchatMessage($chat, $message);
 
-            return;
+            return response()->json([
+                'ok' => true,
+                'message' => $message,
+            ]);
         }
 
         $payload = [
@@ -1685,10 +1714,23 @@ class WhatsAppController extends Controller
             $mqtt->publish('sidebar/chat', json_encode([
                 'chat_id' => $chat->id,
                 'name' => $contact?->name ?? 'Webchat',
+                'number' => 'Webchat',
                 'avatar' => $contact?->profile_pic,
                 'lastMessage' => $message->body,
                 'timestamp' => $payload['timestamp'],
                 'channel' => 'webchat',
+                'bot_enabled' => (bool) $chat->bot_enabled,
+                'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null,
+                'operator_name' => $chat->operator?->name,
+                'status' => $chat->status,
+                'attention_status' => $chat->attention_status,
+                'assigned_at' => $chat->assigned_at?->toIso8601String(),
+                'closed_at' => $chat->closed_at?->toIso8601String(),
+                'closed_by' => $chat->closed_by,
+                'bot_flow_id' => $chat->bot_flow_id ? (int) $chat->bot_flow_id : null,
+                'bot_node_id' => $chat->bot_node_id ? (int) $chat->bot_node_id : null,
+                'bot_step' => $chat->bot_step,
+                'bot_state' => $chat->bot_state ?? [],
             ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE), 0);
             $serializedPayload = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR);
             $mqtt->publish("chat/{$chat->id}", $serializedPayload, 0);
@@ -1827,9 +1869,27 @@ class WhatsAppController extends Controller
         }
     }
 
-    private function ensureChatUsesDefaultFlow(Chat $chat): ?BotFlow
+    private function ensureChatUsesDefaultFlow(Chat $chat, bool $forceConfiguredFlow = false): ?BotFlow
     {
-        $flow = $this->getDefaultFlow($chat->channel ?? 'whatsapp');
+        $channel = $chat->channel ?? 'whatsapp';
+        $currentFlow = $chat->bot_flow_id
+            ? BotFlow::query()
+                ->whereKey($chat->bot_flow_id)
+                ->where('is_active', true)
+                ->whereJsonContains('channels', $channel)
+                ->first()
+            : null;
+
+        if (!$forceConfiguredFlow && $currentFlow) {
+            if (!$chat->bot_node_id && $currentFlow->start_node_id) {
+                $chat->bot_node_id = $currentFlow->start_node_id;
+                $chat->save();
+            }
+
+            return $currentFlow;
+        }
+
+        $flow = $this->getDefaultFlow($channel);
 
         if (! $flow || ! $flow->start_node_id) {
             return null;
@@ -4509,10 +4569,17 @@ class WhatsAppController extends Controller
 
     public function updateBotStatus(Request $request, Chat $chat)
     {
+        $actor = $request->user();
+        if (! $actor?->hasPermission('can_administer_chats') && (int) ($chat->operator_id ?? 0) !== (int) ($actor?->id ?? 0)) {
+            return response()->json([
+                'ok' => false,
+                'message' => 'Solo el operador asignado puede modificar el estado del bot.',
+            ], 403);
+        }
+
         $data = $request->validate([
             'bot_enabled' => 'required|boolean',
         ]);
-        $actor = $request->user();
         $before = (bool) $chat->bot_enabled;
 
         // El cambio de estado es la operación principal. MQTT solo propaga el
@@ -4569,6 +4636,14 @@ class WhatsAppController extends Controller
 
     public function resetBotFlow(Request $request, Chat $chat)
     {
+        $actor = $request->user();
+        if (! $actor?->hasPermission('can_administer_chats') && (int) ($chat->operator_id ?? 0) !== (int) ($actor?->id ?? 0)) {
+            return response()->json([
+                'ok' => false,
+                'message' => 'Solo el operador asignado puede reiniciar el flujo del bot.',
+            ], 403);
+        }
+
         $flow = $this->getDefaultFlow($chat->channel ?? 'whatsapp');
 
         if (! $flow || ! $flow->start_node_id) {
@@ -4606,7 +4681,7 @@ class WhatsAppController extends Controller
             'bot_flow_reset',
             'Reinicio el flujo del bot del chat',
             $chat,
-            $request->user(),
+            $actor,
             [
                 'before' => $before,
                 'after' => [
@@ -4627,16 +4702,23 @@ class WhatsAppController extends Controller
 
     private function getDefaultFlow(?string $channel = null): ?BotFlow
     {
-        return BotFlow::query()
-            ->when($channel, fn ($query) => $query->whereJsonContains('channels', $channel))
-            ->where('is_default', true)
+        $flows = BotFlow::query()
             ->where('is_active', true)
+            ->when($channel, fn ($query) => $query->whereJsonContains('channels', $channel));
+
+        $configuredFlowId = $channel === 'whatsapp'
+            ? SystemSetting::query()->where('key', 'whatsapp.default_flow_id')->value('value')
+            : null;
+
+        if ($configuredFlowId) {
+            $configuredFlow = (clone $flows)->whereKey($configuredFlowId)->first();
+            if ($configuredFlow) return $configuredFlow;
+        }
+
+        return (clone $flows)
+            ->where('is_default', true)
             ->first()
-            ?? BotFlow::query()
-                ->when($channel, fn ($query) => $query->whereJsonContains('channels', $channel))
-                ->where('is_active', true)
-                ->orderBy('id')
-                ->first();
+            ?? $flows->orderBy('id')->first();
     }
 
     private function resetChatToStart(Chat $chat): void

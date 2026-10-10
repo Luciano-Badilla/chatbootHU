@@ -16,6 +16,7 @@ interface ChatSidebarProps {
   selectedChatId: string
   onSelectChat: (chatId: string) => void
   canViewAll?: boolean
+  currentOperatorId?: number | null
 }
 
 function InboxChats({
@@ -81,13 +82,23 @@ function InboxChats({
               </span>
               <span className="mt-0.5 flex items-center gap-2">
                 <span className="truncate text-sm text-slate-500 group-hover:text-slate-100">{formatPreview(chat.lastMessage)}</span>
-                {chat.bot_enabled && <Bot className="h-3.5 w-3.5 shrink-0 text-blue-700 group-hover:text-sky-200" />}
-                {(chat.unread ?? 0) > 0 && <Badge className="h-5 min-w-5 bg-[#013765] text-xs text-white">{chat.unread}</Badge>}
+                {(chat.bot_enabled || (chat.unread ?? 0) > 0) && (
+                  <span className="ml-auto flex min-w-[3.25rem] shrink-0 items-center justify-between gap-2">
+                    {chat.bot_enabled ? <Bot className="h-3.5 w-3.5 text-blue-700 group-hover:text-sky-200" /> : <span />}
+                    {(chat.unread ?? 0) > 0 ? <Badge className="h-5 min-w-5 bg-[#013765] text-xs text-white">{chat.unread}</Badge> : <span />}
+                  </span>
+                )}
               </span>
-              {showAssignment && chat.operator_id && (
+              {showAssignment && (
                 <span className={cn("mt-1 inline-flex max-w-full items-center gap-1 text-xs group-hover:text-slate-200", selected ? "text-[#013765]/80" : "text-slate-500")}>
                   <Headset className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">Asignado a: {chat.operator_name ?? `Operador #${chat.operator_id}`}</span>
+                  <span className="truncate">{chat.attention_status === "archived"
+                    ? `Archivado por: ${chat.closed_by === "system" ? "Sistema" : chat.last_operator_name ?? (chat.last_operator_id ? `Operador #${chat.last_operator_id}` : "Sistema")}`
+                    : chat.operator_id
+                      ? `Asignado a: ${chat.operator_name ?? `Operador #${chat.operator_id}`}`
+                      : chat.bot_enabled
+                        ? `Atendido por: ${chat.bot_name ?? "Asistente virtual"}`
+                        : "Sin asignar"}</span>
                 </span>
               )}
             </span>
@@ -133,7 +144,7 @@ function CompactFilterButton({
   )
 }
 
-export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canViewAll = false }: ChatSidebarProps) {
+export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canViewAll = false, currentOperatorId = null }: ChatSidebarProps) {
   const [search, setSearch] = useState("")
   const [statusFilters, setStatusFilters] = useState<Array<"bot" | "assigned" | "pending_assignment" | "archived">>(
     () => canViewAll ? [] : ["assigned"],
@@ -253,7 +264,15 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canVi
     const filtered = chats.filter((chat) => {
       const chatStatus = chat.attention_status as "bot" | "assigned" | "pending_assignment" | "archived"
       const chatChannel = chat.channel === "webchat" ? "webchat" : "whatsapp"
-      const matchesStatus = statusFilters.length === 0 || statusFilters.includes(chatStatus)
+      const belongsToCurrentOperator = chatStatus === "archived"
+        ? Number(chat.last_operator_id ?? 0) === Number(currentOperatorId ?? 0)
+        : Number(chat.operator_id ?? 0) === Number(currentOperatorId ?? 0)
+      const matchesStatus = chatStatus === "archived"
+        ? statusFilters.includes("archived") && (canViewAll || belongsToCurrentOperator)
+        : statusFilters.length === 0 || (
+          statusFilters.includes(chatStatus) &&
+          (canViewAll || chatStatus !== "assigned" || belongsToCurrentOperator)
+        )
       const matchesChannel = channelFilters.length === 0 || channelFilters.includes(chatChannel)
 
       return matchesStatus && matchesChannel && (
@@ -269,14 +288,20 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canVi
 
       return dateB - dateA
     })
-  }, [search, chats, statusFilters, channelFilters])
+  }, [search, chats, statusFilters, channelFilters, canViewAll, currentOperatorId])
 
   const inboxCounts = useMemo(() => ({
     bot: chats.filter((chat) => chat.attention_status === "bot").length,
-    assigned: chats.filter((chat) => chat.attention_status === "assigned").length,
+    assigned: chats.filter((chat) =>
+      chat.attention_status === "assigned" &&
+      (canViewAll || Number(chat.operator_id ?? 0) === Number(currentOperatorId ?? 0)),
+    ).length,
     pending_assignment: chats.filter((chat) => chat.attention_status === "pending_assignment").length,
-    archived: chats.filter((chat) => chat.attention_status === "archived").length,
-  }), [chats])
+    archived: chats.filter((chat) =>
+      chat.attention_status === "archived" &&
+      (canViewAll || Number(chat.last_operator_id ?? 0) === Number(currentOperatorId ?? 0)),
+    ).length,
+  }), [chats, canViewAll, currentOperatorId])
 
   const toggleStatusFilter = (filter: "bot" | "assigned" | "pending_assignment" | "archived") => {
     setStatusFilters((current) => current.includes(filter) ? current.filter((item) => item !== filter) : [...current, filter])
@@ -366,7 +391,7 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canVi
       </div>
 
       <div className="flex-1 overflow-y-auto custom-scrollbar">
-        <InboxChats chats={visibleChats} selectedChatId={selectedChatId} onSelectChat={handleSelectChat} formatTimestamp={formatTimestamp} formatPreview={formatLastMessagePreview} showAssignment={canViewAll} />
+        <InboxChats chats={visibleChats} selectedChatId={selectedChatId} onSelectChat={handleSelectChat} formatTimestamp={formatTimestamp} formatPreview={formatLastMessagePreview} showAssignment />
       </div>
 
       {false && <div className="flex-1 overflow-y-auto custom-scrollbar">

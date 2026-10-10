@@ -3,7 +3,9 @@
 import type React from "react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
-import { AudioLines, Bot, Check, CheckCheck, ChevronDown, ChevronUp, Contact, ExternalLink, FileText, Headset, ImageIcon, MapPin, MessageSquareText, Mic, Play, Plus, Search, Send, Square, User, Video, X } from "lucide-react"
+import { Gallery, Item } from "react-photoswipe-gallery"
+import "photoswipe/dist/photoswipe.css"
+import { AudioLines, Bot, Check, CheckCheck, ChevronDown, ChevronUp, Contact, ExternalLink, FileText, Headset, ImageIcon, Loader2, MapPin, MessageSquareText, Mic, Play, Plus, Search, Send, Square, User, Video, X } from "lucide-react"
 import { Button } from "shadcn/components/ui/button"
 import { Input } from "shadcn/components/ui/input"
 import { Avatar } from "shadcn/components/ui/avatar"
@@ -244,6 +246,16 @@ function LocationMessageMap({
   )
 }
 
+function WebchatGalleryImage({ src, alt }: { src: string; alt: string }) {
+  const [loading, setLoading] = useState(true)
+  return <div className="relative flex h-full w-full items-center justify-center bg-black"><img src={src} alt={alt} onLoad={() => setLoading(false)} onError={() => setLoading(false)} className="h-auto w-auto max-h-[82vh] max-w-[96vw] object-contain" />{loading ? <span className="absolute inset-0 grid place-items-center bg-black/70 text-white"><Loader2 className="h-9 w-9 animate-spin" /><span className="sr-only">Cargando imagen</span></span> : null}</div>
+}
+
+function WebchatGalleryVideo({ src }: { src: string }) {
+  const [loading, setLoading] = useState(true)
+  return <div className="relative flex h-full w-full items-center justify-center bg-black"><video src={src} controls autoPlay playsInline onLoadedData={() => setLoading(false)} onError={() => setLoading(false)} className="h-auto w-auto max-h-[82vh] max-w-[96vw] object-contain" />{loading ? <span className="absolute inset-0 grid place-items-center bg-black/70 text-white"><Loader2 className="h-9 w-9 animate-spin" /><span className="sr-only">Cargando video</span></span> : null}</div>
+}
+
 function HoverTooltip({
   label,
   children,
@@ -323,6 +335,7 @@ export default function ChatMain({
 }: ChatMainProps) {
   const [newMessage, setNewMessage] = useState("")
   const [messages, setMessages] = useState<Message[]>([])
+  const [mediaDimensions, setMediaDimensions] = useState<Record<string, { width: number; height: number }>>({})
   const [loading, setLoading] = useState(false)
   const [sending, setSending] = useState(false)
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false)
@@ -554,6 +567,58 @@ export default function ChatMain({
     // Ruta relativa (/storage/...) → la pegamos al VITE_APP_URL
     const base = (import.meta.env.VITE_APP_URL || "").replace(/\/$/, "")
     return `${base}${url}`
+  }
+
+  const galleryPreviews = messages.flatMap((message) => message.media_url && ["image", "video"].includes(message.message_type ?? "") ? [{ type: message.message_type as "image" | "video", url: buildMediaSrc(message.media_url) }] : [])
+
+  const addMediaThumbnails = (photoswipe: any) => {
+    const strip = document.createElement("div")
+    Object.assign(strip.style, { position: "absolute", bottom: "112px", left: "50%", transform: "translateX(-50%)", display: "flex", maxWidth: "calc(100% - 32px)", gap: "8px", overflowX: "auto", scrollBehavior: "smooth", padding: "6px", borderRadius: "12px", background: "rgba(0, 0, 0, 0.48)", zIndex: "10" })
+    const render = () => {
+      const previews: HTMLButtonElement[] = []
+      strip.replaceChildren(...galleryPreviews.map((media, index) => {
+        const button = document.createElement("button")
+        button.type = "button"
+        button.setAttribute("aria-label", `Ver medio ${index + 1}`)
+        Object.assign(button.style, { width: "52px", height: "40px", flex: "0 0 auto", overflow: "hidden", borderRadius: "8px", border: index === photoswipe.currIndex ? "2px solid #ffffff" : "1px solid rgba(255,255,255,.45)", background: "#0f172a", padding: "0", cursor: "pointer" })
+        if (media.type === "image") {
+          const image = document.createElement("img")
+          image.src = media.url
+          image.alt = ""
+          Object.assign(image.style, { width: "100%", height: "100%", objectFit: "cover" })
+          button.appendChild(image)
+        } else {
+          const video = document.createElement("video")
+          video.src = media.url
+          video.muted = true
+          video.preload = "metadata"
+          Object.assign(video.style, { width: "100%", height: "100%", objectFit: "cover" })
+          button.appendChild(video)
+          const play = document.createElement("span")
+          play.textContent = "▶"
+          Object.assign(play.style, { position: "absolute", inset: "0", display: "grid", placeItems: "center", color: "#ffffff", fontSize: "14px", textShadow: "0 1px 3px #000" })
+          button.style.position = "relative"
+          button.appendChild(play)
+        }
+        button.onclick = () => photoswipe.goTo(index)
+        previews.push(button)
+        return button
+      }))
+      window.requestAnimationFrame(() => {
+        previews[photoswipe.currIndex]?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" })
+      })
+    }
+    photoswipe.element.appendChild(strip)
+    render()
+    photoswipe.on("change", render)
+    const syncControlsVisibility = () => {
+      strip.style.opacity = photoswipe.element.classList.contains("pswp--ui-visible") ? "1" : "0"
+      strip.style.pointerEvents = photoswipe.element.classList.contains("pswp--ui-visible") ? "auto" : "none"
+    }
+    syncControlsVisibility()
+    const controlsObserver = new MutationObserver(syncControlsVisibility)
+    controlsObserver.observe(photoswipe.element, { attributes: true, attributeFilter: ["class"] })
+    photoswipe.on("destroy", () => { controlsObserver.disconnect(); strip.remove() })
   }
 
   // 🔹 Cargar mensajes cuando cambia el chat seleccionado
@@ -1007,6 +1072,17 @@ export default function ChatMain({
     })
   }, [activeSearchIndex, searchOpen, searchResultIds])
 
+  const appendServerMessage = (payload: any) => {
+    const rawMessage = payload?.message
+    if (!rawMessage?.id) return
+
+    const message = mapApiMessage(rawMessage)
+    setMessages((current) => {
+      if (current.some((item) => String(item.id) === String(message.id))) return current
+      return [...current, message]
+    })
+  }
+
   const handleSendMessage = async () => {
     if (!newMessage.trim() || !chat || sending || readOnly) return
 
@@ -1034,7 +1110,7 @@ export default function ChatMain({
         return
       }
 
-      // El mensaje se reflejará por MQTT
+      appendServerMessage(await res.json())
     } catch (err) {
       console.error("Error de red al enviar mensaje:", err)
     } finally {
@@ -1471,6 +1547,7 @@ export default function ChatMain({
         return
       }
 
+      appendServerMessage(await res.json())
       setContactModalOpen(false)
       if (!contactDraft.id && localStorage.getItem("agenda.skipSavePrompt") !== "1") {
         setLastSentContactDraft(payload)
@@ -1528,6 +1605,7 @@ export default function ChatMain({
         return
       }
 
+      appendServerMessage(await res.json())
       saveLocationToHistory({
         latitude: locationDraft.latitude,
         longitude: locationDraft.longitude,
@@ -1760,6 +1838,8 @@ export default function ChatMain({
           if (rawError) errorMessage = rawError
         }
         setMediaError(errorMessage)
+      } else {
+        appendServerMessage(await response.json())
       }
     } catch (error) {
       console.error("Error de red al enviar el audio:", error)
@@ -1917,6 +1997,7 @@ export default function ChatMain({
           setMediaError(errorMessage)
           break
         }
+        appendServerMessage(await res.json())
         sentCount += 1
       }
 
@@ -2265,49 +2346,19 @@ export default function ChatMain({
     const isSticker = type === "image" && message.body === "[Sticker]"
 
     if (isSticker && src) {
-
-  return (
-        <button
-          type="button"
-          onClick={() =>
-            setPreview({
-              url: src,
-              name: message.media_name ?? "Sticker",
-              type: "image",
-            })
-          }
-        >
-          <img
-            src={src}
-            alt="Sticker"
-            className="w-48 h-48 object-contain rounded-lg"
-          />
-        </button>
-      )
+      const label = message.media_name ?? "Sticker"
+      return <Item original={src} thumbnail={src} width={800} height={800} alt={label} caption={label} content={<WebchatGalleryImage src={src} alt={label} />}>{({ ref, open }) => <button ref={ref} type="button" onClick={open}><img src={src} alt={label} className="h-48 w-48 rounded-lg object-contain" /></button>}</Item>
     }
 
     // Imagen normal
     if (type === "image" && src) {
-
-  return (
+      const dimensions = mediaDimensions[message.id] ?? { width: 1600, height: 1200 }
+      const label = message.media_name || message.body || "Imagen enviada"
+      return (
         <div className="w-full">
-          <button
-            type="button"
-            className="block w-full overflow-hidden bg-white"
-            onClick={() =>
-              setPreview({
-                url: src,
-                name: message.media_name ?? "Imagen",
-                type: "image",
-              })
-            }
-          >
-            <img
-              src={src}
-              alt={message.media_name ?? "Imagen"}
-              className="block w-full max-h-[360px] object-contain"
-            />
-          </button>
+          <Item original={src} thumbnail={src} width={dimensions.width} height={dimensions.height} alt={label} caption={label} content={<WebchatGalleryImage src={src} alt={label} />}>
+            {({ ref, open }) => <button ref={ref} type="button" onClick={open} className="block w-full overflow-hidden bg-white"><img src={src} onLoad={(event) => { const image = event.currentTarget; if (image.naturalWidth && image.naturalHeight) setMediaDimensions((current) => current[message.id]?.width === image.naturalWidth && current[message.id]?.height === image.naturalHeight ? current : { ...current, [message.id]: { width: image.naturalWidth, height: image.naturalHeight } }) }} alt={label} className="block w-full max-h-[360px] object-contain" /></button>}
+          </Item>
           {message.body && (
             <p className="px-3 pt-2 text-sm font-medium leading-relaxed break-words [overflow-wrap:anywhere]">
               {message.body}
@@ -2318,33 +2369,12 @@ export default function ChatMain({
     }
 
     if (type === "video" && src) {
-
-  return (
+      const label = message.media_name || "Video enviado"
+      return (
         <div className="w-full">
-          <button
-            type="button"
-            className="group relative block w-full overflow-hidden bg-black text-left"
-            onClick={() =>
-              setPreview({
-                url: src,
-                name: message.media_name ?? "Video",
-                type: "video",
-              })
-            }
-          >
-            <video
-              src={src}
-              muted
-              playsInline
-              preload="metadata"
-              className="block w-full max-h-[360px]"
-            />
-            <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/10 transition-colors group-hover:bg-black/20">
-              <span className="flex h-14 w-14 items-center justify-center rounded-full bg-white/90 text-[#013765] shadow-lg">
-                <Play className="ml-0.5 h-6 w-6 fill-current" />
-              </span>
-            </span>
-          </button>
+          <Item original={src} width="2400" height="1350" alt={label} caption={label} content={<WebchatGalleryVideo src={src} />}>
+            {({ ref, open }) => <button ref={ref} type="button" onClick={open} className="group relative block w-full overflow-hidden bg-black text-left"><video src={src} muted playsInline preload="metadata" className="block w-full max-h-[360px]" /><span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/10 transition-colors group-hover:bg-black/20"><span className="flex h-14 w-14 items-center justify-center rounded-full bg-white/90 text-[#013765] shadow-lg"><Play className="ml-0.5 h-6 w-6 fill-current" /></span></span></button>}
+          </Item>
           {message.body && (
             <p className="px-3 pt-2 text-sm font-medium leading-relaxed break-words [overflow-wrap:anywhere]">
               {message.body}
@@ -2646,6 +2676,7 @@ export default function ChatMain({
         {loading ? (
           <ChatMessagesLoader />
         ) : (
+          <Gallery withCaption onOpen={addMediaThumbnails} options={{ bgOpacity: 1, closeOnVerticalDrag: true, imageClickAction: "zoom", doubleTapAction: "zoom", secondaryZoomLevel: 2 }}>
           <div className="space-y-4">
             {loadingOlderMessages && (
               <div className="flex justify-center py-2">
@@ -2810,6 +2841,7 @@ export default function ChatMain({
 
             <div ref={messagesEndRef} />
           </div>
+          </Gallery>
         )}
         </div>
 

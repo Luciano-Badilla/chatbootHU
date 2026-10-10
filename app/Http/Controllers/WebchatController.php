@@ -383,6 +383,15 @@ class WebchatController extends Controller
     private function settings(): array
     {
         $stored = SystemSetting::query()->where('key', 'like', 'webchat.%')->pluck('value', 'key');
+        $days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+        $flowSchedule = json_decode((string) ($stored['webchat.flow_schedule'] ?? ''), true);
+        if (!is_array($flowSchedule)) {
+            $legacyFlowId = !empty($stored['webchat.default_flow_id']) ? (int) $stored['webchat.default_flow_id'] : null;
+            $flowSchedule = array_fill_keys($days, $legacyFlowId);
+        } else {
+            $flowSchedule = array_replace(array_fill_keys($days, null), array_intersect_key($flowSchedule, array_flip($days)));
+        }
+
         return [
             'enabled' => ($stored['webchat.enabled'] ?? '1') === '1', 'availability_mode' => $stored['webchat.availability_mode'] ?? 'always',
             'schedule_start' => $stored['webchat.schedule_start'] ?? '08:00', 'schedule_end' => $stored['webchat.schedule_end'] ?? '20:00',
@@ -390,7 +399,7 @@ class WebchatController extends Controller
             'offline_message' => $stored['webchat.offline_message'] ?? 'En este momento no estamos disponibles. Volvé a intentarlo dentro del horario de atención.',
             'title' => $stored['webchat.title'] ?? 'Asistente virtual', 'subtitle' => $stored['webchat.subtitle'] ?? 'Hospital Universitario',
             'logo_url' => $stored['webchat.logo_url'] ?? '',
-            'default_flow_id' => !empty($stored['webchat.default_flow_id']) ? (int) $stored['webchat.default_flow_id'] : null,
+            'flow_schedule' => $flowSchedule,
         ];
     }
 
@@ -402,8 +411,12 @@ class WebchatController extends Controller
             ->orderByDesc('is_default')
             ->orderBy('id');
 
-        return $settings['default_flow_id']
-            ? (clone $flows)->whereKey($settings['default_flow_id'])->first()
+        $timezone = SystemSetting::query()->where('key', 'general.timezone')->value('value') ?: config('app.timezone');
+        $day = strtolower(now($timezone)->format('l'));
+        $flowId = $settings['flow_schedule'][$day] ?? null;
+
+        return $flowId
+            ? (clone $flows)->whereKey($flowId)->first() ?? $flows->first()
             : $flows->first();
     }
 

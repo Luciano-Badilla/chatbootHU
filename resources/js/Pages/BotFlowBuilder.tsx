@@ -4,7 +4,7 @@ import { createPortal } from "react-dom"
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { usePage } from "@inertiajs/react"
 import { toast } from "sonner"
-import { Plus, RefreshCcw, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp, ArrowLeft, PanelLeft, Settings2, X, ArrowDown, InfoIcon, FileText, AudioLines, ImageIcon, Video, Contact, MapPin, ShieldAlert } from "lucide-react"
+import { Plus, RefreshCcw, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp, ArrowLeft, PanelLeft, Settings2, X, ArrowDown, InfoIcon, FileText, AudioLines, ImageIcon, Video, Contact, MapPin, ShieldAlert, MessageCircle, Globe2, Check } from "lucide-react"
 import {
   applyNodeChanges,
   ReactFlow,
@@ -52,6 +52,51 @@ import { cn } from "shadcn/lib/utils"
 import { Badge } from "shadcn/components/ui/badge"
 
 type NodeType = "text" | "buttons" | "list" | "input" | "handoff" | "person_lookup" | "person_create" | "appointment_lookup" | "appointment_create" | "appointment_cancel" | "health_insurance_select" | "health_insurance_plan_select" | "specialty_search" | "doctor_select" | "availability_select" | "image" | "document" | "video" | "audio" | "contact" | "location"
+type FlowChannel = "whatsapp" | "webchat"
+
+function FlowChannelOption({
+  channel,
+  selected,
+  onToggle,
+}: {
+  channel: FlowChannel
+  selected: boolean
+  onToggle: () => void
+}) {
+  const Icon = channel === "whatsapp" ? MessageCircle : Globe2
+  const label = channel === "whatsapp" ? "WhatsApp" : "Webchat"
+
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={selected}
+      onClick={onToggle}
+      className={cn(
+        "flex min-h-[76px] w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#013765]/30",
+        selected
+          ? "border-dashed border-[#9bb5ca] bg-slate-50"
+          : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/70",
+      )}
+    >
+      <span className="grid h-14 w-14 shrink-0 place-items-center rounded-xl border border-slate-100 bg-white text-[#013765] shadow-sm">
+        <Icon className="h-5 w-5" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-semibold text-slate-800">{label}</span>
+        <span className="mt-0.5 block text-xs text-slate-500">
+          {selected ? "Canal habilitado" : "Hacé clic para habilitarlo"}
+        </span>
+      </span>
+      <span className={cn(
+        "grid h-5 w-5 shrink-0 place-items-center rounded-full border transition-colors",
+        selected ? "border-[#013765] bg-[#013765] text-white" : "border-slate-300 bg-white text-transparent",
+      )}>
+        <Check className="h-3 w-3" />
+      </span>
+    </button>
+  )
+}
 
 interface BotFlow {
   id: number
@@ -1293,6 +1338,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   >(null)
 
   const [newFlowName, setNewFlowName] = useState("")
+  const [newFlowChannels, setNewFlowChannels] = useState<Array<"whatsapp" | "webchat">>(["whatsapp"])
   const [newNodeKey, setNewNodeKey] = useState("")
   const [newNodeType, setNewNodeType] = useState<NodeType>("text")
   const [createAlephooDependencies, setCreateAlephooDependencies] = useState(true)
@@ -1671,14 +1717,14 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   const handleCreateFlow = async () => {
     if (isReadOnly) return
     const name = newFlowName.trim()
-    if (!name) return
+    if (!name || newFlowChannels.length === 0) return
 
     setCreatingFlow(true)
     try {
       const res = await fetch(`${API_BASE}/api/bot/flows`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, channels: newFlowChannels }),
       })
       if (!res.ok) {
         console.error("Error al crear flow", await res.text())
@@ -1688,6 +1734,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       setFlows((prev) => [...prev, flow])
       setSelectedFlowId(flow.id)
       setNewFlowName("")
+      setNewFlowChannels(["whatsapp"])
       setCreateModal(null)
     } catch (err) {
       console.error("Error de red al crear flow:", err)
@@ -1756,27 +1803,6 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       console.error("Error de red guardando flow:", err)
     } finally {
       setSavingFlow(false)
-    }
-  }
-
-
-  const handleMakeDefault = async (flowId: number) => {
-    if (isReadOnly) return
-    try {
-      const res = await fetch(`${API_BASE}/api/bot/flows/${flowId}/make-default`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      })
-
-      if (!res.ok) {
-        console.error("Error al setear default", await res.text())
-        return
-      }
-
-      // actualizar estado local: solo uno default
-      setFlows((prev) => prev.map((f) => ({ ...f, is_default: f.id === flowId })))
-    } catch (err) {
-      console.error("Error de red seteando default:", err)
     }
   }
 
@@ -6156,7 +6182,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                 <Button
                   variant="outline"
                   className="h-7 w-7 border-slate-200 text-[#013765] hover:bg-slate-100"
-                  onClick={() => setCreateModal("flow")}
+                  onClick={() => {
+                    setNewFlowChannels(["whatsapp"])
+                    setCreateModal("flow")
+                  }}
                   disabled={isReadOnly}
                 >
                   <Plus className="h-3 w-3" />
@@ -6228,26 +6257,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                       <div className="flex items-center gap-2 ml-2 shrink-0">
                         {flow.is_default ? (
                           <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full">
-                            Activo
+                            Por defecto
                           </span>
-                        ) : (
-                          <button
-                            type="button"
-                            className={cn(
-                              "text-[10px] px-2 py-0.5 rounded-full border",
-                              selectedFlowId === flow.id
-                                ? "border-white/30 bg-white/10 text-white hover:bg-white/15"
-                                : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100",
-                            )}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleMakeDefault(flow.id)
-                            }}
-                            disabled={isReadOnly}
-                          >
-                            Activar
-                          </button>
-                        )}
+                        ) : null}
 
                         {!isReadOnly ? (
                           <button
@@ -6446,8 +6458,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             {/* Panel de edición */}
             <div className="contents">
               {flowConfigOpen && (
-                <div className="fixed inset-0 z-[70] flex items-start justify-center bg-slate-950/35 p-4">
-                  <Card className="mt-8 w-full max-w-[30rem] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+                <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/35 p-4">
+                  <Card className="w-full max-w-[30rem] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
                     <CardHeader className="border-b border-slate-200 bg-white pb-2">
                       <div className="flex items-start justify-between gap-3">
                         <div>
@@ -6497,7 +6509,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                   onValueChange={(val) => setEditFlowStartNodeId(val === "none" ? null : Number(val))}
                                   disabled={savingFlow || nodes.length === 0}
                                 >
-                                  <SelectTrigger className="h-8 text-xs pr-8">
+                                  <SelectTrigger className="h-9 text-xs pr-8">
                                     <SelectValue placeholder="Elegí nodo..." />
                                   </SelectTrigger>
                                   <SelectContent>
@@ -6525,15 +6537,16 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
                           <div>
                             <label className="text-xs mb-2 block text-muted-foreground">Canales habilitados</label>
-                            <div className="flex gap-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-700">
+                            <div className="space-y-2">
                               {(["whatsapp", "webchat"] as const).map((channel) => (
-                                <label key={channel} className="flex cursor-pointer items-center gap-2">
-                                  <Checkbox
-                                    checked={editFlowChannels.includes(channel)}
-                                    onCheckedChange={(checked) => setEditFlowChannels((current) => checked ? [...new Set([...current, channel])] : current.filter((item) => item !== channel))}
+                                <FlowChannelOption
+                                  key={channel}
+                                  channel={channel}
+                                  selected={editFlowChannels.includes(channel)}
+                                  onToggle={() => setEditFlowChannels((current) => current.includes(channel)
+                                    ? current.filter((item) => item !== channel)
+                                    : [...current, channel])}
                                   />
-                                  {channel === "whatsapp" ? "WhatsApp" : "Webchat"}
-                                </label>
                               ))}
                             </div>
                             <p className="mt-1 text-[10px] text-muted-foreground">El flujo solo podrá iniciarse desde los canales seleccionados.</p>
@@ -7122,6 +7135,26 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                 }
                 className="h-9 text-sm"
               />
+              {createModal === "flow" ? (
+                <div>
+                  <label className="mb-2 block text-xs text-slate-500">Canales habilitados</label>
+                  <div className="space-y-2">
+                    {(["whatsapp", "webchat"] as const).map((channel) => (
+                      <FlowChannelOption
+                        key={channel}
+                        channel={channel}
+                        selected={newFlowChannels.includes(channel)}
+                        onToggle={() => setNewFlowChannels((current) => current.includes(channel)
+                          ? current.filter((item) => item !== channel)
+                          : [...current, channel])}
+                        />
+                    ))}
+                  </div>
+                  {newFlowChannels.length === 0 ? (
+                    <p className="mt-1 text-[10px] text-red-600">Seleccioná al menos un canal.</p>
+                  ) : null}
+                </div>
+              ) : null}
               {createModal === "node" ? (
                 <div>
                   <label className="mb-1 block text-xs text-slate-500">
@@ -7176,7 +7209,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                 type="submit"
                 disabled={
                   createModal === "flow"
-                    ? creatingFlow || !newFlowName.trim()
+                    ? creatingFlow || !newFlowName.trim() || newFlowChannels.length === 0
                     : creatingNode || !newNodeKey.trim() || !selectedFlowId
                 }
                 className="inline-flex items-center rounded-lg bg-[#013765] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#024a8a] disabled:cursor-not-allowed disabled:opacity-70"

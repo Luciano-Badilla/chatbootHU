@@ -48,7 +48,7 @@ class AuditController extends Controller
 
     public function chatLogs(Chat $chat, Request $request)
     {
-        $limit = max(10, min(100, (int) $request->integer('limit', 50)));
+        $limit = max(10, min(500, (int) $request->integer('limit', 100)));
 
         return response()->json([
             'logs' => Activity::query()

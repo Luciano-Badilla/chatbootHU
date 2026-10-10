@@ -1,7 +1,9 @@
 "use client"
 
 import React, { useEffect, useMemo, useRef, useState } from "react"
-import { AudioLines, Code, Contact, Database, Zap, User, Image as ImageIcon, FileText, Video, Bot, Clock3, MessageSquare, PowerOff, Power, Loader2, RotateCcw, ChevronDown, ChevronRight, ExternalLink, MapPin, X, Shield, Users, History, ArchiveRestore } from "lucide-react"
+import { Gallery, Item } from "react-photoswipe-gallery"
+import "photoswipe/dist/photoswipe.css"
+import { AudioLines, Code, Contact, Database, Zap, User, Image as ImageIcon, FileText, Video, Bot, Clock3, MessageSquare, PowerOff, Power, Loader2, RotateCcw, ChevronDown, ChevronRight, ExternalLink, MapPin, X, Users, History, ArchiveRestore, CheckCircle2 } from "lucide-react"
 import { Avatar } from "shadcn/components/ui/avatar"
 import { Badge } from "shadcn/components/ui/badge"
 import { Button } from "shadcn/components/ui/button"
@@ -19,10 +21,14 @@ interface ChatInfoProps {
   readOnly?: boolean
   canToggleBot?: boolean
   canAdminister?: boolean
+  canReassign?: boolean
   canViewAudit?: boolean
   canFinishAttention?: boolean
+  canTakeChat?: boolean
+  takingChat?: boolean
   finishingAttention?: boolean
   onFinishAttention?: () => void
+  onTakeChat?: () => void
   onChatUpdated?: (update: Partial<Chat>) => void
 }
 
@@ -178,18 +184,33 @@ const LocationPreviewMap = ({ latitude, longitude }: { latitude: number; longitu
   )
 }
 
+function WebchatGalleryImage({ src, alt }: { src: string; alt: string }) {
+  const [loading, setLoading] = useState(true)
+  return <div className="relative flex h-full w-full items-center justify-center bg-black"><img src={src} alt={alt} onLoad={() => setLoading(false)} onError={() => setLoading(false)} className="h-auto w-auto max-h-[82vh] max-w-[96vw] object-contain" />{loading ? <span className="absolute inset-0 grid place-items-center bg-black/70 text-white"><Loader2 className="h-9 w-9 animate-spin" /><span className="sr-only">Cargando imagen</span></span> : null}</div>
+}
+
+function WebchatGalleryVideo({ src }: { src: string }) {
+  const [loading, setLoading] = useState(true)
+  return <div className="relative flex h-full w-full items-center justify-center bg-black"><video src={src} controls autoPlay playsInline onLoadedData={() => setLoading(false)} onError={() => setLoading(false)} className="h-auto w-auto max-h-[82vh] max-w-[96vw] object-contain" />{loading ? <span className="absolute inset-0 grid place-items-center bg-black/70 text-white"><Loader2 className="h-9 w-9 animate-spin" /><span className="sr-only">Cargando video</span></span> : null}</div>
+}
+
 export default function ChatInfo({
   chat,
   variables = [],
   readOnly = false,
   canToggleBot = false,
   canAdminister = false,
+  canReassign = false,
   canViewAudit = false,
   canFinishAttention = false,
+  canTakeChat = false,
+  takingChat = false,
   finishingAttention = false,
   onFinishAttention,
+  onTakeChat,
   onChatUpdated,
 }: ChatInfoProps) {
+  const canUseBotControls = canToggleBot && chat?.status !== "closed"
   const [contactAvatarFailed, setContactAvatarFailed] = useState(false)
 
   // ---------------------------
@@ -351,9 +372,16 @@ export default function ChatInfo({
   const [adminBusy, setAdminBusy] = useState(false)
   const [adminMessage, setAdminMessage] = useState<string | null>(null)
   const [pendingAdminAction, setPendingAdminAction] = useState<PendingAdminAction | null>(null)
+  const [adminActionReason, setAdminActionReason] = useState("")
+  const [adminModalError, setAdminModalError] = useState<string | null>(null)
+  const [reassignmentOpen, setReassignmentOpen] = useState(false)
+  const [reassignmentReason, setReassignmentReason] = useState("")
+  const [lastReassignmentReason, setLastReassignmentReason] = useState<string | null>(null)
+  const [finishAttentionOpen, setFinishAttentionOpen] = useState(false)
   const [auditLogs, setAuditLogs] = useState<Array<{ id: number; event: string; description: string; created_at?: string; causer_name?: string | null; properties?: any }>>([])
   const [auditOpen, setAuditOpen] = useState(false)
   const [auditLoading, setAuditLoading] = useState(false)
+  const [auditSearch, setAuditSearch] = useState("")
   const [totalMessages, setTotalMessages] = useState<number | null>(null)
   const [lastMessageAt, setLastMessageAt] = useState<string | null>(chat?.timestamp ?? null)
   const knownMessageIdsRef = useRef<Set<string>>(new Set())
@@ -367,8 +395,35 @@ export default function ChatInfo({
     setTotalMessages(null)
     setMqttStatus("disconnected")
     setMqttLastEventAt(null)
+    setAuditOpen(false)
+    setAuditLogs([])
+    setAuditSearch("")
     knownMessageIdsRef.current = new Set()
   }, [chat?.id])
+
+  useEffect(() => {
+    if (!chat?.id || !canViewAudit) {
+      setLastReassignmentReason(null)
+      return
+    }
+
+    let cancelled = false
+    fetch(`${API_BASE}/api/chats/${chat.id}/audit?limit=100`)
+      .then((response) => response.ok ? response.json() : Promise.reject())
+      .then((payload) => {
+        if (cancelled) return
+        const entry = (Array.isArray(payload.logs) ? payload.logs : []).find((item) =>
+          ["operator_reassigned", "operator_auto_reassigned"].includes(String(item.event)) &&
+          typeof item?.properties?.meta?.reason === "string" && item.properties.meta.reason.trim(),
+        )
+        setLastReassignmentReason(entry?.properties?.meta?.reason?.trim() ?? null)
+      })
+      .catch(() => {
+        if (!cancelled) setLastReassignmentReason(null)
+      })
+
+    return () => { cancelled = true }
+  }, [chat?.id, canViewAudit])
 
   useEffect(() => {
     setContactAvatarFailed(false)
@@ -449,6 +504,7 @@ export default function ChatInfo({
   const [media, setMedia] = useState<MediaItem[]>([])
   const [activeMediaType, setActiveMediaType] = useState<MediaType | "all">("all")
   const [preview, setPreview] = useState<PreviewMedia | null>(null)
+  const [mediaDimensions, setMediaDimensions] = useState<Record<string, { width: number; height: number }>>({})
 
   // thumbs de video (dataURL)
   const [videoThumbs, setVideoThumbs] = useState<Record<string, string>>({})
@@ -463,6 +519,56 @@ export default function ChatInfo({
     if (activeMediaType === "all") return media
     return media.filter((m) => m.message_type === activeMediaType)
   }, [media, activeMediaType])
+
+  const galleryPreviews = mediaFiltered.flatMap((item) => item.media_url && ["image", "video"].includes(item.message_type) ? [{ type: item.message_type as "image" | "video", url: resolveMediaUrl(item.media_url) }] : [])
+
+  const addMediaThumbnails = (photoswipe: any) => {
+    const strip = document.createElement("div")
+    Object.assign(strip.style, { position: "absolute", bottom: "112px", left: "50%", transform: "translateX(-50%)", display: "flex", maxWidth: "calc(100% - 32px)", gap: "8px", overflowX: "auto", scrollBehavior: "smooth", padding: "6px", borderRadius: "12px", background: "rgba(0, 0, 0, 0.48)", zIndex: "10" })
+    const render = () => {
+      const previews: HTMLButtonElement[] = []
+      strip.replaceChildren(...galleryPreviews.map((mediaItem, index) => {
+        const button = document.createElement("button")
+        button.type = "button"
+        button.setAttribute("aria-label", `Ver medio ${index + 1}`)
+        Object.assign(button.style, { width: "52px", height: "40px", flex: "0 0 auto", overflow: "hidden", borderRadius: "8px", border: index === photoswipe.currIndex ? "2px solid #ffffff" : "1px solid rgba(255,255,255,.45)", background: "#0f172a", padding: "0", cursor: "pointer" })
+        if (mediaItem.type === "image") {
+          const image = document.createElement("img")
+          image.src = mediaItem.url
+          image.alt = ""
+          Object.assign(image.style, { width: "100%", height: "100%", objectFit: "cover" })
+          button.appendChild(image)
+        } else {
+          const video = document.createElement("video")
+          video.src = mediaItem.url
+          video.muted = true
+          video.preload = "metadata"
+          Object.assign(video.style, { width: "100%", height: "100%", objectFit: "cover" })
+          button.appendChild(video)
+          const play = document.createElement("span")
+          play.textContent = "▶"
+          Object.assign(play.style, { position: "absolute", inset: "0", display: "grid", placeItems: "center", color: "#ffffff", fontSize: "14px", textShadow: "0 1px 3px #000" })
+          button.style.position = "relative"
+          button.appendChild(play)
+        }
+        button.onclick = () => photoswipe.goTo(index)
+        previews.push(button)
+        return button
+      }))
+      window.requestAnimationFrame(() => previews[photoswipe.currIndex]?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" }))
+    }
+    photoswipe.element.appendChild(strip)
+    render()
+    photoswipe.on("change", render)
+    const syncControlsVisibility = () => {
+      strip.style.opacity = photoswipe.element.classList.contains("pswp--ui-visible") ? "1" : "0"
+      strip.style.pointerEvents = photoswipe.element.classList.contains("pswp--ui-visible") ? "auto" : "none"
+    }
+    syncControlsVisibility()
+    const controlsObserver = new MutationObserver(syncControlsVisibility)
+    controlsObserver.observe(photoswipe.element, { attributes: true, attributeFilter: ["class"] })
+    photoswipe.on("destroy", () => { controlsObserver.disconnect(); strip.remove() })
+  }
 
   const mediaCounts = useMemo(() => {
     const c = { image: 0, video: 0, audio: 0, document: 0, contacts: 0, location: 0 }
@@ -930,7 +1036,7 @@ export default function ChatInfo({
   }
 
   useEffect(() => {
-    if (!canAdminister) return
+    if (!canReassign) return
     let cancelled = false
     fetch(`${API_BASE}/api/operator-control/snapshot`)
       .then((response) => response.ok ? response.json() : Promise.reject())
@@ -941,7 +1047,7 @@ export default function ChatInfo({
         if (!cancelled) setAdminMessage("No se pudo cargar la disponibilidad de operadores.")
       })
     return () => { cancelled = true }
-  }, [canAdminister, chat?.id])
+  }, [canReassign, chat?.id])
 
   const attentionStatusLabel = (status?: string | null) => ({
     bot: "Atendido por bot",
@@ -952,46 +1058,84 @@ export default function ChatInfo({
 
   const executePendingAdminAction = async () => {
     if (!pendingAdminAction) return
+    const reason = adminActionReason.trim()
+    if (!reason) {
+      setAdminModalError("Ingresá un motivo para realizar esta acción.")
+      return
+    }
     setAdminBusy(true)
     setAdminMessage(null)
+    setAdminModalError(null)
     try {
-      const response = await fetch(pendingAdminAction.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(pendingAdminAction.body) })
+      const response = await fetch(pendingAdminAction.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...pendingAdminAction.body, reason }) })
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.message || "No se pudo completar la acción.")
       pendingAdminAction.onSuccess(payload)
       setPendingAdminAction(null)
+      setAdminActionReason("")
     } catch (error) {
-      setAdminMessage(error instanceof Error ? error.message : "No se pudo completar la acción.")
+      setAdminModalError(error instanceof Error ? error.message : "No se pudo completar la acción.")
     } finally {
       setAdminBusy(false)
     }
   }
 
+  const confirmFinishAttention = () => {
+    setFinishAttentionOpen(false)
+    onFinishAttention?.()
+  }
+
   const reassignChat = (automatic: boolean) => {
     if (!chat?.id) return
-    const operatorId = Number(selectedOperatorId)
-    if (!automatic && !operatorId) {
-      setAdminMessage("Seleccioná un operador disponible.")
+    if (automatic) return
+    setAdminMessage(null)
+    setAdminModalError(null)
+    setReassignmentReason("")
+    setReassignmentOpen(true)
+  }
+
+  const executeReassignment = async () => {
+    if (!chat?.id) return
+    const reason = reassignmentReason.trim()
+    if (!reason) {
+      setAdminModalError("Ingresá un motivo para reasignar el chat.")
       return
     }
-    setPendingAdminAction({
-      title: "Confirmar reasignación",
-      description: "El chat será reasignado al operador seleccionado.",
-      url: `${API_BASE}/api/chats/${chat.id}/reassign`,
-      body: { automatic, operator_id: automatic ? null : operatorId },
-      onSuccess: (result) => {
-        const target = adminOperators.find((operator) => operator.id === Number(result.operator_id))
-        onChatUpdated?.({ operator_id: result.operator_id ?? null, operator_name: result.operator_name ?? target?.name ?? null, attention_status: result.pending ? "pending_assignment" : "assigned", status: "open", bot_enabled: false })
-        setAdminMessage("Chat reasignado correctamente.")
-      },
-    })
+    const operatorId = Number(selectedOperatorId)
+    if (!operatorId) {
+      setAdminModalError("Seleccioná un operador disponible.")
+      return
+    }
+    setAdminBusy(true)
+    setAdminMessage(null)
+    setAdminModalError(null)
+    try {
+      const response = await fetch(`${API_BASE}/api/chats/${chat.id}/reassign`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ automatic: false, operator_id: operatorId, reason }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.message || "No se pudo reasignar el chat.")
+      const target = adminOperators.find((operator) => operator.id === Number(payload.operator_id))
+      onChatUpdated?.({ operator_id: payload.operator_id ?? null, operator_name: payload.operator_name ?? target?.name ?? null, attention_status: payload.pending ? "pending_assignment" : "assigned", status: "open", bot_enabled: false })
+      setLastReassignmentReason(reason)
+      setAdminMessage("Chat reasignado correctamente.")
+      setReassignmentOpen(false)
+      setReassignmentReason("")
+    } catch (error) {
+      setAdminModalError(error instanceof Error ? error.message : "No se pudo reasignar el chat.")
+    } finally {
+      setAdminBusy(false)
+    }
   }
 
   const changeLifecycle = (action: "archive" | "reopen") => {
     if (!chat?.id) return
     const isArchive = action === "archive"
+    setAdminModalError(null)
     setPendingAdminAction({
-      title: isArchive ? "Archivar conversación" : "Reabrir conversación",
+      title: isArchive ? "Finalizar atención" : "Reabrir conversación",
       description: isArchive ? "Se liberará al operador, se archivará el chat y se reactivará el bot." : "El chat se reabrirá con el bot activo y sin operador asignado.",
       url: `${API_BASE}/api/chats/${chat.id}/${action}`,
       body: {},
@@ -1007,6 +1151,7 @@ export default function ChatInfo({
         setAdminMessage(isArchive ? "Chat archivado y bot reactivado." : "Chat reabierto con el bot activo.")
       },
     })
+    setAdminActionReason("")
   }
 
   const loadAudit = async () => {
@@ -1014,7 +1159,7 @@ export default function ChatInfo({
     setAuditOpen(true)
     setAuditLoading(true)
     try {
-      const response = await fetch(`${API_BASE}/api/chats/${chat.id}/audit`)
+      const response = await fetch(`${API_BASE}/api/chats/${chat.id}/audit?limit=500`)
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.message || "No se pudo cargar el historial.")
       setAuditLogs(Array.isArray(payload.logs) ? payload.logs : [])
@@ -1024,6 +1169,24 @@ export default function ChatInfo({
       setAuditLoading(false)
     }
   }
+
+  const filteredAuditLogs = auditLogs.filter((entry) => {
+    const query = auditSearch.trim().toLowerCase()
+    if (!query) return true
+
+    let propertiesText = ""
+    try {
+      propertiesText = JSON.stringify(entry.properties ?? {})
+    } catch {
+      propertiesText = ""
+    }
+
+    return [entry.causer_name, entry.description, entry.event, entry.created_at, propertiesText]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .includes(query)
+  })
 
   // ---------------------------
   // UI helpers
@@ -1091,14 +1254,82 @@ export default function ChatInfo({
   }
   return (
     <div className="flex flex-col h-full">
-      <Dialog open={Boolean(pendingAdminAction)} onOpenChange={(open) => { if (!open && !adminBusy) setPendingAdminAction(null) }}>
+      <Dialog open={finishAttentionOpen} onOpenChange={(open) => { if (!finishingAttention) setFinishAttentionOpen(open) }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Finalizar atención</DialogTitle>
+            <DialogDescription>
+              El chat se archivará, se liberará del operador actual y el bot volverá a quedar activo. ¿Querés continuar?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={finishingAttention} onClick={() => setFinishAttentionOpen(false)}>Cancelar</Button>
+            <Button type="button" className="bg-[#013765] hover:bg-[#024a8a]" disabled={finishingAttention} onClick={confirmFinishAttention}>
+              {finishingAttention ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {finishingAttention ? "Finalizando…" : "Confirmar"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={reassignmentOpen} onOpenChange={(open) => { if (!open && !adminBusy) { setReassignmentOpen(false); setReassignmentReason(""); setAdminModalError(null) } }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-[#013765]">Reasignar conversación</DialogTitle>
+            <DialogDescription>Elegí el operador que continuará atendiendo este chat e indicá el motivo.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">{chat.name}</p>
+            <Select value={selectedOperatorId} onValueChange={setSelectedOperatorId} disabled={adminBusy}>
+              <SelectTrigger><SelectValue placeholder="Seleccioná un operador" /></SelectTrigger>
+              <SelectContent>
+                {adminOperators.filter((operator) => operator.id !== Number(chat.operator_id ?? 0)).map((operator) => (
+                  <SelectItem key={operator.id} value={String(operator.id)} disabled={operator.availability !== "available" || operator.assigned_count >= operator.capacity}>
+                    {operator.name} · {operator.assigned_count}/{operator.capacity}{operator.availability !== "available" ? " · no disponible" : operator.assigned_count >= operator.capacity ? " · sin cupo" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <textarea
+              value={reassignmentReason}
+              onChange={(event) => setReassignmentReason(event.target.value)}
+              placeholder="Motivo de la reasignación"
+              rows={3}
+              maxLength={500}
+              className="w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-[#2b5f90] focus:ring-2 focus:ring-[#2b5f90]/20"
+              aria-label="Motivo de la reasignación"
+            />
+            {adminModalError ? <p className="text-xs font-medium text-red-600">{adminModalError}</p> : null}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => { setReassignmentOpen(false); setReassignmentReason(""); setAdminModalError(null) }} disabled={adminBusy}>Cancelar</Button>
+            <Button type="button" className="bg-[#013765] hover:bg-[#024a8a]" onClick={executeReassignment} disabled={adminBusy}>
+              {adminBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {adminBusy ? "Reasignando…" : "Confirmar reasignación"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={Boolean(pendingAdminAction)} onOpenChange={(open) => { if (!open && !adminBusy) { setPendingAdminAction(null); setAdminActionReason(""); setAdminModalError(null) } }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{pendingAdminAction?.title}</DialogTitle>
             <DialogDescription>{pendingAdminAction?.description}</DialogDescription>
           </DialogHeader>
+          <div className="space-y-1.5 py-2">
+            <label htmlFor="admin-action-reason" className="text-sm font-medium text-slate-700">Motivo</label>
+            <textarea
+              id="admin-action-reason"
+              value={adminActionReason}
+              onChange={(event) => setAdminActionReason(event.target.value)}
+              placeholder="Indica el motivo de esta acción"
+              rows={3}
+              maxLength={500}
+              className="w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-[#2b5f90] focus:ring-2 focus:ring-[#2b5f90]/20"
+            />
+            {adminModalError ? <p className="text-xs font-medium text-red-600">{adminModalError}</p> : null}
+          </div>
           <DialogFooter>
-            <Button type="button" variant="outline" disabled={adminBusy} onClick={() => setPendingAdminAction(null)}>Cancelar</Button>
+            <Button type="button" variant="outline" disabled={adminBusy} onClick={() => { setPendingAdminAction(null); setAdminActionReason(""); setAdminModalError(null) }}>Cancelar</Button>
             <Button type="button" className="bg-[#013765] hover:bg-[#012e54]" disabled={adminBusy} onClick={executePendingAdminAction}>
               {adminBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Confirmar
@@ -1107,9 +1338,94 @@ export default function ChatInfo({
         </DialogContent>
       </Dialog>
 
+      <Dialog open={auditOpen} onOpenChange={setAuditOpen}>
+        <DialogContent className="max-h-[85vh] max-w-2xl overflow-hidden border-slate-300 bg-slate-50 p-0">
+          <DialogHeader className="border-b border-[#013765] bg-[#013765] px-6 py-4 text-white">
+            <DialogTitle className="flex items-center gap-2 text-white">
+              <History className="h-5 w-5 text-white" />
+              Auditoría del chat
+            </DialogTitle>
+            <DialogDescription className="text-blue-100">
+              Historial completo de acciones y cambios registrados en esta conversación.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[calc(85vh-124px)] overflow-y-auto px-6 py-5">
+            <input
+              type="search"
+              value={auditSearch}
+              onChange={(event) => setAuditSearch(event.target.value)}
+              placeholder="Buscar por usuario, acción o contenido..."
+              className="mb-5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-[#2b5f90] focus:ring-2 focus:ring-[#2b5f90]/20"
+              aria-label="Buscar en la auditoría del chat"
+            />
+            {auditLoading ? (
+              <div className="flex items-center justify-center gap-2 py-12 text-sm text-slate-500">
+                <Loader2 className="h-4 w-4 animate-spin" /> Cargando auditoría...
+              </div>
+            ) : auditLogs.length === 0 ? (
+              <p className="py-12 text-center text-sm text-slate-500">No hay eventos registrados para este chat.</p>
+            ) : filteredAuditLogs.length === 0 ? (
+              <p className="py-12 text-center text-sm text-slate-500">No se encontraron eventos para esa búsqueda.</p>
+            ) : (
+              <div className="relative space-y-5">
+                <div className="pointer-events-none absolute bottom-0 left-[6.75rem] top-0 w-0.5 -translate-x-1/2 bg-[#6d9bc2]" />
+                {filteredAuditLogs.map((entry) => {
+                  const changes = Array.isArray(entry.properties?.changes_human) ? entry.properties.changes_human : []
+                  return (
+                    <div key={entry.id} className="grid grid-cols-[5.5rem_1rem_minmax(0,1fr)] items-stretch gap-3">
+                      <div className="pt-0.5 text-right">
+                        <p className="break-words text-xs font-bold leading-tight text-[#013765]">{entry.causer_name ?? "Sistema"}</p>
+                        <p className="mt-1 text-xs font-medium leading-tight text-slate-500">{formatDateSafe(entry.created_at)}</p>
+                      </div>
+                      <div className="relative min-h-full">
+                        <span className="absolute left-1/2 top-1 z-10 h-3.5 w-3.5 -translate-x-1/2 rounded-full border-2 border-white bg-[#013765] ring-2 ring-[#9fc0da]" />
+                      </div>
+                      <div className="rounded-lg border border-slate-300 bg-white p-4 shadow-md">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <p className="text-sm font-semibold text-slate-900">{entry.description}</p>
+                          <span className="rounded-full border border-[#9fc0da] bg-[#e7f0f8] px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-[#013765]">{entry.event}</span>
+                        </div>
+                        {changes.length > 0 && (
+                          <div className="mt-3 space-y-2 border-t border-slate-200 pt-3">
+                            {changes.map((change: any, index: number) => (
+                              <div key={`${entry.id}-${change.key ?? index}`} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] gap-3 text-xs">
+                                <span className="font-medium text-slate-600">{change.label ?? change.key}</span>
+                                <span className="text-slate-500">
+                                  {change.value !== undefined && change.value !== null
+                                    ? String(change.value)
+                                    : <>{String(change.before ?? "Sin dato")} <span className="px-1 text-slate-400">→</span> {String(change.after ?? "Sin dato")}</>}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Header */}
-      <div className="flex h-[72px] items-center px-4 border-b border-gray-300 bg-gray-100">
+      <div className="flex h-[72px] items-center justify-between gap-3 px-4 border-b border-gray-300 bg-gray-100">
         <h2 className="text-lg font-semibold text-foreground">Información del Chat</h2>
+        {canViewAudit && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-9 shrink-0 gap-1.5 bg-white px-2.5"
+            disabled={auditLoading}
+            onClick={loadAudit}
+            title="Ver auditoría del chat"
+            aria-label="Ver auditoría del chat"
+          >
+            {auditLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <History className="h-4 w-4" />}
+          </Button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto custom-scrollbar">
@@ -1141,62 +1457,114 @@ export default function ChatInfo({
             )}
           </div>
 
+          {lastReassignmentReason && (
+            <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-800">Chat reasignado · Motivo</p>
+              <p className="mt-1 break-words text-xs leading-5 text-slate-700">{lastReassignmentReason}</p>
+            </div>
+          )}
+
+          {/* Acciones */}
+          {(canUseBotControls || canFinishAttention || canTakeChat || (canReassign && chat.status === "open") || canAdminister) && (
+            <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3">
+              <h4 className="mb-3 flex items-center gap-2 font-medium text-slate-800">
+                <Zap className="h-4 w-4 text-[#013765]" />
+                Acciones
+              </h4>
+              {canUseBotControls && (
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-8 w-full border-[#013765] bg-[#013765] px-2 text-white hover:bg-[#024a8a] hover:text-white"
+                    onClick={handleToggleBot}
+                    disabled={togglingBot || resettingBot || !canUseBotControls}
+                    title={botEnabled ? "Pausar bot" : "Reanudar bot"}
+                  >
+                    {togglingBot ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : botEnabled ? <PowerOff className="h-3.5 w-3.5 text-white" /> : <Power className="h-3.5 w-3.5 text-white" />}
+                    <span className="ml-1.5 text-xs">{botEnabled ? "Pausar bot" : "Reanudar bot"}</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-8 w-full border-[#013765] bg-[#013765] px-2 text-white hover:bg-[#024a8a] hover:text-white"
+                    onClick={handleResetBot}
+                    disabled={togglingBot || resettingBot || !canUseBotControls}
+                    title="Reiniciar flujo"
+                  >
+                    {resettingBot ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5 text-white" />}
+                    <span className="ml-1.5 text-xs">Reiniciar flujo</span>
+                  </Button>
+                </div>
+              )}
+              {canTakeChat && (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="mt-2 w-full border-[#013765] bg-[#013765] text-white hover:bg-[#024a8a] hover:text-white"
+                  onClick={onTakeChat}
+                  disabled={takingChat}
+                >
+                  {takingChat ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Users className="mr-1.5 h-3.5 w-3.5" />}
+                  {takingChat ? "Tomando chat…" : "Tomar chat"}
+                </Button>
+              )}
+              {(canReassign || canAdminister) && (
+                <div className="mt-3 space-y-2 border-t border-slate-200 pt-3">
+                  {canReassign && chat.status === "open" ? (
+                    <>
+                      <Button type="button" size="sm" variant="outline" className="w-full border-[#013765] bg-[#013765] text-white hover:bg-[#024a8a] hover:text-white" disabled={adminBusy} onClick={() => reassignChat(false)}><Users className="mr-1.5 h-3.5 w-3.5" /> Reasignar</Button>
+                    </>
+                  ) : null}
+                  {canAdminister && chat.status === "open" ? (
+                    <>
+                      <Button type="button" size="sm" variant="outline" className="w-full border-[#013765] bg-[#013765] text-white hover:bg-[#024a8a] hover:text-white" disabled={adminBusy} onClick={() => changeLifecycle("archive")}>
+                        <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" /> Finalizar atención
+                      </Button>
+                    </>
+                  ) : canAdminister ? (
+                    <Button type="button" size="sm" variant="outline" className="w-full border-[#013765] bg-[#013765] text-white hover:bg-[#024a8a] hover:text-white" disabled={adminBusy} onClick={() => changeLifecycle("reopen")}>
+                      <ArchiveRestore className="mr-1.5 h-3.5 w-3.5" /> Reabrir con bot
+                    </Button>
+                  ) : null}
+                  {adminMessage ? <p className="text-[11px] text-slate-600">{adminMessage}</p> : null}
+                </div>
+              )}
+              {canFinishAttention && !canAdminister && (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="mt-2 w-full border-[#013765] bg-[#013765] text-white hover:bg-[#024a8a] hover:text-white"
+                  onClick={() => setFinishAttentionOpen(true)}
+                  disabled={finishingAttention}
+                >
+                  {finishingAttention ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />}
+                  {finishingAttention ? "Finalizando atención..." : "Finalizar atención"}
+                </Button>
+              )}
+            </div>
+          )}
+
           {/* Información general */}
-          <div className="mb-4">
-            <h4 className="font-medium text-foreground mb-3 flex items-center gap-2">
-              <Bot className="h-4 w-4" />
+          <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3">
+            <h4 className="mb-3 flex items-center gap-2 font-medium text-slate-800">
+              <Bot className="h-4 w-4 text-[#013765]" />
               Información general
             </h4>
 
-            <div className="grid grid-cols-1 gap-2 rounded-lg border border-gray-200 bg-white p-2.5 md:grid-cols-2">
-              <div className="rounded-md border border-gray-200 px-2.5 py-2">
-                <div className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase mb-1">BOT</div>
+            <div className="grid grid-cols-1 gap-2 bg-white md:grid-cols-2">
+              <div className="rounded-md bg-white">
+                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">BOT</div>
                 <div className="space-y-2">
                   <Badge variant="secondary" className={botEnabled ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}>
-                    {botEnabled ? "Activo" : "Pausado"}
+                    {botEnabled ? "Activado" : "Pausado"}
                   </Badge>
-                  {canToggleBot && (
-                    <div className="grid grid-cols-2 gap-2">
-                      <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-8 w-full px-2"
-                      onClick={handleToggleBot}
-                      disabled={togglingBot || resettingBot || !canToggleBot}
-                      title={botEnabled ? "Apagar bot" : "Encender bot"}
-                      aria-label={botEnabled ? "Apagar bot" : "Encender bot"}
-                    >
-                      {togglingBot ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : botEnabled ? (
-                        <PowerOff className="h-3.5 w-3.5 text-red-600" />
-                      ) : (
-                        <Power className="h-3.5 w-3.5 text-green-600" />
-                      )}
-                      </Button>
-                      <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-8 w-full px-2"
-                      onClick={handleResetBot}
-                      disabled={togglingBot || resettingBot || !canToggleBot}
-                      title="Reiniciar flujo"
-                      aria-label="Reiniciar flujo"
-                    >
-                      {resettingBot ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <RotateCcw className="h-3.5 w-3.5 text-blue-600" />
-                      )}
-                      </Button>
-                    </div>
-                  )}
                 </div>
               </div>
 
-              <div className="rounded-md border border-gray-200 px-2.5 py-2">
+              <div className="rounded-md bg-white">
                 <div className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase mb-1">RED</div>
                 <div className="mt-1 text-[10px] text-muted-foreground">
                   Canal en tiempo real:{" "}
@@ -1210,7 +1578,7 @@ export default function ChatInfo({
                 </div>
               </div>
 
-              <div className="rounded-md border border-gray-200 px-2.5 py-2">
+              <div className="rounded-md bg-white">
                 <div className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase mb-1">TOTAL MENSAJES</div>
                 <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
                   <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
@@ -1220,11 +1588,11 @@ export default function ChatInfo({
                   Variables: <span className="text-foreground font-medium">{totalVarsCount}</span>
                 </div>
                 <div className="text-[10px] text-muted-foreground">
-                  Con media: <span className="text-foreground font-medium">{media.length}</span>
+                  Con archivos: <span className="text-foreground font-medium">{media.length}</span>
                 </div>
               </div>
 
-              <div className="rounded-md border border-gray-200 px-2.5 py-2">
+              <div className="rounded-md bg-white">
                 <div className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase mb-1">ÚLTIMO MENSAJE</div>
                 <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
                   <Clock3 className="h-3.5 w-3.5 text-muted-foreground" />
@@ -1233,17 +1601,6 @@ export default function ChatInfo({
                 <div className="text-[10px] text-muted-foreground mt-0.5">{formatDateSafe(lastMessageAt)}</div>
               </div>
             </div>
-            {canFinishAttention && (
-              <Button
-                type="button"
-                className="mt-3 w-full bg-[#013765] hover:bg-[#012e54]"
-                onClick={onFinishAttention}
-                disabled={finishingAttention}
-              >
-                {finishingAttention ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                {finishingAttention ? "Finalizando atención..." : "Finalizar atención y archivar"}
-              </Button>
-            )}
           </div>
 
           <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3">
@@ -1256,70 +1613,17 @@ export default function ChatInfo({
               <span className="text-slate-500">Operador</span><span className="truncate font-medium">{chat.operator_name ?? "Sin asignar"}</span>
               <span className="text-slate-500">Asignado desde</span><span className="font-medium">{formatDateSafe(chat.assigned_at)}</span>
               <span className="text-slate-500">Cierre</span><span className="font-medium">{formatDateSafe(chat.closed_at)}</span>
+              {chat.attention_status === "archived" && (
+                <>
+                  <span className="text-slate-500">Archivado por</span>
+                  <span className="truncate font-medium">{chat.closed_by === "system" ? "Sistema" : chat.last_operator_name ?? (chat.last_operator_id ? `Operador #${chat.last_operator_id}` : "Sistema")}</span>
+                </>
+              )}
               <span className="text-slate-500">Flujo</span><span className="truncate font-medium">{chat.bot_flow_name ?? "Sin flujo"}</span>
               <span className="text-slate-500">Nombre del nodo</span><span className="truncate font-medium">{chat.bot_node_name ?? "Sin nodo configurado"}</span>
             </div>
 
-            {canViewAudit && (
-              <>
-                <Button type="button" size="sm" variant="outline" className="mt-3 w-full" disabled={auditLoading} onClick={loadAudit}>
-                  {auditLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <History className="mr-1.5 h-3.5 w-3.5" />} Ver historial operativo
-                </Button>
-                {auditOpen && (
-                  <div className="mt-3 max-h-64 space-y-2 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-2">
-                    {auditLogs.length === 0 && !auditLoading ? <p className="text-xs text-slate-500">No hay eventos registrados para este chat.</p> : null}
-                    {auditLogs.map((entry) => (
-                      <div key={entry.id} className="border-b border-slate-200 pb-2 last:border-0">
-                        <p className="text-xs font-medium text-slate-800">{entry.description}</p>
-                        <p className="mt-0.5 text-[10px] text-slate-500">{entry.causer_name ?? "Sistema"} · {formatDateSafe(entry.created_at)}</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
           </div>
-
-          {canAdminister && (
-            <div className="mb-4 rounded-xl border border-[#013765]/25 bg-[#f5f9fd] p-3">
-              <h4 className="mb-3 flex items-center gap-2 font-medium text-[#013765]">
-                <Shield className="h-4 w-4" />
-                Administración del chat
-              </h4>
-
-              {chat.status === "open" ? (
-                <div className="space-y-2 border-t border-slate-200 pt-3">
-                  <div className="flex items-center gap-1.5 text-xs font-medium text-slate-800"><Users className="h-3.5 w-3.5" /> Reasignar atención</div>
-                  <Select
-                    value={selectedOperatorId}
-                    onValueChange={setSelectedOperatorId}
-                    disabled={adminBusy}
-                  >
-                    <SelectTrigger className="h-8 w-full bg-white text-xs">
-                      <SelectValue placeholder="Seleccionar operador disponible" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {adminOperators.filter((operator) => operator.availability === "available" && operator.assigned_count < operator.capacity).map((operator) => (
-                        <SelectItem key={operator.id} value={String(operator.id)}>{operator.name} ({operator.assigned_count}/{operator.capacity})</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button type="button" size="sm" variant="outline" className="w-full" disabled={adminBusy} onClick={() => reassignChat(false)}>Reasignar</Button>
-                  <Button type="button" size="sm" variant="outline" className="w-full border-amber-300 text-amber-800 hover:bg-amber-50" disabled={adminBusy} onClick={() => changeLifecycle("archive")}>
-                    <ArchiveRestore className="mr-1.5 h-3.5 w-3.5" /> Archivar
-                  </Button>
-                </div>
-              ) : (
-                <div className="border-t border-slate-200 pt-3">
-                  <Button type="button" size="sm" className="w-full bg-[#013765] hover:bg-[#012e54]" disabled={adminBusy} onClick={() => changeLifecycle("reopen")}>
-                    <ArchiveRestore className="mr-1.5 h-3.5 w-3.5" /> Reabrir con bot
-                  </Button>
-                </div>
-              )}
-
-              {adminMessage ? <p className="mt-2 text-[11px] text-slate-600">{adminMessage}</p> : null}
-            </div>
-          )}
 
           {/* Variables */}
           <div className="order-2 mb-4">
@@ -1454,6 +1758,7 @@ export default function ChatInfo({
               </div>
             ) : (
               <div className="border rounded-lg p-3 bg-white">
+                <Gallery withCaption onOpen={addMediaThumbnails} options={{ bgOpacity: 1, closeOnVerticalDrag: true, imageClickAction: "zoom", doubleTapAction: "zoom", secondaryZoomLevel: 2 }}>
                 <div className="grid grid-cols-2 gap-2">
                   {mediaFiltered.slice(0, 90).map((m) => {
                     const url = m.media_url ? resolveMediaUrl(m.media_url) : ""
@@ -1528,18 +1833,11 @@ export default function ChatInfo({
                     }
 
                     if (m.message_type === "image") {
+                      const dimensions = mediaDimensions[String(m.id)] ?? { width: 1600, height: 1200 }
                       return (
-                        <button
-                          key={m.id}
-                          type="button"
-                          onClick={() => setPreview({ url, name, type: "image" })}
-                          className="text-left"
-                          title={name}
-                        >
-                          <MediaCard name={name}>
-                            <img src={url} alt={name} className="w-full h-24 object-cover" loading="lazy" />
-                          </MediaCard>
-                        </button>
+                        <Item key={m.id} original={url} thumbnail={url} width={dimensions.width} height={dimensions.height} alt={name} caption={name} content={<WebchatGalleryImage src={url} alt={name} />}>
+                          {({ ref, open }) => <button ref={ref} type="button" onClick={open} className="text-left" title={name}><MediaCard name={name}><img src={url} alt={name} onLoad={(event) => { const image = event.currentTarget; if (image.naturalWidth && image.naturalHeight) setMediaDimensions((current) => current[String(m.id)]?.width === image.naturalWidth && current[String(m.id)]?.height === image.naturalHeight ? current : { ...current, [String(m.id)]: { width: image.naturalWidth, height: image.naturalHeight } }) }} className="h-24 w-full object-cover" loading="lazy" /></MediaCard></button>}
+                        </Item>
                       )
                     }
 
@@ -1547,31 +1845,9 @@ export default function ChatInfo({
                       const vidThumb = videoThumbs[String(m.id)]
 
                       return (
-                        <button
-                          key={m.id}
-                          type="button"
-                          onClick={() => setPreview({ url, name, type: "video" })}
-                          className="text-left"
-                          title={name}
-                        >
-                          <MediaCard name={name}>
-                            {vidThumb ? (
-                              <div className="relative w-full h-24">
-                                <img src={vidThumb} className="w-full h-24 object-cover" alt={name} loading="lazy" />
-                                <div className="absolute inset-0 flex items-center justify-center">
-                                  <div className="rounded-full bg-black/50 p-2">
-                                    <Video className="h-5 w-5 text-white" />
-                                  </div>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="w-full h-24 flex flex-col items-center justify-center gap-1">
-                                <Video className="h-6 w-6 text-muted-foreground" />
-                                <div className="text-[10px] text-muted-foreground">Cargando vista previa...</div>
-                              </div>
-                            )}
-                          </MediaCard>
-                        </button>
+                        <Item key={m.id} original={url} width="2400" height="1350" alt={name} caption={name} content={<WebchatGalleryVideo src={url} />}>
+                          {({ ref, open }) => <button ref={ref} type="button" onClick={open} className="text-left" title={name}><MediaCard name={name}>{vidThumb ? <div className="relative h-24 w-full"><img src={vidThumb} className="h-24 w-full object-cover" alt={name} loading="lazy" /><div className="absolute inset-0 flex items-center justify-center"><div className="rounded-full bg-black/50 p-2"><Video className="h-5 w-5 text-white" /></div></div></div> : <div className="flex h-24 w-full flex-col items-center justify-center gap-1"><Video className="h-6 w-6 text-muted-foreground" /><div className="text-[10px] text-muted-foreground">Cargando vista previa...</div></div>}</MediaCard></button>}
+                        </Item>
                       )
                     }
 
@@ -1615,6 +1891,7 @@ export default function ChatInfo({
                     )
                   })}
                 </div>
+                </Gallery>
               </div>
             )}
 
