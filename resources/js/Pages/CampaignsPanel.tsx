@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react"
 import {
   AlertCircle,
   CheckCircle2,
+  CalendarClock,
   Eye,
   FileSpreadsheet,
   Info,
@@ -16,6 +17,7 @@ import {
   Upload,
 } from "lucide-react"
 import { toast } from "sonner"
+import * as XLSX from "xlsx"
 
 import { AppShell, AppShellBackButton } from "../Components/AppShell"
 import { Badge } from "shadcn/components/ui/badge"
@@ -64,6 +66,7 @@ interface Campaign {
   created_by?: string | null
   created_at?: string | null
   started_at?: string | null
+  scheduled_at?: string | null
   finished_at?: string | null
 }
 
@@ -202,6 +205,7 @@ function statusLabel(status: string) {
     draft: "Borrador",
     running: "En ejecución",
     paused: "Pausada",
+    scheduled: "Programada",
     completed: "Finalizada",
     pending: "Pendiente",
     queued: "En cola",
@@ -217,7 +221,7 @@ function statusClass(status: string) {
   if (["completed", "read", "APPROVED"].includes(status)) return "border-emerald-200 bg-emerald-50 text-emerald-700"
   if (["running", "sent", "delivered"].includes(status)) return "border-blue-200 bg-blue-50 text-blue-700"
   if (["failed", "REJECTED", "DISABLED"].includes(status)) return "border-red-200 bg-red-50 text-red-700"
-  if (["paused", "PENDING", "PAUSED"].includes(status)) return "border-amber-200 bg-amber-50 text-amber-700"
+  if (["paused", "scheduled", "PENDING", "PAUSED"].includes(status)) return "border-amber-200 bg-amber-50 text-amber-700"
   return "border-slate-200 bg-slate-50 text-slate-700"
 }
 
@@ -247,6 +251,8 @@ export default function CampaignsPanel({
   const [recipients, setRecipients] = useState<Recipient[]>([])
   const [detailLoading, setDetailLoading] = useState(false)
   const [campaignName, setCampaignName] = useState("")
+  const [startMode, setStartMode] = useState<"now" | "scheduled">("now")
+  const [scheduledAt, setScheduledAt] = useState("")
   const [templateId, setTemplateId] = useState("")
   const [sourceFilename, setSourceFilename] = useState("")
   const [headers, setHeaders] = useState<string[]>([])
@@ -271,6 +277,46 @@ export default function CampaignsPanel({
     return selectedTemplate.variable_keys.filter((key) => !headers.includes(normalizeHeader(key)))
   }, [headers, selectedTemplate])
   const previewRows = importedRows.slice(0, 8)
+  const importSummary = useMemo(() => {
+    const seenPhones = new Set<string>()
+    const issues: Array<{ row: number; message: string }> = []
+    let valid = 0
+    let invalid = 0
+    let duplicates = 0
+
+    importedRows.forEach((row) => {
+      let phone = row.phone.replace(/\D+/g, "")
+      if (phone.startsWith("00")) phone = phone.slice(2)
+      if (!/^[1-9]\d{9,14}$/.test(phone)) {
+        invalid++
+        issues.push({ row: row.row_number, message: "Teléfono inválido" })
+        return
+      }
+      if (seenPhones.has(phone)) {
+        duplicates++
+        issues.push({ row: row.row_number, message: "Teléfono duplicado; se excluye esta fila" })
+        return
+      }
+      const missingKeys = selectedTemplate?.variable_keys.filter((key) => !row.raw[normalizeHeader(key)]?.trim()) ?? []
+      if (missingKeys.length > 0) {
+        invalid++
+        issues.push({ row: row.row_number, message: `Faltan valores para: ${missingKeys.join(", ")}` })
+        return
+      }
+      seenPhones.add(phone)
+      valid++
+    })
+
+    return { valid, invalid, duplicates, issues }
+  }, [importedRows, selectedTemplate])
+  const templatePreviewBody = selectedTemplate
+    ? selectedTemplate.body.replace(/\{\{(\d+|[a-zA-Z0-9_]+)\}\}/g, (placeholder, token: string) => {
+      const key = /^\d+$/.test(token) ? selectedTemplate.variable_keys[Number(token) - 1] : token
+      if (!key) return placeholder
+      const sampleValue = previewRows[0]?.raw[normalizeHeader(key)]
+      return sampleValue?.trim() || (previewRows.length > 0 ? placeholder : key)
+    })
+    : ""
   const filteredCampaigns = useMemo(() => {
     const query = campaignSearch.trim().toLowerCase()
     return campaigns.filter((campaign) => {
@@ -307,6 +353,8 @@ export default function CampaignsPanel({
 
   const resetCampaignForm = () => {
     setCampaignName("")
+    setStartMode("now")
+    setScheduledAt("")
     setTemplateId("")
     setSourceFilename("")
     setHeaders([])
@@ -314,9 +362,10 @@ export default function CampaignsPanel({
     if (fileInputRef.current) fileInputRef.current.value = ""
   }
 
-  const readCsv = async (file: File) => {
-    if (!file.name.toLowerCase().endsWith(".csv")) {
-      toast.error("Usá un archivo en formato .csv")
+  const readRecipientFile = async (file: File) => {
+    const extension = file.name.toLowerCase().split(".").pop()
+    if (!extension || !["csv", "xls", "xlsx"].includes(extension)) {
+      toast.error("Usá un archivo CSV o Excel (.xls, .xlsx)")
       return
     }
     if (file.size > 10 * 1024 * 1024) {
@@ -326,10 +375,23 @@ export default function CampaignsPanel({
 
     setFileLoading(true)
     try {
-      const csvRows = parseCsv(await file.text())
-      if (csvRows.length < 2) throw new Error("El CSV no contiene filas para importar")
+      let fileRows: unknown[][]
+      if (extension === "csv") {
+        fileRows = parseCsv(await file.text())
+      } else {
+        const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true })
+        const firstSheetName = workbook.SheetNames[0]
+        if (!firstSheetName) throw new Error("El archivo Excel no contiene hojas para importar")
+        fileRows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[firstSheetName], {
+          header: 1,
+          defval: "",
+          raw: false,
+          blankrows: false,
+        })
+      }
+      if (fileRows.length < 2) throw new Error("El archivo no contiene filas para importar")
 
-      const normalizedHeaders = csvRows[0].map((value) => normalizeHeader(displayCellValue(value)))
+      const normalizedHeaders = fileRows[0].map((value) => normalizeHeader(displayCellValue(value)))
 
       const duplicateHeaders = normalizedHeaders.filter(
         (header, index) => header !== "" && normalizedHeaders.indexOf(header) !== index,
@@ -339,7 +401,7 @@ export default function CampaignsPanel({
       }
 
       const rows: ImportedRow[] = []
-      csvRows.slice(1).forEach((row, index) => {
+      fileRows.slice(1).forEach((row, index) => {
         const rowNumber = index + 2
         const raw: Record<string, string> = {}
         normalizedHeaders.forEach((header, columnIndex) => {
@@ -362,7 +424,7 @@ export default function CampaignsPanel({
       setImportedRows(rows)
       toast.success(`${rows.length} filas leídas desde ${file.name}`)
     } catch (error) {
-      console.error("Error leyendo CSV:", error)
+      console.error("Error leyendo archivo de destinatarios:", error)
       setSourceFilename("")
       setHeaders([])
       setImportedRows([])
@@ -375,9 +437,13 @@ export default function CampaignsPanel({
   const createCampaign = async () => {
     if (!campaignName.trim()) return toast.error("Ingresá un nombre para la campaña")
     if (!selectedTemplate) return toast.error("Seleccioná una plantilla aprobada")
-    if (!phoneHeader) return toast.error("El CSV debe incluir una columna llamada telefono")
+    if (!phoneHeader) return toast.error("El archivo debe incluir una columna llamada telefono")
     if (missingHeaders.length > 0) return toast.error(`Faltan columnas: ${missingHeaders.join(", ")}`)
-    if (importedRows.length === 0) return toast.error("Importá un CSV con destinatarios")
+    if (importedRows.length === 0) return toast.error("Importá un archivo con destinatarios")
+    if (startMode === "scheduled" && (!scheduledAt || new Date(scheduledAt).getTime() <= Date.now())) {
+      return toast.error("Elegí una fecha y hora futuras para programar la campaña")
+    }
+    if (startMode === "scheduled" && importSummary.valid === 0) return toast.error("El archivo no tiene destinatarios válidos para programar")
 
     setCreatingCampaign(true)
     try {
@@ -388,6 +454,8 @@ export default function CampaignsPanel({
           name: campaignName.trim(),
           whatsapp_template_id: selectedTemplate.id,
           source_filename: sourceFilename,
+          start_mode: startMode,
+          scheduled_at: startMode === "scheduled" ? scheduledAt : null,
           rows: importedRows.map((row) => ({
             row_number: row.row_number,
             phone: row.phone,
@@ -400,7 +468,7 @@ export default function CampaignsPanel({
       setCampaigns((current) => [payload.campaign, ...current])
       setCampaignDialogOpen(false)
       resetCampaignForm()
-      toast.success("Campaña creada en borrador")
+      toast.success(startMode === "scheduled" ? "Campaña programada" : "Campaña creada en borrador")
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo crear la campaña")
     } finally {
@@ -423,6 +491,24 @@ export default function CampaignsPanel({
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo actualizar la campaña")
       return false
+    } finally {
+      setBusyCampaignId(null)
+    }
+  }
+
+  const retryFailedRecipients = async (campaign: Campaign) => {
+    setBusyCampaignId(campaign.id)
+    try {
+      const response = await fetch(`${API_BASE}/api/campaigns/${campaign.id}/retry-failed`, {
+        method: "POST",
+        headers: { Accept: "application/json" },
+      })
+      if (!response.ok) throw new Error(await responseMessage(response, "No se pudieron reintentar los destinatarios fallidos"))
+      const payload = await response.json()
+      setCampaigns((current) => current.map((item) => (item.id === campaign.id ? payload.campaign : item)))
+      toast.success(`Se reintentará el envío a ${payload.retried_count} destinatarios fallidos`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudieron reintentar los destinatarios fallidos")
     } finally {
       setBusyCampaignId(null)
     }
@@ -465,7 +551,7 @@ export default function CampaignsPanel({
   }
 
   const draftCampaigns = campaigns.filter((campaign) => campaign.status === "draft").length
-  const activeCampaigns = campaigns.filter((campaign) => ["running", "paused"].includes(campaign.status)).length
+  const activeCampaigns = campaigns.filter((campaign) => ["running", "paused", "scheduled"].includes(campaign.status)).length
   const completedCampaigns = campaigns.filter((campaign) => campaign.status === "completed").length
   const campaignsWithErrors = campaigns.filter((campaign) => campaign.failed_count > 0).length
 
@@ -542,7 +628,7 @@ export default function CampaignsPanel({
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
               <SummaryStat label="Total" value={campaigns.length} />
               <SummaryStat label="Borradores" value={draftCampaigns} />
-              <SummaryStat label="En curso" value={activeCampaigns} />
+              <SummaryStat label="Activas / programadas" value={activeCampaigns} />
               <SummaryStat label="Finalizadas" value={completedCampaigns} />
               <SummaryStat label="Con errores" value={campaignsWithErrors} />
             </div>
@@ -565,6 +651,7 @@ export default function CampaignsPanel({
                     <SelectItem value="draft">Borrador</SelectItem>
                     <SelectItem value="running">En ejecución</SelectItem>
                     <SelectItem value="paused">Pausada</SelectItem>
+                    <SelectItem value="scheduled">Programada</SelectItem>
                     <SelectItem value="completed">Finalizada</SelectItem>
                     <SelectItem value="with_errors">Con errores</SelectItem>
                   </SelectContent>
@@ -582,7 +669,7 @@ export default function CampaignsPanel({
                 <EmptyState
                   title={campaigns.length === 0 ? "Todavía no hay campañas" : "No hay resultados"}
                   description={campaigns.length === 0
-                    ? "Creá una campaña, seleccioná una plantilla e importá los destinatarios desde CSV."
+                    ? "Creá una campaña, seleccioná una plantilla e importá los destinatarios desde CSV o Excel."
                     : "Probá cambiando la búsqueda o el filtro de estado."}
                 />
               ) : filteredCampaigns.map((campaign) => (
@@ -601,6 +688,12 @@ export default function CampaignsPanel({
                         ? ` · ${campaign.invalid_count + campaign.duplicate_count} observados`
                         : ""}
                     </p>
+                    {campaign.status === "scheduled" && campaign.scheduled_at ? (
+                      <p className="mt-1 flex items-center gap-1 text-xs font-medium text-amber-700">
+                        <CalendarClock className="h-3.5 w-3.5" />
+                        Inicio: {new Date(campaign.scheduled_at).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })}
+                      </p>
+                    ) : null}
                   </div>
                   <div>
                     <Badge variant="outline" className={statusClass(campaign.status)}>
@@ -632,14 +725,25 @@ export default function CampaignsPanel({
                         {busyCampaignId === campaign.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Pause className="mr-2 h-4 w-4" />}
                         Pausar
                       </Button>
-                    ) : campaign.status === "draft" || campaign.status === "paused" ? (
+                    ) : campaign.status === "draft" || campaign.status === "paused" || campaign.status === "scheduled" ? (
                       <Button
                         className="bg-[#013765] text-white hover:bg-[#024a8a]"
                         onClick={() => setCampaignToLaunch(campaign)}
                         disabled={busyCampaignId === campaign.id}
                       >
                         {busyCampaignId === campaign.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
-                        {campaign.status === "paused" ? "Reanudar" : "Iniciar"}
+                        {campaign.status === "paused" ? "Reanudar" : campaign.status === "scheduled" ? "Iniciar ahora" : "Iniciar"}
+                      </Button>
+                    ) : null}
+                    {campaign.status === "completed" && campaign.failed_count > 0 ? (
+                      <Button
+                        variant="outline"
+                        className="border-[#dbe5ef] text-[#013765] hover:bg-[#013765]/[0.04]"
+                        onClick={() => void retryFailedRecipients(campaign)}
+                        disabled={busyCampaignId === campaign.id}
+                      >
+                        {busyCampaignId === campaign.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                        Reintentar fallidos
                       </Button>
                     ) : null}
                   </div>
@@ -735,13 +839,37 @@ export default function CampaignsPanel({
         <DialogContent className="max-h-[92vh] max-w-5xl overflow-y-auto border-[#dbe5ef]">
           <DialogHeader>
             <DialogTitle className="text-[#013765]">Nueva campaña manual</DialogTitle>
-            <DialogDescription className="text-[#013765]/70">Importá un CSV, revisá los datos y guardá la campaña como borrador.</DialogDescription>
+            <DialogDescription className="text-[#013765]/70">Importá un CSV o Excel, revisá los datos y guardá un borrador o programá el inicio.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-5 lg:grid-cols-[0.8fr_1.2fr]">
             <div className="space-y-4 rounded-xl border border-[#dbe5ef] bg-slate-50/60 p-4">
               <div className="space-y-2">
                 <Label>Nombre de la campaña</Label>
                 <Input value={campaignName} onChange={(event) => setCampaignName(event.target.value)} placeholder="Recordatorio de turnos - Julio" />
+              </div>
+              <div className="space-y-2">
+                <Label>Inicio de la campaña</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button type="button" variant={startMode === "now" ? "default" : "outline"} className={startMode === "now" ? "bg-[#013765] text-white hover:bg-[#024a8a]" : "border-[#dbe5ef] text-[#013765]"} onClick={() => setStartMode("now")}>
+                    <Play className="mr-2 h-4 w-4" /> Ahora
+                  </Button>
+                  <Button type="button" variant={startMode === "scheduled" ? "default" : "outline"} className={startMode === "scheduled" ? "bg-[#013765] text-white hover:bg-[#024a8a]" : "border-[#dbe5ef] text-[#013765]"} onClick={() => setStartMode("scheduled")}>
+                    <CalendarClock className="mr-2 h-4 w-4" /> Programar
+                  </Button>
+                </div>
+                {startMode === "scheduled" ? (
+                  <div>
+                    <Label htmlFor="campaign-scheduled-at" className="text-xs text-slate-600">Fecha y hora (Argentina)</Label>
+                    <Input
+                      id="campaign-scheduled-at"
+                      type="datetime-local"
+                      className="mt-1"
+                      value={scheduledAt}
+                      onChange={(event) => setScheduledAt(event.target.value)}
+                      min={new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}
+                    />
+                  </div>
+                ) : null}
               </div>
               <div className="space-y-2">
                 <Label>Plantilla aprobada</Label>
@@ -756,24 +884,73 @@ export default function CampaignsPanel({
                   </SelectContent>
                 </Select>
               </div>
+              <div>
+                <div className="mb-2 flex items-center justify-between">
+                  <Label>Vista previa en WhatsApp</Label>
+                  {importedRows.length > 0 ? <Badge variant="secondary">Fila 1</Badge> : null}
+                </div>
+                <div className="flex justify-center rounded-xl border border-[#dbe5ef] bg-white p-3">
+                  <div className="flex h-[310px] w-full max-w-[220px] flex-col overflow-hidden rounded-[1.5rem] border-[5px] border-slate-800 bg-white shadow-md">
+                    <div className="flex h-5 shrink-0 items-center justify-between bg-white px-3 text-[8px] font-semibold text-slate-700">
+                      <span>9:41</span>
+                      <span className="flex items-end gap-0.5" aria-hidden="true">
+                        <span className="h-1 w-1 rounded-full bg-slate-700" />
+                        <span className="h-1.5 w-1 rounded-full bg-slate-700" />
+                        <span className="h-2 w-1 rounded-full bg-slate-700" />
+                        <span className="ml-1 h-2 w-4 rounded-sm border border-slate-500"><span className="m-[1px] block h-1 w-2.5 rounded-[1px] bg-emerald-500" /></span>
+                      </span>
+                    </div>
+                    <div className="flex h-11 shrink-0 items-center gap-2 bg-[#075e54] px-2.5 text-white">
+                      <div className="grid h-7 w-7 place-items-center rounded-full bg-white/15 text-[9px] font-bold">HU</div>
+                      <div className="min-w-0">
+                        <p className="truncate text-[10px] font-semibold">Hospital Universitario</p>
+                        <p className="text-[8px] text-white/75">en línea</p>
+                      </div>
+                    </div>
+                    <div className="flex min-h-0 flex-1 flex-col justify-end gap-2 overflow-y-auto p-2.5" style={{ backgroundColor: "#efeae2", backgroundImage: "radial-gradient(#d7d0c5 0.65px, transparent 0.65px)", backgroundSize: "12px 12px" }}>
+                      {selectedTemplate ? (
+                        <div className="max-w-[96%] self-start rounded-xl rounded-bl-sm bg-white px-2.5 py-2 shadow-sm">
+                          <p className="whitespace-pre-wrap break-words text-[10px] leading-[1.4] text-slate-800">{templatePreviewBody}</p>
+                          <p className="mt-1 text-right text-[8px] leading-none text-slate-400">9:41</p>
+                        </div>
+                      ) : (
+                        <p className="rounded-xl bg-white/90 px-2 py-2 text-center text-[10px] text-slate-500 shadow-sm">Seleccioná una plantilla para ver el mensaje.</p>
+                      )}
+                    </div>
+                    <div className="flex h-9 shrink-0 items-center gap-1.5 bg-white px-2">
+                      <span className="grid h-6 w-6 place-items-center rounded-full border border-slate-200 text-sm leading-none text-slate-400">+</span>
+                      <span className="flex-1 rounded-full border border-slate-200 px-2.5 py-1 text-[8px] text-slate-400">Mensaje</span>
+                      <span className="grid h-6 w-6 place-items-center rounded-full bg-[#075e54] text-[8px] text-white">➤</span>
+                    </div>
+                  </div>
+                </div>
+                <p className="mt-1.5 text-[11px] text-slate-500">{previewRows.length > 0 ? "Ejemplo con los datos de la primera fila." : "Importá un archivo para usar datos reales."}</p>
+              </div>
               {selectedTemplate ? (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <p className="whitespace-pre-wrap text-sm text-slate-700">{selectedTemplate.body}</p>
-                  <p className="mt-3 text-xs font-medium text-slate-500">
-                    Columnas requeridas: telefono{selectedTemplate.variable_keys.length ? `, ${selectedTemplate.variable_keys.join(", ")}` : ""}
-                  </p>
-                  <p className="mt-1 text-xs text-slate-500">Columna opcional para identificar al destinatario: nombre.</p>
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Columnas requeridas</p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {["telefono", ...selectedTemplate.variable_keys].map((column) => (
+                      <Badge key={column} variant="outline" className="border-[#013765]/15 bg-slate-50 px-2.5 py-1 font-mono text-[11px] font-medium text-[#013765]">
+                        {column}
+                      </Badge>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">Opcional para identificar al destinatario: <span className="font-mono text-slate-600">nombre</span>.</p>
                 </div>
               ) : null}
+            </div>
+
+            <div className="min-w-0 space-y-4">
               <div className="space-y-2">
                 <div className="flex items-center gap-1.5">
-                  <Label>Archivo CSV</Label>
+                  <Label>Archivo de destinatarios</Label>
                   <Popover>
                     <PopoverTrigger asChild>
                       <button
                         type="button"
                         className="rounded-full text-[#013765]/55 transition-colors hover:text-[#013765] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#013765]/30"
-                        aria-label="Ver formato requerido del archivo CSV"
+                        aria-label="Ver formato requerido del archivo de destinatarios"
                       >
                         <Info className="h-4 w-4" />
                       </button>
@@ -785,7 +962,7 @@ export default function CampaignsPanel({
                     >
                       <div>
                         <p className="font-semibold text-[#013765]">Formato del archivo</p>
-                        <p className="mt-1 text-slate-600">Exportalo como CSV UTF-8, separado por coma o punto y coma.</p>
+                        <p className="mt-1 text-slate-600">Podés subir un CSV UTF-8 o un Excel (.xls o .xlsx). La primera hoja debe tener los encabezados en la primera fila.</p>
                       </div>
                       <ul className="list-disc space-y-1 pl-4 text-slate-600">
                         <li>La primera fila debe contener los encabezados.</li>
@@ -804,17 +981,32 @@ export default function CampaignsPanel({
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".csv,text/csv"
+                  accept=".csv,.xls,.xlsx,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                   className="hidden"
                   onChange={(event) => {
                     const file = event.target.files?.[0]
-                    if (file) void readCsv(file)
+                    if (file) void readRecipientFile(file)
                   }}
                 />
-                <Button variant="outline" className="w-full border-dashed border-[#dbe5ef] bg-white py-8 text-[#013765] hover:bg-[#013765]/[0.04]" onClick={() => fileInputRef.current?.click()} disabled={fileLoading}>
+                <Button variant="outline" className="w-full border-dashed border-[#dbe5ef] bg-white py-5 text-[#013765] hover:bg-[#013765]/[0.04]" onClick={() => fileInputRef.current?.click()} disabled={fileLoading}>
                   {fileLoading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Upload className="mr-2 h-5 w-5" />}
-                  {sourceFilename || "Seleccionar archivo .csv"}
+                  {sourceFilename || "Seleccionar CSV o Excel"}
                 </Button>
+                {importedRows.length > 0 ? (
+                  <div className="space-y-2 rounded-lg border border-[#dbe5ef] bg-white p-2.5">
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div><p className="text-lg font-semibold text-emerald-700">{importSummary.valid}</p><p className="text-[11px] text-slate-500">Se enviarán</p></div>
+                      <div><p className="text-lg font-semibold text-amber-700">{importSummary.invalid}</p><p className="text-[11px] text-slate-500">Inválidos</p></div>
+                      <div><p className="text-lg font-semibold text-amber-700">{importSummary.duplicates}</p><p className="text-[11px] text-slate-500">Duplicados</p></div>
+                    </div>
+                    {importSummary.issues.length > 0 ? (
+                      <div className="max-h-24 space-y-1 overflow-y-auto border-t border-slate-100 pt-2 text-xs text-amber-700">
+                        {importSummary.issues.slice(0, 5).map((issue) => <p key={`${issue.row}-${issue.message}`}>Fila {issue.row}: {issue.message}</p>)}
+                        {importSummary.issues.length > 5 ? <p>Y {importSummary.issues.length - 5} filas observadas más.</p> : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
               {headers.length > 0 ? (
                 <div className="space-y-2 text-sm">
@@ -823,21 +1015,18 @@ export default function CampaignsPanel({
                   <ValidationLine valid={importedRows.length > 0} text={`${importedRows.length} filas con datos`} />
                 </div>
               ) : null}
-            </div>
-
-            <div className="min-w-0">
               <div className="mb-2 flex items-center justify-between">
-                <Label>Previsualización</Label>
+                <Label>Vista previa de datos</Label>
                 {importedRows.length > 0 ? <Badge variant="secondary">{importedRows.length} filas</Badge> : null}
               </div>
-              <div className="max-h-[430px] overflow-auto rounded-xl border border-[#dbe5ef]">
+              <div className="max-h-[430px] overflow-auto rounded-xl border border-[#dbe5ef] bg-white">
                 {previewRows.length === 0 ? (
                   <div className="flex min-h-56 flex-col items-center justify-center p-6 text-center text-slate-500">
                     <FileSpreadsheet className="mb-3 h-10 w-10 text-slate-300" />
-                    <p className="text-sm">La previsualización aparecerá cuando importes el CSV.</p>
+                    <p className="text-sm">Las filas del CSV o Excel aparecerán cuando importes el archivo.</p>
                   </div>
                 ) : (
-                  <table className="w-full min-w-[620px] text-left text-xs">
+                  <table className="w-full min-w-[520px] text-left text-xs">
                     <thead className="sticky top-0 bg-[#013765]/[0.04] text-[#013765]/70">
                       <tr>
                         <th className="px-3 py-2">Fila</th>
@@ -855,14 +1044,14 @@ export default function CampaignsPanel({
                   </table>
                 )}
               </div>
-              <p className="mt-2 text-xs text-slate-500">Se muestran hasta 8 filas.</p>
+              {previewRows.length > 0 ? <p className="mt-2 text-xs text-slate-500">Se muestran hasta 8 filas.</p> : null}
             </div>
           </div>
           <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
             <Button variant="outline" className="border-[#dbe5ef] text-[#013765] hover:bg-[#013765]/[0.04]" onClick={() => setCampaignDialogOpen(false)}>Cancelar</Button>
             <Button className="bg-[#013765] text-white hover:bg-[#024a8a]" onClick={() => void createCampaign()} disabled={creatingCampaign}>
               {creatingCampaign ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileSpreadsheet className="mr-2 h-4 w-4" />}
-              Crear borrador
+              {startMode === "scheduled" ? "Programar campaña" : "Crear borrador"}
             </Button>
           </div>
         </DialogContent>
@@ -946,12 +1135,28 @@ export default function CampaignsPanel({
               <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
                 <p className="font-semibold">{campaignToLaunch.name}</p>
                 <p className="mt-1">
-                  Se encolarán {campaignToLaunch.valid_count} destinatarios usando la plantilla{" "}
-                  <span className="font-medium">{campaignToLaunch.template?.name}</span>.
+                  Plantilla: <span className="font-medium">{campaignToLaunch.template?.name}</span>
                 </p>
+                {campaignToLaunch.status === "scheduled" && campaignToLaunch.scheduled_at ? (
+                  <p className="mt-1">Programada para {new Date(campaignToLaunch.scheduled_at).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })}.</p>
+                ) : null}
               </div>
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <SmallMetric label="Se enviarán" value={campaignToLaunch.valid_count} />
+                <SmallMetric label="Inválidos excluidos" value={campaignToLaunch.invalid_count} />
+                <SmallMetric label="Duplicados excluidos" value={campaignToLaunch.duplicate_count} />
+              </div>
+              {(campaignToLaunch.import_errors?.length ?? 0) > 0 ? (
+                <div className="rounded-xl border border-amber-200 bg-white p-3">
+                  <p className="mb-2 text-sm font-semibold text-amber-800">Errores y filas excluidas</p>
+                  <div className="max-h-28 space-y-1 overflow-y-auto text-xs text-amber-700">
+                    {campaignToLaunch.import_errors?.slice(0, 5).map((error, index) => <p key={`${error.row}-${index}`}>Fila {error.row}: {error.message}</p>)}
+                    {(campaignToLaunch.import_errors?.length ?? 0) > 5 ? <p>Y {(campaignToLaunch.import_errors?.length ?? 0) - 5} observaciones más en el detalle.</p> : null}
+                  </div>
+                </div>
+              ) : <p className="text-sm text-emerald-700">El archivo no tiene errores ni destinatarios duplicados.</p>}
               <p className="text-sm text-slate-600">
-                Verificá que el CSV, la plantilla y los números correspondan a esta difusión antes de continuar.
+                Verificá que el archivo, la plantilla y los números correspondan a esta difusión antes de continuar.
               </p>
               <div className="flex justify-end gap-2">
                 <Button variant="outline" className="border-[#dbe5ef] text-[#013765] hover:bg-[#013765]/[0.04]" onClick={() => setCampaignToLaunch(null)}>Volver</Button>
@@ -964,7 +1169,7 @@ export default function CampaignsPanel({
                   }}
                 >
                   {busyCampaignId === campaignToLaunch.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-                  Confirmar e iniciar
+                  {campaignToLaunch.status === "scheduled" ? "Iniciar ahora" : "Confirmar e iniciar"}
                 </Button>
               </div>
             </div>

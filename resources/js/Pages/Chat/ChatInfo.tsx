@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react"
 import { Gallery, Item } from "react-photoswipe-gallery"
 import "photoswipe/dist/photoswipe.css"
-import { AudioLines, Code, Contact, Database, Zap, User, Image as ImageIcon, FileText, Video, Bot, Clock3, MessageSquare, PowerOff, Power, Loader2, RotateCcw, ChevronDown, ChevronRight, ExternalLink, MapPin, X, Users, History, ArchiveRestore, CheckCircle2 } from "lucide-react"
+import { AudioLines, Code, Contact, Database, Zap, User, Image as ImageIcon, FileText, Video, Bot, Clock3, MessageSquare, PowerOff, Power, Loader2, RotateCcw, ChevronDown, ChevronRight, ExternalLink, MapPin, X, Users, History, CheckCircle2 } from "lucide-react"
 import { Avatar } from "shadcn/components/ui/avatar"
 import { Badge } from "shadcn/components/ui/badge"
 import { Button } from "shadcn/components/ui/button"
@@ -1132,14 +1132,13 @@ export default function ChatInfo({
     }
   }
 
-  const changeLifecycle = (action: "archive" | "reopen") => {
+  const changeLifecycle = () => {
     if (!chat?.id) return
-    const isArchive = action === "archive"
     setAdminModalError(null)
     setPendingAdminAction({
-      title: isArchive ? "Finalizar atención" : "Reabrir conversación",
-      description: isArchive ? "Se liberará al operador, se archivará el chat y se reactivará el bot." : "El chat se reabrirá con el bot activo y sin operador asignado.",
-      url: `${API_BASE}/api/chats/${chat.id}/${action}`,
+      title: "Finalizar atención",
+      description: "Se liberará al operador, se archivará el chat y se reactivará el bot.",
+      url: `${API_BASE}/api/chats/${chat.id}/archive`,
       body: {},
       onSuccess: (result) => {
         if (!result?.chat) return
@@ -1150,7 +1149,7 @@ export default function ChatInfo({
           bot_flow_id: result.chat.bot_flow_id, bot_flow_name: result.chat.bot_flow_name, bot_node_id: result.chat.bot_node_id, bot_node_name: result.chat.bot_node_name,
           bot_step: result.chat.bot_step, bot_state: result.chat.bot_state,
         })
-        setAdminMessage(isArchive ? "Chat archivado y bot reactivado." : "Chat reabierto con el bot activo.")
+        setAdminMessage("Chat archivado y bot reactivado.")
       },
     })
     setAdminActionReason("")
@@ -1467,7 +1466,7 @@ export default function ChatInfo({
           )}
 
           {/* Acciones */}
-          {(canUseBotControls || canFinishAttention || canTakeChat || (canReassign && chat.status === "open") || canAdminister) && (
+          {(canUseBotControls || canFinishAttention || canTakeChat || (canReassign && chat.status === "open") || (canAdminister && chat.status === "open")) && (
             <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3">
               <h4 className="mb-3 flex items-center gap-2 font-medium text-slate-800">
                 <Zap className="h-4 w-4 text-[#013765]" />
@@ -1522,14 +1521,10 @@ export default function ChatInfo({
                   ) : null}
                   {canAdminister && chat.status === "open" ? (
                     <>
-                      <Button type="button" size="sm" variant="outline" className="w-full border-[#013765] bg-[#013765] text-white hover:bg-[#024a8a] hover:text-white" disabled={adminBusy} onClick={() => changeLifecycle("archive")}>
+                      <Button type="button" size="sm" variant="outline" className="w-full border-[#013765] bg-[#013765] text-white hover:bg-[#024a8a] hover:text-white" disabled={adminBusy} onClick={changeLifecycle}>
                         <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" /> Finalizar atención
                       </Button>
                     </>
-                  ) : canAdminister ? (
-                    <Button type="button" size="sm" variant="outline" className="w-full border-[#013765] bg-[#013765] text-white hover:bg-[#024a8a] hover:text-white" disabled={adminBusy} onClick={() => changeLifecycle("reopen")}>
-                      <ArchiveRestore className="mr-1.5 h-3.5 w-3.5" /> Reabrir con bot
-                    </Button>
                   ) : null}
                   {adminMessage ? <p className="text-[11px] text-slate-600">{adminMessage}</p> : null}
                 </div>

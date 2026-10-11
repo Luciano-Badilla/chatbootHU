@@ -147,7 +147,19 @@ class WebchatController extends Controller
                 'webchat_last_seen_at' => now(),
                 'last_user_message_at' => now(),
             ]);
-            app(WhatsAppController::class)->startWebchatConversation($chat, $flow);
+            // No esperes a que termine todo el flujo inicial para responderle
+            // al navegador: puede incluir consultas a Alephoo y demoras de nodos.
+            app()->terminating(function () use ($chat, $flow) {
+                try {
+                    app(WhatsAppController::class)->startWebchatConversation($chat->fresh(), $flow);
+                } catch (\Throwable $e) {
+                    Log::error('No se pudo iniciar el flujo del webchat reiniciado.', [
+                        'chat_id' => $chat->id,
+                        'flow_id' => $flow->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            });
         }
 
         $chat->refresh();

@@ -24,12 +24,14 @@ class Campaign extends Model
         'import_errors',
         'created_by',
         'started_at',
+        'scheduled_at',
         'finished_at',
     ];
 
     protected $casts = [
         'import_errors' => 'array',
         'started_at' => 'datetime',
+        'scheduled_at' => 'datetime',
         'finished_at' => 'datetime',
     ];
 

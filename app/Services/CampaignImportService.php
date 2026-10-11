@@ -6,6 +6,8 @@ use App\Models\Campaign;
 use App\Models\User;
 use App\Models\WhatsAppTemplate;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Carbon;
+use Illuminate\Validation\ValidationException;
 
 class CampaignImportService
 {
@@ -14,7 +16,8 @@ class CampaignImportService
         WhatsAppTemplate $template,
         string $sourceFilename,
         array $rows,
-        ?User $creator = null
+        ?User $creator = null,
+        ?Carbon $scheduledAt = null,
     ): Campaign {
         $variableKeys = $template->variable_keys ?? [];
         $seenPhones = [];
@@ -78,6 +81,12 @@ class CampaignImportService
             ];
         }
 
+        if ($scheduledAt && $recipients === []) {
+            throw ValidationException::withMessages([
+                'rows' => 'No se puede programar una campaña sin destinatarios válidos.',
+            ]);
+        }
+
         return DB::transaction(function () use (
             $name,
             $template,
@@ -86,12 +95,13 @@ class CampaignImportService
             $recipients,
             $errors,
             $duplicateCount,
-            $creator
+            $creator,
+            $scheduledAt,
         ) {
             $campaign = Campaign::create([
                 'name' => trim($name),
                 'whatsapp_template_id' => $template->id,
-                'status' => 'draft',
+                'status' => $scheduledAt ? 'scheduled' : 'draft',
                 'source_filename' => $sourceFilename,
                 'total_count' => count($rows),
                 'valid_count' => count($recipients),
@@ -99,6 +109,7 @@ class CampaignImportService
                 'duplicate_count' => $duplicateCount,
                 'import_errors' => array_slice($errors, 0, 200),
                 'created_by' => $creator?->id,
+                'scheduled_at' => $scheduledAt,
             ]);
 
             if ($recipients !== []) {

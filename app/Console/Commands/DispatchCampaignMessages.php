@@ -16,6 +16,19 @@ class DispatchCampaignMessages extends Command
 
     public function handle(): int
     {
+        Campaign::query()
+            ->where('status', 'scheduled')
+            ->whereNotNull('scheduled_at')
+            ->where('scheduled_at', '<=', now())
+            ->whereHas('template', fn ($query) => $query->where('status', 'APPROVED'))
+            ->whereHas('recipients', fn ($query) => $query->where('status', 'pending'))
+            ->update([
+                'status' => 'running',
+                'started_at' => now(),
+                'scheduled_at' => null,
+                'updated_at' => now(),
+            ]);
+
         $limit = max(1, min(1000, (int) $this->option('limit')));
         $remaining = $limit;
         $dispatched = 0;

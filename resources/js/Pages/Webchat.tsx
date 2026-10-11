@@ -366,10 +366,24 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   }, [])
 
   const api = async (path: string, data: Record<string, unknown>) => {
-    const response = await fetch(`${import.meta.env.VITE_APP_URL}/api/webchat/${path}`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(data) })
-    const json = await response.json().catch(() => ({}))
-    if (!response.ok) throw new Error(json.message || "No se pudo completar la operación.")
-    return json
+    const controller = path === "restart" ? new AbortController() : null
+    const timeout = controller ? window.setTimeout(() => controller.abort(), 5000) : null
+    try {
+      const response = await fetch(`${import.meta.env.VITE_APP_URL}/api/webchat/${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(data),
+        signal: controller?.signal,
+      })
+      const json = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(json.message || "No se pudo completar la operación.")
+      return json
+    } catch (exception) {
+      if (controller?.signal.aborted) throw new Error("La solicitud tardó demasiado. Probá continuar nuevamente.")
+      throw exception
+    } finally {
+      if (timeout !== null) window.clearTimeout(timeout)
+    }
   }
 
   const acknowledgeIncomingMessages = (incoming: Message[], resumeToken = token) => {

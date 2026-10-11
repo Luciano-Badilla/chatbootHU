@@ -7,6 +7,8 @@ use App\Models\WhatsAppTemplate;
 use App\Services\AuditService;
 use App\Services\CampaignImportService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 
@@ -52,6 +54,8 @@ class CampaignController extends Controller
             'name' => ['required', 'string', 'max:160'],
             'whatsapp_template_id' => ['required', 'integer', 'exists:whatsapp_templates,id'],
             'source_filename' => ['required', 'string', 'max:255'],
+            'start_mode' => ['required', 'in:now,scheduled'],
+            'scheduled_at' => ['required_if:start_mode,scheduled', 'nullable', 'date', 'after:now'],
             'rows' => ['required', 'array', 'min:1', 'max:5000'],
             'rows.*.row_number' => ['nullable', 'integer', 'min:2'],
             'rows.*.phone' => ['nullable', 'string', 'max:80'],
@@ -78,6 +82,7 @@ class CampaignController extends Controller
             $data['source_filename'],
             $data['rows'],
             $request->user(),
+            ($data['start_mode'] ?? 'now') === 'scheduled' ? Carbon::parse($data['scheduled_at']) : null,
         );
 
         $this->auditService->record(
@@ -103,7 +108,7 @@ class CampaignController extends Controller
 
     public function launch(Request $request, Campaign $campaign)
     {
-        if (! in_array($campaign->status, ['draft', 'paused'], true)) {
+        if (! in_array($campaign->status, ['draft', 'paused', 'scheduled'], true)) {
             throw ValidationException::withMessages([
                 'campaign' => 'La campaña no se puede iniciar desde su estado actual.',
             ]);
@@ -124,6 +129,7 @@ class CampaignController extends Controller
 
         $campaign->update([
             'status' => 'running',
+            'scheduled_at' => null,
             'started_at' => $campaign->started_at ?? now(),
             'finished_at' => null,
         ]);
@@ -164,6 +170,70 @@ class CampaignController extends Controller
 
         return response()->json([
             'ok' => true,
+            'campaign' => $this->serializeCampaign($campaign->fresh(['template', 'creator'])),
+        ]);
+    }
+
+    public function retryFailed(Request $request, Campaign $campaign)
+    {
+        if ($campaign->status !== 'completed') {
+            throw ValidationException::withMessages([
+                'campaign' => 'Solo se pueden reintentar fallidos cuando la campaña terminó.',
+            ]);
+        }
+
+        $retried = DB::transaction(function () use ($campaign) {
+            $lockedCampaign = Campaign::query()->lockForUpdate()->findOrFail($campaign->id);
+            $lockedCampaign->load('template');
+
+            if (! $lockedCampaign->template || strtoupper($lockedCampaign->template->status) !== 'APPROVED') {
+                throw ValidationException::withMessages([
+                    'campaign' => 'La plantilla dejó de estar aprobada y no se pueden reintentar los envíos.',
+                ]);
+            }
+
+            $retried = $lockedCampaign->recipients()
+                ->where('status', 'failed')
+                ->update([
+                    'status' => 'pending',
+                    'error_code' => null,
+                    'error_message' => null,
+                    'failed_at' => null,
+                    'queued_at' => null,
+                    'updated_at' => now(),
+                ]);
+
+            if ($retried > 0) {
+                $lockedCampaign->update([
+                    'status' => 'running',
+                    'finished_at' => null,
+                    'scheduled_at' => null,
+                ]);
+            }
+
+            return $retried;
+        });
+
+        if ($retried === 0) {
+            throw ValidationException::withMessages([
+                'campaign' => 'La campaña no tiene destinatarios fallidos para reintentar.',
+            ]);
+        }
+
+        app(\App\Services\CampaignMetricsService::class)->refresh($campaign->id);
+
+        $this->auditService->record(
+            'campaigns',
+            'retried_failed',
+            "Reinicio {$retried} destinatarios fallidos de {$campaign->name}",
+            $request->user(),
+            $campaign,
+            ['retried_count' => $retried],
+        );
+
+        return response()->json([
+            'ok' => true,
+            'retried_count' => $retried,
             'campaign' => $this->serializeCampaign($campaign->fresh(['template', 'creator'])),
         ]);
     }
@@ -226,6 +296,7 @@ class CampaignController extends Controller
             ] : null,
             'created_by' => $campaign->creator?->name,
             'started_at' => $campaign->started_at?->toIso8601String(),
+            'scheduled_at' => $campaign->scheduled_at?->toIso8601String(),
             'finished_at' => $campaign->finished_at?->toIso8601String(),
             'created_at' => $campaign->created_at?->toIso8601String(),
         ];
