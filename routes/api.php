@@ -12,6 +12,7 @@ use App\Http\Controllers\QuickReplyController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\WhatsAppController;
 use App\Http\Controllers\WhatsAppTemplateController;
+use App\Http\Controllers\WebPushSubscriptionController;
 use App\Http\Controllers\WebchatController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -41,6 +42,10 @@ Route::post('/webchat/send-contact', [WebchatController::class, 'sendContact']);
 Route::post('/webchat/send-location', [WebchatController::class, 'sendLocation']);
 Route::post('/webchat/delivery', [WebchatController::class, 'markDelivered']);
 Route::post('/webchat/read', [WebchatController::class, 'markRead']);
+Route::post('/webchat/push-subscription', [WebPushSubscriptionController::class, 'subscribeWebchat'])->middleware('throttle:20,1');
+Route::delete('/webchat/push-subscription', [WebPushSubscriptionController::class, 'unsubscribeWebchat'])->middleware('throttle:20,1');
+Route::post('/webchat/push-subscription/status', [WebPushSubscriptionController::class, 'webchatStatus'])->middleware('throttle:30,1');
+Route::get('/push/vapid-public-key', [WebPushSubscriptionController::class, 'publicKey'])->middleware('throttle:30,1');
 Route::get('/webchat/location/search', [LocationController::class, 'webchatSearch']);
 
 $sessionAuthenticated = [
@@ -53,6 +58,9 @@ $sessionAuthenticated = [
 ];
 
 Route::middleware($sessionAuthenticated)->group(function () {
+    Route::post('/push/subscriptions', [WebPushSubscriptionController::class, 'subscribeOperator'])->middleware('throttle:20,1');
+    Route::delete('/push/subscriptions', [WebPushSubscriptionController::class, 'unsubscribeOperator'])->middleware('throttle:20,1');
+    Route::post('/push/subscriptions/status', [WebPushSubscriptionController::class, 'operatorStatus'])->middleware('throttle:30,1');
     Route::post('/message/markAsRead/{chatId}', [ChatController::class, 'markAsReadMessages']);
     Route::get('/chat/messages/{chatId}', [ChatController::class, 'getMessages']);
     Route::get('/chats/snapshot', [ChatController::class, 'snapshot']);

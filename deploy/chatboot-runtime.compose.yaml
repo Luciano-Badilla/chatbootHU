@@ -1,0 +1,34 @@
+services:
+  scheduler:
+    image: laravelhu2
+    restart: always
+    working_dir: /var/www/html
+    command: ["php", "artisan", "schedule:work"]
+    environment:
+      - TZ=America/Argentina/Buenos_Aires
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /datos/chatboot/scripts/php.ini:/usr/local/etc/php/php.ini
+      - /datos/chatboot/html:/var/www/html
+    networks:
+      - dockge_default
+
+  worker:
+    image: laravelhu2
+    restart: always
+    working_dir: /var/www/html
+    command: ["php", "artisan", "queue:work", "--queue=campaigns,default", "--sleep=3", "--tries=3", "--timeout=90", "--max-time=3600"]
+    environment:
+      - TZ=America/Argentina/Buenos_Aires
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /datos/chatboot/scripts/php.ini:/usr/local/etc/php/php.ini
+      - /datos/chatboot/html:/var/www/html
+    networks:
+      - dockge_default
+
+networks:
+  dockge_default:
+    external: true

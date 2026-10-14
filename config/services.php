@@ -25,6 +25,12 @@ return [
         'token' => env('POSTMARK_TOKEN'),
     ],
 
+    'webpush' => [
+        'public_key' => env('WEBPUSH_VAPID_PUBLIC_KEY'),
+        'private_key' => env('WEBPUSH_VAPID_PRIVATE_KEY'),
+        'subject' => env('WEBPUSH_VAPID_SUBJECT', 'mailto:admin@example.com'),
+    ],
+
     'ses' => [
         'key' => env('AWS_ACCESS_KEY_ID'),
         'secret' => env('AWS_SECRET_ACCESS_KEY'),

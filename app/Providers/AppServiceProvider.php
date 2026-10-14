@@ -2,6 +2,8 @@
 
 namespace App\Providers;
 
+use App\Jobs\SendWebPushNotification;
+use App\Models\Message;
 use App\Models\SystemSetting;
 use Illuminate\Support\Facades\App;
 use Illuminate\Support\Facades\Config;
@@ -24,6 +26,17 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        Message::created(function (Message $message): void {
+            $pushConfigured = trim((string) config('services.webpush.public_key')) !== ''
+                && trim((string) config('services.webpush.private_key')) !== '';
+            $isWebchatReply = $message->sender === 'user'
+                && $message->chat()->where('channel', 'webchat')->exists();
+
+            if ($pushConfigured && ($message->sender === 'contact' || $isWebchatReply)) {
+                SendWebPushNotification::dispatch((int) $message->id)->afterCommit();
+            }
+        });
+
         if (app()->environment('local')) {
             URL::forceRootUrl(config('app.url'));
         }

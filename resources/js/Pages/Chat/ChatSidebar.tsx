@@ -10,6 +10,7 @@ import { cn } from "shadcn/lib/utils"
 import type { Chat } from "./ChatPanel"
 import { formatDistanceToNow } from "date-fns"
 import { es } from "date-fns/locale"
+import WebPushButton from "../../Components/WebPushButton"
 
 interface ChatSidebarProps {
   chats: Chat[]
@@ -367,6 +368,7 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canVi
       <div className="p-4 border-b border-gray-300">
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-xl font-semibold text-foreground">Mensajes</h1>
+          <WebPushButton />
         </div>
 
         <div className="relative">

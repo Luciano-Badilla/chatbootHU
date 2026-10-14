@@ -96,6 +96,33 @@ En Windows Server, usar el Programador de tareas ejecutando cada minuto desde la
 php artisan schedule:run
 ```
 
+### Produccion con Docker Compose
+
+El overlay `deploy/chatboot-runtime.compose.yaml` define dos servicios persistentes para el stack `chatboot`: `scheduler` ejecuta `php artisan schedule:work` y `worker` procesa las colas `campaigns` y `default`. Ambos usan la misma imagen, el volumen del codigo y la zona horaria de Buenos Aires.
+
+Para iniciarlos o recrearlos en el host Docker:
+
+```bash
+docker compose -p chatboot \
+  -f /opt/stacks/chatboot/compose.yaml \
+  -f /datos/chatboot/html/deploy/chatboot-runtime.compose.yaml \
+  up -d scheduler worker
+```
+
+Verificar su estado y logs:
+
+```bash
+docker compose -p chatboot \
+  -f /opt/stacks/chatboot/compose.yaml \
+  -f /datos/chatboot/html/deploy/chatboot-runtime.compose.yaml \
+  ps
+
+docker compose -p chatboot \
+  -f /opt/stacks/chatboot/compose.yaml \
+  -f /datos/chatboot/html/deploy/chatboot-runtime.compose.yaml \
+  logs --tail=100 scheduler worker
+```
+
 ## Instalacion en desarrollo
 
 ### Linux/macOS
