@@ -3002,7 +3002,7 @@ class WhatsAppController extends Controller
                                 'persona_nombres' => $attributes['nombres'] ?? null,
                                 'persona_apellidos' => $attributes['apellidos'] ?? null,
                                 'persona_documento' => $attributes['documento'] ?? null,
-                                'persona_fecha_nacimiento' => $attributes['fechaNacimiento'] ?? null,
+                                'persona_fecha_nacimiento' => $this->formatAlephooDateForDisplay($attributes['fechaNacimiento'] ?? null),
                                 'persona_email' => $attributes['email'] ?? null,
                                 'persona_contacto_telefono' => $attributes['celular'] ?? null,
                             ]));
@@ -3199,7 +3199,7 @@ class WhatsAppController extends Controller
                         'Quiero cancelar el turno de %s con %s del %s a las %s',
                         (string) ($appointment['especialidad'] ?? 'turnos'),
                         (string) ($appointment['profesional'] ?? ''),
-                        (string) ($appointment['fecha'] ?? ''),
+                        (string) $this->formatAlephooDateForDisplay($appointment['fecha'] ?? ''),
                         (string) ($appointment['hora'] ?? '')
                     ));
                     $this->sendAppointmentCancelChoice(
@@ -3255,7 +3255,7 @@ class WhatsAppController extends Controller
     {
         return [
             'turno_id' => $appointment['id'] ?? null,
-            'turno_fecha' => $appointment['fecha'] ?? null,
+            'turno_fecha' => $this->formatAlephooDateForDisplay($appointment['fecha'] ?? null),
             'turno_hora' => $appointment['hora'] ?? null,
             'turno_estado_id' => $appointment['estado_id'] ?? null,
             'turno_estado' => $appointment['estado'] ?? null,
@@ -3269,6 +3269,20 @@ class WhatsAppController extends Controller
             'turno_observacion' => $appointment['observacion'] ?? null,
             'turno_arribo' => $appointment['arribo'] ?? null,
         ];
+    }
+
+    private function formatAlephooDateForDisplay(mixed $date): mixed
+    {
+        if (! is_string($date) || trim($date) === '') {
+            return $date;
+        }
+
+        $value = trim($date);
+        $parsedDate = \DateTimeImmutable::createFromFormat('!Y-m-d', substr($value, 0, 10));
+
+        return $parsedDate && $parsedDate->format('Y-m-d') === substr($value, 0, 10)
+            ? $parsedDate->format('d/m/Y')
+            : $date;
     }
 
     private function sendAppointmentCancelChoice(
