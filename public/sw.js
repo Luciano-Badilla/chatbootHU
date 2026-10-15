@@ -1,3 +1,11 @@
+self.addEventListener('install', (event) => {
+  event.waitUntil(self.skipWaiting());
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
 self.addEventListener('push', (event) => {
   let data = {};
   try {
@@ -15,18 +23,17 @@ self.addEventListener('push', (event) => {
     renotify: true,
     data: { url: data.url || '/' },
   };
-  const targetPath = new URL(options.data.url, self.location.origin).pathname;
-
   event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
-    const targetIsVisible = clients.some((client) => {
+    const appIsVisible = clients.some((client) => {
       try {
-        return client.visibilityState === 'visible' && new URL(client.url).pathname === targetPath;
+        return (client.visibilityState === 'visible' || client.focused)
+          && new URL(client.url).origin === self.location.origin;
       } catch {
         return false;
       }
     });
 
-    return targetIsVisible ? undefined : self.registration.showNotification(title, options);
+    return appIsVisible ? undefined : self.registration.showNotification(title, options);
   }));
 });
 

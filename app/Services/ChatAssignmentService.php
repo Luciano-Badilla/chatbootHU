@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Jobs\SendChatEventWebPushNotification;
 use App\Models\Chat;
 use App\Models\SystemSetting;
 use App\Models\User;
@@ -96,6 +97,19 @@ class ChatAssignmentService
 
         if ($result['assignment']) {
             $assignment = $result['assignment'];
+            SendChatEventWebPushNotification::dispatch(
+                (int) $result['chat']->id,
+                'operator_assigned',
+                (int) $assignment['operator_id'],
+            )->afterCommit();
+            if ($result['chat']->channel === 'webchat') {
+                SendChatEventWebPushNotification::dispatch(
+                    (int) $result['chat']->id,
+                    'webchat_operator_joined',
+                    (int) $assignment['operator_id'],
+                )->afterCommit();
+            }
+
             $this->auditService->recordChatAction(
                 'operator_auto_assigned',
                 'Asignó automáticamente a '.$assignment['operator_name'].' por menor carga elegible',

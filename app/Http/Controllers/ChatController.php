@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use Carbon\Carbon;
+use App\Jobs\SendChatEventWebPushNotification;
 use App\Models\Chat;
 use App\Models\Message;
 use App\Models\SystemSetting;
@@ -212,6 +213,13 @@ class ChatController extends Controller
 
         $chat->save();
         $chat->load('operator');
+
+        if ($data['active'] && $beforeOperatorId !== (int) $operatorId) {
+            SendChatEventWebPushNotification::dispatch((int) $chat->id, 'operator_assigned', (int) $operatorId)->afterCommit();
+            if ($chat->channel === 'webchat') {
+                SendChatEventWebPushNotification::dispatch((int) $chat->id, 'webchat_operator_joined', (int) $operatorId)->afterCommit();
+            }
+        }
 
         $this->chatAssignmentService->assignAllPending();
 

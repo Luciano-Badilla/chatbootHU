@@ -4739,17 +4739,20 @@ class WhatsAppController extends Controller
         // Mantiene las variables ya capturadas y limpia solo el estado operativo del flujo.
         $this->botInactivityService->resetChatToStartFromFlow($chat, $flow, 'admin_reset');
 
-        try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_reset_bot_'.uniqid());
-            $mqtt->connect();
-            $mqtt->publish('status_bot/chat/'.$chat->id, json_encode([
-                'chat_id' => $chat->id,
-                'status' => 'enabled',
-                'reset' => true,
-            ]), 0);
-            $mqtt->disconnect();
-        } catch (\Throwable $e) {
-            Log::error('MQTT Error (resetBotFlow): '.$e->getMessage());
+        $mqttHost = env('MQTT_HOST') ?: env('VITE_MOSQUITTO_HOST');
+        if ($mqttHost) {
+            try {
+                $mqtt = new MqttClient((string) $mqttHost, 1883, 'laravel_reset_bot_'.uniqid());
+                $mqtt->connect($this->mqttConnectionSettings());
+                $mqtt->publish('status_bot/chat/'.$chat->id, json_encode([
+                    'chat_id' => $chat->id,
+                    'status' => 'enabled',
+                    'reset' => true,
+                ]), 0);
+                $mqtt->disconnect();
+            } catch (\Throwable $e) {
+                Log::warning('MQTT Error (resetBotFlow): '.$e->getMessage(), ['chat_id' => $chat->id]);
+            }
         }
 
         $this->auditService->recordChatAction(

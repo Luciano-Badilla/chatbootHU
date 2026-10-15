@@ -43,8 +43,9 @@ export default function WebPushButton() {
       onClick={() => void toggle()}
       disabled={busy}
       aria-label={enabled ? "Desactivar notificaciones" : "Activar notificaciones"}
-      title={enabled ? "Notificaciones activadas. Toca para desactivar." : "Activar notificaciones push"}
-      className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-[#013765]/45 hover:bg-[#e8f0f6] hover:text-[#013765] disabled:opacity-50"
+      aria-pressed={enabled}
+      title={enabled ? "Notificaciones activadas. Tocá para desactivar." : "Activar notificaciones push"}
+      className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20 disabled:opacity-50"
     >
       {enabled ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
     </button>

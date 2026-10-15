@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\Chat;
 use App\Models\Message;
+use App\Models\SystemSetting;
 use App\Models\User;
 use App\Models\WebPushSubscription;
 use Illuminate\Bus\Queueable;
@@ -39,18 +40,36 @@ class SendWebPushNotification implements ShouldQueue
         }
 
         $chat = $message->chat;
+        $isWebchatVisitor = $chat->channel === 'webchat' && $message->sender === 'user';
         $subscriptions = $this->recipientSubscriptions($message, $chat);
+        if ($isWebchatVisitor) {
+            $activeSince = now()->subSeconds(15);
+            if ($chat->webchat_last_seen_at?->greaterThanOrEqualTo($activeSince)) {
+                return;
+            }
+            $subscriptions = $subscriptions->reject(
+                fn (WebPushSubscription $subscription) => $subscription->updated_at?->greaterThanOrEqualTo($activeSince) ?? false,
+            );
+        }
         if ($subscriptions->isEmpty()) {
             return;
         }
 
-        $isWebchatVisitor = $chat->channel === 'webchat' && $message->sender === 'user';
+        $configuredLogo = trim((string) SystemSetting::query()
+            ->where('key', 'webchat.logo_url')
+            ->value('value'));
+        $notificationIcon = $configuredLogo !== ''
+            ? (preg_match('#^https?://#i', $configuredLogo)
+                ? $configuredLogo
+                : url('/'.ltrim($configuredLogo, '/')))
+            : url('/images/hu_icon_new.png');
+
         $payload = json_encode([
             'title' => $isWebchatVisitor ? 'Nueva respuesta' : 'Nuevo mensaje',
             'body' => $isWebchatVisitor
                 ? 'Tenés una respuesta nueva. Abrí el chat para verla.'
                 : 'Llegó un mensaje nuevo. Abrí la conversación para responder.',
-            'icon' => '/images/hu_icon_new.png',
+            'icon' => $notificationIcon,
             'url' => $isWebchatVisitor
                 ? '/webchat'
                 : '/chat-panel?chat='.(int) $chat->id,
@@ -110,21 +129,26 @@ class SendWebPushNotification implements ShouldQueue
             return collect();
         }
 
-        if ($chat->operator_id) {
-            $recipientIds = User::query()
-                ->whereKey($chat->operator_id)
-                ->where('is_active', true)
-                ->pluck('id');
-        } else {
-            $recipientIds = User::query()->where('is_active', true)->get()
-                ->filter(fn (User $user) => $user->hasPermission('can_assign_chats'))
-                ->pluck('id');
+        if (
+            ! $chat->operator_id
+            || $chat->status !== 'open'
+            || $chat->attention_status !== 'assigned'
+        ) {
+            return collect();
         }
+
+        $recipientIds = User::query()
+            ->whereKey($chat->operator_id)
+            ->where('is_active', true)
+            ->pluck('id');
 
         if ($recipientIds->isEmpty()) {
             return collect();
         }
 
-        return WebPushSubscription::query()->whereIn('user_id', $recipientIds)->get();
+        return WebPushSubscription::query()
+            ->whereIn('user_id', $recipientIds)
+            ->whereNull('chat_id')
+            ->get();
     }
 }

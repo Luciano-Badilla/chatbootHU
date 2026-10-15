@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\SendChatEventWebPushNotification;
 use App\Models\Chat;
 use App\Models\Message;
 use App\Models\SystemSetting;
@@ -117,7 +118,7 @@ class OperatorControlController extends Controller
                     'email' => $operator->email,
                     'availability' => $isDisconnected || $operator->operator_availability === 'unavailable'
                         ? 'disconnected'
-                        : ($operator->operator_availability ?: 'available'),
+                        : ($operator->operator_availability ?: 'paused'),
                     'assigned_count' => $assignedChats->count(),
                     'unread_count' => $unreadCount,
                     'waiting_count' => $waitingChats->count(),
@@ -336,6 +337,12 @@ class OperatorControlController extends Controller
             'attention_status' => 'assigned',
             'bot_enabled' => false,
         ]);
+        if ((int) ($before['operator_id'] ?? 0) !== (int) $operator->id) {
+            SendChatEventWebPushNotification::dispatch((int) $chat->id, 'operator_assigned', (int) $operator->id)->afterCommit();
+            if ($chat->channel === 'webchat') {
+                SendChatEventWebPushNotification::dispatch((int) $chat->id, 'webchat_operator_joined', (int) $operator->id)->afterCommit();
+            }
+        }
         $this->auditService->recordChatAction('operator_reassigned', 'Reasigno el chat a '.$operator->name, $chat, $request->user(), [
             'before' => $before,
             'after' => ['operator_id' => $operator->id, 'operator_name' => $operator->name, 'attention_status' => 'assigned'],

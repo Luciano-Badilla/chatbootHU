@@ -6,7 +6,6 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\LoginRequest;
 use App\Providers\RouteServiceProvider;
 use App\Services\AuditService;
-use App\Services\ChatAssignmentService;
 use App\Services\OperatorAvailabilityService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -21,7 +20,6 @@ class AuthenticatedSessionController extends Controller
 {
     public function __construct(
         private readonly AuditService $auditService,
-        private readonly ChatAssignmentService $chatAssignmentService,
         private readonly OperatorAvailabilityService $operatorAvailabilityService,
     ) {}
 
@@ -48,9 +46,8 @@ class AuthenticatedSessionController extends Controller
         $user = $request->user();
         $user->loadMissing('role');
         if ($user->canHandleChats()) {
-            $user->update(['operator_availability' => 'available', 'current_chat_id' => null, 'last_operator_activity_at' => now()]);
-            $this->chatAssignmentService->assignAllPending();
-            $this->publishOperatorControlUpdate(['type' => 'availability', 'operator_id' => $user->id, 'availability' => 'available']);
+            $user->update(['operator_availability' => 'paused', 'current_chat_id' => null, 'last_operator_activity_at' => now()]);
+            $this->publishOperatorControlUpdate(['type' => 'availability', 'operator_id' => $user->id, 'availability' => 'paused']);
         }
         $this->auditService->record(
             'security',

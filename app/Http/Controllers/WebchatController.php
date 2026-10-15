@@ -7,6 +7,7 @@ use App\Models\Chat;
 use App\Models\Contact;
 use App\Models\Message;
 use App\Models\SystemSetting;
+use App\Models\WebPushSubscription;
 use App\Services\WebchatAvailabilityService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -37,6 +38,34 @@ class WebchatController extends Controller
         $settings['operators_available'] = $this->availabilityService->areOperatorsAvailable($settings);
 
         return response()->json(['webchat' => $settings]);
+    }
+
+    public function presence(Request $request)
+    {
+        $data = $request->validate([
+            'resume_token' => ['required', 'string', 'max:80'],
+            'visible' => ['required', 'boolean'],
+            'endpoint' => ['nullable', 'string', 'max:4096'],
+        ]);
+        $chat = $this->chatForToken($data['resume_token']);
+
+        if (! $chat) {
+            return response()->json(['message' => 'La conversación ya no está disponible.'], 404);
+        }
+
+        if ($data['visible']) {
+            $chat->update(['webchat_last_seen_at' => now()]);
+
+            if (! empty($data['endpoint'])) {
+                WebPushSubscription::query()
+                    ->where('chat_id', $chat->id)
+                    ->whereNull('user_id')
+                    ->where('endpoint_hash', hash('sha256', $data['endpoint']))
+                    ->update(['updated_at' => now()]);
+            }
+        }
+
+        return response()->json(['ok' => true]);
     }
 
     public function session(Request $request)

@@ -3,6 +3,7 @@ import { CircleCheck, PauseCircle } from "lucide-react"
 import { useState } from "react"
 
 import { AppShell, AppShellBackButton } from "../Components/AppShell"
+import WebPushButton from "../Components/WebPushButton"
 import { ChatPanel } from "./Chat/ChatPanel"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "shadcn/components/ui/select"
 
@@ -16,7 +17,7 @@ const statusOptions: Record<Availability, { label: string; icon: typeof CircleCh
 function OperatorStatusSelect() {
   const { props } = usePage<{ auth?: { user?: { role_name?: string; operator_availability?: Availability } } }>()
   const user = props.auth?.user
-  const [availability, setAvailability] = useState<Availability>(user?.operator_availability ?? "available")
+  const [availability, setAvailability] = useState<Availability>(user?.operator_availability ?? "paused")
   const [saving, setSaving] = useState(false)
   if (!["operator", "admin"].includes(user?.role_name ?? "")) return null
 
@@ -43,7 +44,7 @@ export default function MessagePanel() {
       title="Panel de Mensajes"
       subtitle="Atencion en tiempo real de conversaciones y derivaciones."
       leading={<AppShellBackButton onClick={() => (window.location.href = `${import.meta.env.VITE_APP_URL}/dashboard`)} />}
-      actions={<OperatorStatusSelect />}
+      actions={<><OperatorStatusSelect /><WebPushButton /></>}
       contentClassName="flex-1 min-h-0 p-0"
       fullHeight
     >

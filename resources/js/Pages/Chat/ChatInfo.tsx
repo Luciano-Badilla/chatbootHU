@@ -369,6 +369,7 @@ export default function ChatInfo({
   const [botEnabled, setBotEnabled] = useState<boolean>(chat?.bot_enabled ?? true)
   const [togglingBot, setTogglingBot] = useState(false)
   const [resettingBot, setResettingBot] = useState(false)
+  const [botActionMessage, setBotActionMessage] = useState<string | null>(null)
   const [adminOperators, setAdminOperators] = useState<Array<{ id: number; name: string; availability: string; assigned_count: number; capacity: number }>>([])
   const [selectedOperatorId, setSelectedOperatorId] = useState("")
   const [adminBusy, setAdminBusy] = useState(false)
@@ -1012,17 +1013,25 @@ export default function ChatInfo({
     if (!chat?.id || togglingBot || resettingBot || !canToggleBot) return
 
     setResettingBot(true)
+    setBotActionMessage(null)
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 10000)
 
     try {
       const res = await fetch(`${API_BASE}/api/chats/${chat.id}/bot/reset`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Accept: "application/json",
         },
+        signal: controller.signal,
       })
 
       const payload = await res.json().catch(() => ({}))
-      if (!res.ok) return
+      if (!res.ok) {
+        setBotActionMessage(payload.message || "No se pudo reiniciar el flujo del bot.")
+        return
+      }
 
       setBotEnabled(true)
       onChatUpdated?.({
@@ -1032,7 +1041,12 @@ export default function ChatInfo({
         bot_step: payload.chat?.bot_step ?? null,
         bot_state: payload.chat?.bot_state ?? chat.bot_state,
       })
+    } catch (error) {
+      setBotActionMessage(controller.signal.aborted
+        ? "El reinicio tardó demasiado. Verificá la conexión e intentá nuevamente."
+        : error instanceof Error ? error.message : "No se pudo reiniciar el flujo del bot.")
     } finally {
+      window.clearTimeout(timeout)
       setResettingBot(false)
     }
   }
@@ -1500,6 +1514,7 @@ export default function ChatInfo({
                   </Button>
                 </div>
               )}
+              {botActionMessage ? <p role="alert" className="mt-2 text-xs text-red-600">{botActionMessage}</p> : null}
               {canTakeChat && (
                 <Button
                   type="button"
