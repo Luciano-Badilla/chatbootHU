@@ -2162,6 +2162,33 @@ class WhatsAppController extends Controller
 
             // Ã¢Å“â€¦ marcar que estÃƒÂ¡/estuvo en handoff (para UI)
             $state = $this->getState($chat);
+            unset($state['assignment_routing']);
+            $specialtyRouting = $this->nodeSettings($node);
+            if (
+                in_array(($specialtyRouting['assignment_mode'] ?? 'least_load'), ['specialty', 'specialty_not_found'], true)
+            ) {
+                $vars = $this->getVars($chat);
+                $specialtyContext = is_array($state['specialty_search_context'] ?? null)
+                    ? $state['specialty_search_context']
+                    : [];
+                $specialtyId = trim((string) ($vars['especialidad_id'] ?? ''))
+                    ?: trim((string) ($specialtyContext['specialty_id'] ?? ''));
+                $specialtyName = trim((string) ($vars['especialidad_nombre'] ?? ''))
+                    ?: trim((string) ($specialtyContext['specialty_name'] ?? ''));
+                $specialtyQuery = trim((string) ($specialtyContext['query'] ?? ''))
+                    ?: trim((string) ($vars['especialidad_busqueda'] ?? ''));
+                $state['assignment_routing'] = [
+                    'mode' => 'specialty',
+                    'specialty_id' => $specialtyId,
+                    'specialty_name' => $specialtyName,
+                    'query' => $specialtyQuery,
+                    'fallback' => ($specialtyRouting['specialty_fallback'] ?? 'general_queue') === 'wait_for_specialist'
+                        ? 'wait_for_specialist'
+                        : 'general_queue',
+                ];
+            }
+
+            unset($state['specialty_search_context']);
             $state['handoff'] = [
                 'node_id' => $node->id,
                 'at' => now()->toIso8601String(),
@@ -3351,11 +3378,34 @@ class WhatsAppController extends Controller
     private function sendAlephooSelectionNode(Chat $chat, BotNode $node): void
     {
         $settings = $this->nodeSettings($node);
+        if ($node->type === 'specialty_search') {
+            $state = $this->getState($chat);
+            unset($state['specialty_search_context'], $state['assignment_routing']);
+            if (is_array($state['vars'] ?? null)) {
+                unset($state['vars']['especialidad_id'], $state['vars']['especialidad_nombre']);
+            }
+            $this->setState($chat, $state);
+        }
         $vars = $this->getVars($chat);
+        $specialtySearchQuery = '';
+        if ($node->type === 'specialty_search') {
+            $queryVariable = trim((string) ($settings['query_variable'] ?? 'especialidad_busqueda'));
+            $specialtySearchQuery = trim((string) ($vars[$queryVariable] ?? ''));
+            if ($specialtySearchQuery !== '') {
+                $state = $this->getState($chat);
+                $state['specialty_search_context'] = [
+                    'query' => $specialtySearchQuery,
+                    'specialty_id' => '',
+                    'specialty_name' => '',
+                ];
+                $this->setState($chat, $state);
+            }
+        }
         $baseUrl = $this->alephooApiRootUrl();
         $apiKey = $this->alephooApiKey();
         $rows = [];
         $failed = false;
+        $unfilteredSpecialtyMatches = [];
 
         try {
             if ($baseUrl === '' || $apiKey === '') {
@@ -3468,9 +3518,27 @@ class WhatsAppController extends Controller
                 if (! $response->successful()) {
                     throw new \RuntimeException("Alephoo respondio {$response->status()} al consultar especialidades.");
                 }
-                $items = $response->successful() && is_array($response->json()) ? $response->json() : [];
-                $allowedSpecialtyIds = array_map('strval', $turnosConfiguration['specialties']);
+                $allSpecialties = $response->successful() && is_array($response->json()) ? $response->json() : [];
                 $needle = mb_strtolower(Str::ascii($query));
+                $matchingSpecialties = array_values(array_filter($allSpecialties, fn ($item) => is_array($item)
+                    && str_contains(mb_strtolower(Str::ascii(trim((string) ($item['nombre'] ?? '')))), $needle)
+                ));
+                $exactSpecialtyMatches = array_values(array_filter($matchingSpecialties, fn ($item) =>
+                    mb_strtolower(Str::ascii(trim((string) ($item['nombre'] ?? '')))) === $needle
+                ));
+                $unfilteredSpecialtyMatches = count($exactSpecialtyMatches) === 1
+                    ? $exactSpecialtyMatches
+                    : (count($matchingSpecialties) === 1 ? $matchingSpecialties : []);
+                $candidate = $unfilteredSpecialtyMatches[0] ?? null;
+                $state = $this->getState($chat);
+                $state['specialty_search_context'] = [
+                    'query' => $specialtySearchQuery,
+                    'specialty_id' => is_array($candidate) ? (string) ($candidate['id'] ?? '') : '',
+                    'specialty_name' => is_array($candidate) ? trim((string) ($candidate['nombre'] ?? '')) : '',
+                ];
+                $this->setState($chat, $state);
+                $items = $allSpecialties;
+                $allowedSpecialtyIds = array_map('strval', $turnosConfiguration['specialties']);
                 $items = array_values(array_filter($items, fn ($item) => is_array($item)
                     && in_array((string) ($item['id'] ?? ''), $allowedSpecialtyIds, true)
                     && str_contains(mb_strtolower(Str::ascii((string) ($item['nombre'] ?? ''))), $needle)

@@ -166,12 +166,13 @@ class SettingsController extends Controller
                 ->map(fn (Role $role) => [
                     'id' => $role->id,
                     'name' => $role->displayName(),
+                    'can_handle_chats' => in_array($role->normalizedName(), ['admin', 'operator'], true),
                 ])
                 ->values(),
             'users' => User::query()
                 ->with('role')
                 ->orderBy('name')
-                ->get(['id', 'name', 'email', 'validated', 'requestsPassword', 'role_id', 'is_active', 'deactivated_at', 'created_at'])
+                ->get(['id', 'name', 'email', 'validated', 'requestsPassword', 'role_id', 'is_active', 'deactivated_at', 'created_at', 'assignment_specialties'])
                 ->map(fn (User $user) => $this->userPayload($user))
                 ->values(),
             'currentUserId' => $this->resolveCurrentUserId(request()),
@@ -814,8 +815,15 @@ class SettingsController extends Controller
             'email' => ['required', 'string', 'lowercase', 'email', 'max:255', 'unique:users,email'],
             'role_id' => ['required', 'integer', 'exists:roles,id'],
             'password' => ['required', 'confirmed', Password::defaults()],
+            'assignment_specialties' => ['nullable', 'array', 'max:100'],
+            'assignment_specialties.*.specialty_id' => ['nullable', 'string', 'max:80'],
+            'assignment_specialties.*.name' => ['required', 'string', 'max:120'],
+            'assignment_specialties.*.aliases' => ['nullable', 'array', 'max:20'],
+            'assignment_specialties.*.aliases.*' => ['string', 'max:120'],
+            'assignment_specialties.*.priority' => ['required', 'integer', 'min:1', 'max:10'],
         ]);
 
+        $role = Role::query()->findOrFail($data['role_id']);
         $user = User::create([
             'name' => trim($data['name']),
             'email' => strtolower(trim($data['email'])),
@@ -824,6 +832,9 @@ class SettingsController extends Controller
             'validated' => true,
             'requestsPassword' => true,
             'is_active' => true,
+            'assignment_specialties' => in_array($role->normalizedName(), ['admin', 'operator'], true)
+                ? $this->normalizeAssignmentSpecialties($data['assignment_specialties'] ?? [])
+                : [],
         ])->load('role');
 
         $this->auditService->record('users', 'created', "Creo el usuario {$user->name}", $request->user(), $user, [
@@ -840,6 +851,12 @@ class SettingsController extends Controller
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'string', 'lowercase', 'email', 'max:255', Rule::unique('users', 'email')->ignore($user->id)],
             'role_id' => ['required', 'integer', 'exists:roles,id'],
+            'assignment_specialties' => ['nullable', 'array', 'max:100'],
+            'assignment_specialties.*.specialty_id' => ['nullable', 'string', 'max:80'],
+            'assignment_specialties.*.name' => ['required', 'string', 'max:120'],
+            'assignment_specialties.*.aliases' => ['nullable', 'array', 'max:20'],
+            'assignment_specialties.*.aliases.*' => ['string', 'max:120'],
+            'assignment_specialties.*.priority' => ['required', 'integer', 'min:1', 'max:10'],
         ]);
 
         if ((int) $request->user()->id === (int) $user->id && (int) $data['role_id'] !== (int) $user->role_id) {
@@ -851,10 +868,27 @@ class SettingsController extends Controller
             return response()->json(['message' => 'No podes quitar el ultimo administrador activo del sistema.'], 422);
         }
 
-        $before = ['name' => $user->name, 'email' => $user->email, 'role' => $user->roleLabel()];
-        $user->update(['name' => trim($data['name']), 'email' => strtolower(trim($data['email'])), 'role_id' => $targetRole->id]);
+        $before = [
+            'name' => $user->name,
+            'email' => $user->email,
+            'role' => $user->roleLabel(),
+            'assignment_specialties' => $user->assignment_specialties ?? [],
+        ];
+        $user->update([
+            'name' => trim($data['name']),
+            'email' => strtolower(trim($data['email'])),
+            'role_id' => $targetRole->id,
+            'assignment_specialties' => in_array($targetRole->normalizedName(), ['admin', 'operator'], true)
+                ? $this->normalizeAssignmentSpecialties($data['assignment_specialties'] ?? [])
+                : [],
+        ]);
         $user->load('role');
-        $after = ['name' => $user->name, 'email' => $user->email, 'role' => $user->roleLabel()];
+        $after = [
+            'name' => $user->name,
+            'email' => $user->email,
+            'role' => $user->roleLabel(),
+            'assignment_specialties' => $user->assignment_specialties ?? [],
+        ];
 
         if ($before !== $after) {
             $this->auditService->record('users', 'updated', "Actualizo el usuario {$user->name}", $request->user(), $user, [
@@ -994,7 +1028,33 @@ class SettingsController extends Controller
             'role_id' => (int) $user->role_id, 'role_name' => $user->roleName(), 'role_label' => $user->roleLabel(),
             'is_active' => (bool) $user->is_active, 'deactivated_at' => $user->deactivated_at?->toIso8601String(),
             'created_at' => $user->created_at?->toIso8601String(),
+            'assignment_specialties' => $user->assignment_specialties ?? [],
         ];
+    }
+
+    private function normalizeAssignmentSpecialties(array $specialties): array
+    {
+        return collect($specialties)
+            ->map(function (array $specialty) {
+                $name = trim((string) ($specialty['name'] ?? ''));
+                $aliases = collect($specialty['aliases'] ?? [])
+                    ->map(fn ($alias) => trim((string) $alias))
+                    ->filter()
+                    ->unique(fn ($alias) => mb_strtolower($alias))
+                    ->values()
+                    ->all();
+
+                return [
+                    'specialty_id' => trim((string) ($specialty['specialty_id'] ?? '')),
+                    'name' => $name,
+                    'aliases' => $aliases,
+                    'priority' => max(1, min(10, (int) ($specialty['priority'] ?? 1))),
+                ];
+            })
+            ->filter(fn (array $specialty) => $specialty['name'] !== '')
+            ->unique(fn (array $specialty) => mb_strtolower($specialty['specialty_id'].'|'.$specialty['name']))
+            ->values()
+            ->all();
     }
 
     protected function configurationExportPayload(Request $request): array

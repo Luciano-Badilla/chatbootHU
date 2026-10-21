@@ -30,6 +30,7 @@ class User extends Authenticatable
         'deactivated_at',
         'deactivated_by',
         'operator_availability',
+        'assignment_specialties',
         'current_chat_id',
         'last_operator_activity_at',
     ];
@@ -57,6 +58,7 @@ class User extends Authenticatable
         'is_active' => 'boolean',
         'deactivated_at' => 'datetime',
         'last_operator_activity_at' => 'datetime',
+        'assignment_specialties' => 'array',
     ];
 
     public function role(): BelongsTo

@@ -5904,7 +5904,44 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       )
     }
 
-    // handoff no tiene settings extra
+    if (t === "handoff") {
+      const settings = ensureSettings({
+        assignment_mode: "least_load",
+        specialty_fallback: "general_queue",
+      })
+      const assignmentMode = settings.assignment_mode === "specialty_not_found" ? "specialty" : settings.assignment_mode
+      const updateHandoffSetting = (key: string, value: string) => {
+        setEditNode((current) => current ? { ...current, settings: { ...(current.settings ?? {}), [key]: value } } : current)
+      }
+
+      return <div className="space-y-4">
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-slate-700">Criterio de asignación</label>
+          <Select value={assignmentMode} onValueChange={(value) => updateHandoffSetting("assignment_mode", value)}>
+            <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="least_load">Cola general · menor carga</SelectItem>
+              <SelectItem value="specialty">Prioridad por especialidad</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-[10px] leading-4 text-muted-foreground">Al llegar a este nodo, se usa la especialidad activa en la conversación para priorizar operadores configurados. La asignación no depende de la salida o el nodo desde el que llega el flujo.</p>
+        </div>
+
+        {assignmentMode === "specialty" ? <>
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-slate-700">Si no hay coincidencia o un operador disponible para esa especialidad</label>
+            <Select value={settings.specialty_fallback ?? "general_queue"} onValueChange={(value) => updateHandoffSetting("specialty_fallback", value)}>
+              <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="general_queue">Asignar a la cola general</SelectItem>
+                <SelectItem value="wait_for_specialist">Esperar a un operador de esa especialidad</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </> : null}
+      </div>
+    }
+
     return null
   }
 

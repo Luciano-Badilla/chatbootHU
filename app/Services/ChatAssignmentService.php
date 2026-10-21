@@ -7,6 +7,7 @@ use App\Models\Chat;
 use App\Models\SystemSetting;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class ChatAssignmentService
 {
@@ -71,8 +72,46 @@ class ChatAssignmentService
                     return $user;
                 })
                 ->filter(fn (User $user) => $user->active_chat_count < $maxAssignedChats)
-                ->sortBy(fn (User $user) => [$user->active_chat_count, $user->id])
                 ->values();
+
+            $routing = is_array($chat->bot_state['assignment_routing'] ?? null)
+                ? $chat->bot_state['assignment_routing']
+                : null;
+            $rule = 'menor_carga_elegible';
+            $routingSpecialty = null;
+
+            if (in_array(($routing['mode'] ?? null), ['specialty', 'specialty_not_found'], true)) {
+                $routingSpecialty = trim((string) ($routing['specialty_name'] ?? '')) ?: trim((string) ($routing['query'] ?? ''));
+                $hasSpecialtyInput = trim((string) ($routing['specialty_id'] ?? '')) !== ''
+                    || trim((string) ($routing['specialty_name'] ?? '')) !== ''
+                    || trim((string) ($routing['query'] ?? '')) !== '';
+                $specialists = $operators
+                    ->map(function (User $user) use ($routing) {
+                        $match = $this->specialtyRoutingMatch($user, $routing);
+                        if ($match === null) {
+                            return null;
+                        }
+
+                        $user->assignment_priority = $match['priority'];
+
+                        return $user;
+                    })
+                    ->filter()
+                    ->sortBy(fn (User $user) => [$user->assignment_priority, $user->active_chat_count, $user->id])
+                    ->values();
+
+                if ($specialists->isNotEmpty()) {
+                    $operators = $specialists;
+                    $rule = 'prioridad_especialidad';
+                } elseif ($hasSpecialtyInput && ($routing['fallback'] ?? 'general_queue') === 'wait_for_specialist') {
+                    return ['chat' => $chat, 'assignment' => null];
+                } else {
+                    $operators = $operators->sortBy(fn (User $user) => [$user->active_chat_count, $user->id])->values();
+                    $rule = 'cola_general_sin_especialista_disponible';
+                }
+            } else {
+                $operators = $operators->sortBy(fn (User $user) => [$user->active_chat_count, $user->id])->values();
+            }
 
             $operator = $operators->first();
             if (! $operator) {
@@ -91,7 +130,9 @@ class ChatAssignmentService
                 'active_chats_before' => $operator->active_chat_count,
                 'capacity' => $maxAssignedChats,
                 'eligible_operators' => $operators->count(),
-                'rule' => 'menor_carga_elegible',
+                'rule' => $rule,
+                'specialty' => $routingSpecialty,
+                'priority' => $operator->assignment_priority ?? null,
             ]];
         });
 
@@ -112,7 +153,7 @@ class ChatAssignmentService
 
             $this->auditService->recordChatAction(
                 'operator_auto_assigned',
-                'Asignó automáticamente a '.$assignment['operator_name'].' por menor carga elegible',
+                'Asignó automáticamente a '.$assignment['operator_name'].($assignment['specialty'] ? ' para '.$assignment['specialty'] : ' por menor carga elegible'),
                 $result['chat'],
                 null,
                 ['after' => ['operator_id' => $assignment['operator_id'], 'operator_name' => $assignment['operator_name']], 'meta' => $assignment],
@@ -120,5 +161,45 @@ class ChatAssignmentService
         }
 
         return $result['chat'];
+    }
+
+    private function specialtyRoutingMatch(User $user, array $routing): ?array
+    {
+        $requestedId = trim((string) ($routing['specialty_id'] ?? ''));
+        $requestedNames = array_filter([
+            trim((string) ($routing['specialty_name'] ?? '')),
+            trim((string) ($routing['query'] ?? '')),
+        ]);
+        $normalizedRequestedNames = array_map(fn (string $name) => $this->normalizeSpecialtyName($name), $requestedNames);
+
+        foreach (is_array($user->assignment_specialties) ? $user->assignment_specialties : [] as $specialty) {
+            if (! is_array($specialty)) {
+                continue;
+            }
+
+            $configuredId = trim((string) ($specialty['specialty_id'] ?? ''));
+            $configuredNames = array_filter([
+                trim((string) ($specialty['name'] ?? '')),
+                ...(is_array($specialty['aliases'] ?? null) ? $specialty['aliases'] : []),
+            ]);
+            $idMatches = $requestedId !== '' && $configuredId !== '' && $requestedId === $configuredId;
+            $nameMatches = array_intersect(
+                $normalizedRequestedNames,
+                array_map(fn ($name) => $this->normalizeSpecialtyName((string) $name), $configuredNames),
+            ) !== [];
+
+            if ($idMatches || $nameMatches) {
+                return ['priority' => max(1, (int) ($specialty['priority'] ?? 1))];
+            }
+        }
+
+        return null;
+    }
+
+    private function normalizeSpecialtyName(string $name): string
+    {
+        $normalized = mb_strtolower(Str::ascii(trim($name)));
+
+        return preg_replace('/[^a-z0-9]+/u', '', $normalized) ?? $normalized;
     }
 }
