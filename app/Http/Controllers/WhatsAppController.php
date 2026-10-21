@@ -10,10 +10,12 @@ use App\Models\Contact;
 use App\Models\Message;
 use App\Models\MessageStatus;
 use App\Models\SystemSetting;
+use App\Models\User;
 use App\Services\AuditService;
 use App\Services\BotInactivityService;
 use App\Services\CampaignMetricsService;
 use App\Services\ChatAssignmentService;
+use App\Support\SpecialtyMatcher;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -31,6 +33,8 @@ class WhatsAppController extends Controller
     private ?array $runtimeSettingsCache = null;
 
     private ?array $turnosConfigurationCache = null;
+
+    private ?array $assignmentSpecialtiesCache = null;
 
     public function __construct(
         private readonly BotInactivityService $botInactivityService,
@@ -3521,17 +3525,10 @@ class WhatsAppController extends Controller
                     throw new \RuntimeException("Alephoo respondio {$response->status()} al consultar especialidades.");
                 }
                 $allSpecialties = $response->successful() && is_array($response->json()) ? $response->json() : [];
-                $needle = mb_strtolower(Str::ascii($query));
                 $matchingSpecialties = array_values(array_filter($allSpecialties, fn ($item) => is_array($item)
-                    && str_contains(mb_strtolower(Str::ascii(trim((string) ($item['nombre'] ?? '')))), $needle)
+                    && $this->matchesSpecialtySearch($query, $item)
                 ));
-                $exactSpecialtyMatches = array_values(array_filter($matchingSpecialties, fn ($item) =>
-                    mb_strtolower(Str::ascii(trim((string) ($item['nombre'] ?? '')))) === $needle
-                ));
-                $unfilteredSpecialtyMatches = count($exactSpecialtyMatches) === 1
-                    ? $exactSpecialtyMatches
-                    : (count($matchingSpecialties) === 1 ? $matchingSpecialties : []);
-                $candidate = $unfilteredSpecialtyMatches[0] ?? null;
+                $candidate = count($matchingSpecialties) === 1 ? $matchingSpecialties[0] : null;
                 $state = $this->getState($chat);
                 $state['specialty_search_context'] = [
                     'query' => $specialtySearchQuery,
@@ -3543,7 +3540,7 @@ class WhatsAppController extends Controller
                 $allowedSpecialtyIds = array_map('strval', $turnosConfiguration['specialties']);
                 $items = array_values(array_filter($items, fn ($item) => is_array($item)
                     && in_array((string) ($item['id'] ?? ''), $allowedSpecialtyIds, true)
-                    && str_contains(mb_strtolower(Str::ascii((string) ($item['nombre'] ?? ''))), $needle)
+                    && $this->matchesSpecialtySearch($query, $item)
                 ));
                 usort($items, fn ($a, $b) => strcasecmp((string) ($a['nombre'] ?? ''), (string) ($b['nombre'] ?? '')));
                 foreach (array_slice($items, 0, 10) as $item) {
@@ -5508,6 +5505,58 @@ class WhatsAppController extends Controller
         $baseUrl = $this->alephooBaseUrl();
 
         return str_ends_with($baseUrl, '/personas') ? substr($baseUrl, 0, -9) : $baseUrl;
+    }
+
+    private function matchesSpecialtySearch(string $query, array $item): bool
+    {
+        $specialtyName = trim((string) ($item['nombre'] ?? ''));
+        if ($specialtyName === '') {
+            return false;
+        }
+
+        if (SpecialtyMatcher::matches($query, $specialtyName)) {
+            return true;
+        }
+
+        $specialtyId = trim((string) ($item['id'] ?? ''));
+        foreach ($this->configuredAssignmentSpecialties() as $configuredSpecialty) {
+            if (! is_array($configuredSpecialty)) {
+                continue;
+            }
+
+            $configuredId = trim((string) ($configuredSpecialty['specialty_id'] ?? ''));
+            $configuredName = trim((string) ($configuredSpecialty['name'] ?? ''));
+            $belongsToSpecialty = ($specialtyId !== '' && $specialtyId === $configuredId)
+                || ($configuredName !== '' && SpecialtyMatcher::normalize($configuredName) === SpecialtyMatcher::normalize($specialtyName));
+            if (! $belongsToSpecialty) {
+                continue;
+            }
+
+            foreach (is_array($configuredSpecialty['aliases'] ?? null) ? $configuredSpecialty['aliases'] : [] as $alias) {
+                if (SpecialtyMatcher::matches($query, (string) $alias)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private function configuredAssignmentSpecialties(): array
+    {
+        if ($this->assignmentSpecialtiesCache !== null) {
+            return $this->assignmentSpecialtiesCache;
+        }
+
+        $this->assignmentSpecialtiesCache = User::query()
+            ->whereNotNull('assignment_specialties')
+            ->get(['assignment_specialties'])
+            ->flatMap(fn (User $user) => is_array($user->assignment_specialties) ? $user->assignment_specialties : [])
+            ->filter(fn ($specialty) => is_array($specialty))
+            ->values()
+            ->all();
+
+        return $this->assignmentSpecialtiesCache;
     }
 
     private function turnosConfiguration(): array

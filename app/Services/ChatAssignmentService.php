@@ -6,8 +6,8 @@ use App\Jobs\SendChatEventWebPushNotification;
 use App\Models\Chat;
 use App\Models\SystemSetting;
 use App\Models\User;
+use App\Support\SpecialtyMatcher;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
 class ChatAssignmentService
 {
@@ -170,8 +170,6 @@ class ChatAssignmentService
             trim((string) ($routing['specialty_name'] ?? '')),
             trim((string) ($routing['query'] ?? '')),
         ]);
-        $normalizedRequestedNames = array_map(fn (string $name) => $this->normalizeSpecialtyName($name), $requestedNames);
-
         foreach (is_array($user->assignment_specialties) ? $user->assignment_specialties : [] as $specialty) {
             if (! is_array($specialty)) {
                 continue;
@@ -183,25 +181,11 @@ class ChatAssignmentService
                 ...(is_array($specialty['aliases'] ?? null) ? $specialty['aliases'] : []),
             ]);
             $idMatches = $requestedId !== '' && $configuredId !== '' && $requestedId === $configuredId;
-            $normalizedConfiguredNames = array_map(
-                fn ($name) => $this->normalizeSpecialtyName((string) $name),
-                $configuredNames,
-            );
             $nameMatches = false;
 
-            foreach ($normalizedRequestedNames as $requestedName) {
-                foreach ($normalizedConfiguredNames as $configuredName) {
-                    if ($requestedName === $configuredName) {
-                        $nameMatches = true;
-                        break 2;
-                    }
-
-                    // Allow a sufficiently specific prefix such as "Oculis" to
-                    // match a configured "Oculista" specialty or alias.
-                    if (
-                        (mb_strlen($requestedName) >= 4 && str_starts_with($configuredName, $requestedName))
-                        || (mb_strlen($configuredName) >= 4 && str_starts_with($requestedName, $configuredName))
-                    ) {
+            foreach ($requestedNames as $requestedName) {
+                foreach ($configuredNames as $configuredName) {
+                    if (SpecialtyMatcher::matches($requestedName, (string) $configuredName)) {
                         $nameMatches = true;
                         break 2;
                     }
@@ -214,12 +198,5 @@ class ChatAssignmentService
         }
 
         return null;
-    }
-
-    private function normalizeSpecialtyName(string $name): string
-    {
-        $normalized = mb_strtolower(Str::ascii(trim($name)));
-
-        return preg_replace('/[^a-z0-9]+/u', '', $normalized) ?? $normalized;
     }
 }
