@@ -2201,7 +2201,9 @@ class WhatsAppController extends Controller
 
             try {
                 $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_status_bot_'.uniqid());
-                $mqtt->connect();
+                // La notificación de estado no debe dejar abierta la respuesta
+                // del Webchat si el broker MQTT está lento o no disponible.
+                $mqtt->connect($this->mqttConnectionSettings());
 
                 $mqtt->publish("status_bot/chat/{$chat->id}", json_encode([
                     'chat_id' => $chat->id,
