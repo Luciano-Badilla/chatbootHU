@@ -137,6 +137,7 @@ Route::middleware($sessionAuthenticated)->group(function () {
     Route::middleware('permission:can_manage_users')->group(function () {
         Route::post('/settings/users', [SettingsController::class, 'storeUser']);
         Route::put('/settings/users/{user}', [SettingsController::class, 'updateUser']);
+        Route::put('/settings/users/{user}/specialties', [SettingsController::class, 'updateUserSpecialties']);
         Route::put('/settings/users/{user}/role', [SettingsController::class, 'updateUserRole']);
         Route::put('/settings/users/{user}/status', [SettingsController::class, 'updateUserStatus']);
         Route::put('/settings/users/{user}/password', [SettingsController::class, 'resetUserPassword']);

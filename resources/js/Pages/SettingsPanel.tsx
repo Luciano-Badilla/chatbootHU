@@ -99,7 +99,6 @@ interface SettingsPanelProps {
   roles?: Array<{
     id: number
     name: string
-    can_handle_chats?: boolean
   }>
   users?: Array<{
     id: number
@@ -110,7 +109,6 @@ interface SettingsPanelProps {
     role_id: number
     role_name: string
     role_label?: string
-    assignment_specialties?: AssignmentSpecialty[]
     is_active: boolean
     deactivated_at?: string | null
     created_at?: string | null
@@ -121,8 +119,6 @@ interface SettingsPanelProps {
     label: string
   }>
 }
-
-type AssignmentSpecialty = { specialty_id: string; name: string; aliases: string[]; priority: number }
 
 type FlowSchedule = Record<"monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday", number | null>
 type WebchatSettings = { enabled: boolean; availability_mode: "always" | "schedule"; schedule_start: string; schedule_end: string; bot_available_outside_schedule: boolean; offline_message: string; title: string; subtitle: string; logo_url: string; flow_schedule: FlowSchedule }
@@ -314,8 +310,6 @@ export default function SettingsPanel({
   const [userDialogOpen, setUserDialogOpen] = useState(false)
   const [editingUserId, setEditingUserId] = useState<number | null>(null)
   const [userForm, setUserForm] = useState({ name: "", email: "", role_id: "3", password: "", password_confirmation: "" })
-  const [userSpecialties, setUserSpecialties] = useState<AssignmentSpecialty[]>([])
-  const [specialtyDraft, setSpecialtyDraft] = useState({ specialty_id: "", name: "", aliases: "", priority: "1" })
   const [savingUser, setSavingUser] = useState(false)
   const [passwordDialogUserId, setPasswordDialogUserId] = useState<number | null>(null)
   const [passwordForm, setPasswordForm] = useState({ password: "", password_confirmation: "" })
@@ -889,7 +883,6 @@ export default function SettingsPanel({
       return matchesQuery && matchesStatus && matchesRole
     })
   }, [usersState, userSearch, userStatusFilter, userRoleFilter])
-  const canRouteUserBySpecialty = Boolean(roles.find((role) => String(role.id) === userForm.role_id)?.can_handle_chats)
 
   const userRequest = async (path: string, method: string, body: unknown) => {
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content")
@@ -906,34 +899,13 @@ export default function SettingsPanel({
   const openCreateUser = () => {
     setEditingUserId(null)
     setUserForm({ name: "", email: "", role_id: String(roles[roles.length - 1]?.id ?? 3), password: "", password_confirmation: "" })
-    setUserSpecialties([])
-    setSpecialtyDraft({ specialty_id: "", name: "", aliases: "", priority: "1" })
     setUserDialogOpen(true)
   }
 
   const openEditUser = (user: typeof usersState[number]) => {
     setEditingUserId(user.id)
     setUserForm({ name: user.name, email: user.email, role_id: String(user.role_id), password: "", password_confirmation: "" })
-    setUserSpecialties(user.assignment_specialties ?? [])
-    setSpecialtyDraft({ specialty_id: "", name: "", aliases: "", priority: "1" })
     setUserDialogOpen(true)
-  }
-
-  const addUserSpecialty = () => {
-    const name = specialtyDraft.name.trim()
-    if (!name) return
-    const entry: AssignmentSpecialty = {
-      specialty_id: specialtyDraft.specialty_id.trim(),
-      name,
-      aliases: specialtyDraft.aliases.split(",").map((alias) => alias.trim()).filter(Boolean),
-      priority: Math.max(1, Math.min(10, Number(specialtyDraft.priority) || 1)),
-    }
-    setUserSpecialties((current) => [...current.filter((item) => `${item.specialty_id}|${item.name}`.toLowerCase() !== `${entry.specialty_id}|${entry.name}`.toLowerCase()), entry])
-    setSpecialtyDraft({ specialty_id: "", name: "", aliases: "", priority: "1" })
-  }
-
-  const updateUserSpecialty = (index: number, patch: Partial<AssignmentSpecialty>) => {
-    setUserSpecialties((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item))
   }
 
   const handleSaveUser = async () => {
@@ -942,7 +914,6 @@ export default function SettingsPanel({
       const path = editingUserId ? `/api/settings/users/${editingUserId}` : "/api/settings/users"
       const payload = await userRequest(path, editingUserId ? "PUT" : "POST", {
         name: userForm.name, email: userForm.email, role_id: Number(userForm.role_id),
-        assignment_specialties: canRouteUserBySpecialty ? userSpecialties : [],
         ...(!editingUserId ? { password: userForm.password, password_confirmation: userForm.password_confirmation } : {}),
       })
       setUsersState((current) => editingUserId
@@ -2017,22 +1988,6 @@ export default function SettingsPanel({
               </Select>
               {editingUserId === currentUserId ? <p className="text-xs text-slate-500">Tu propio rol no puede modificarse desde aqui.</p> : null}
             </div>
-            {canRouteUserBySpecialty ? <section className="space-y-3 rounded-xl border border-[#dbe5ef] bg-[#f8fafc] p-3">
-              <div><p className="text-sm font-semibold text-[#013765]">Especialidades para derivación</p><p className="mt-1 text-xs leading-5 text-slate-500">La prioridad 1 es la más alta. Si coinciden varios operadores, primero se elige la prioridad y luego el de menor carga. Podés agregar alias para reconocer búsquedas abreviadas.</p></div>
-              {userSpecialties.map((specialty, index) => <div key={`${specialty.specialty_id}-${index}`} className="grid gap-2 rounded-lg border border-slate-200 bg-white p-2 sm:grid-cols-[minmax(110px,1fr)_minmax(100px,1fr)_70px_44px] sm:items-center">
-                <div className="space-y-1"><Input value={specialty.name} onChange={(event) => updateUserSpecialty(index, { name: event.target.value })} placeholder="Especialidad" className="h-8 text-xs" /><Input value={specialty.specialty_id} onChange={(event) => updateUserSpecialty(index, { specialty_id: event.target.value })} placeholder="ID Alephoo (opcional)" className="h-8 text-[11px]" /></div>
-                <Input value={specialty.aliases.join(", ")} onChange={(event) => updateUserSpecialty(index, { aliases: event.target.value.split(",").map((alias) => alias.trim()).filter(Boolean) })} placeholder="Alias: derma, piel" className="h-8 text-xs" />
-                <label className="space-y-1 text-[10px] font-medium text-slate-500">Prioridad<Input type="number" min={1} max={10} value={specialty.priority} onChange={(event) => updateUserSpecialty(index, { priority: Math.max(1, Math.min(10, Number(event.target.value) || 1)) })} className="h-8 text-xs" /></label>
-                <Button type="button" variant="outline" size="icon" title="Quitar especialidad" onClick={() => setUserSpecialties((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="h-8 w-8 text-slate-500"><XCircle className="h-4 w-4" /></Button>
-              </div>)}
-              <div className="grid gap-2 sm:grid-cols-[minmax(90px,0.8fr)_minmax(120px,1.2fr)_minmax(130px,1.2fr)_80px_auto] sm:items-end">
-                <div className="space-y-1"><label className="text-[10px] font-medium text-slate-500">ID Alephoo</label><Input value={specialtyDraft.specialty_id} onChange={(event) => setSpecialtyDraft((current) => ({ ...current, specialty_id: event.target.value }))} placeholder="Opcional" className="h-9 text-xs" /></div>
-                <div className="space-y-1"><label className="text-[10px] font-medium text-slate-500">Especialidad</label><Input value={specialtyDraft.name} onChange={(event) => setSpecialtyDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Ej. Dermatología" className="h-9 text-xs" /></div>
-                <div className="space-y-1"><label className="text-[10px] font-medium text-slate-500">Alias separados por coma</label><Input value={specialtyDraft.aliases} onChange={(event) => setSpecialtyDraft((current) => ({ ...current, aliases: event.target.value }))} placeholder="derma, piel" className="h-9 text-xs" /></div>
-                <div className="space-y-1"><label className="text-[10px] font-medium text-slate-500">Prioridad</label><Input type="number" min={1} max={10} value={specialtyDraft.priority} onChange={(event) => setSpecialtyDraft((current) => ({ ...current, priority: event.target.value }))} className="h-9 text-xs" /></div>
-                <Button type="button" variant="outline" onClick={addUserSpecialty} disabled={!specialtyDraft.name.trim()} className="h-9 border-[#cbd8e5] text-[#013765]"><Plus className="mr-1.5 h-3.5 w-3.5" />Agregar</Button>
-              </div>
-            </section> : null}
             {!editingUserId ? <>
               <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Contraseña provisoria</label><Input type="password" value={userForm.password} onChange={(event) => setUserForm((form) => ({ ...form, password: event.target.value }))} /></div>
               <div className="space-y-1.5"><label className="text-sm font-medium text-[#013765]">Confirmar contraseña</label><Input type="password" value={userForm.password_confirmation} onChange={(event) => setUserForm((form) => ({ ...form, password_confirmation: event.target.value }))} /></div>

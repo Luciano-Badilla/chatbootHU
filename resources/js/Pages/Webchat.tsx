@@ -224,8 +224,6 @@ function WebchatModal({ open, children, className = "", cardClassName = "" }: { 
 
 function WebchatGalleryImage({ src, alt }: { src: string; alt: string }) {
   const [loading, setLoading] = useState(true)
-  const [sessionLoadFailed, setSessionLoadFailed] = useState(false)
-  const [sessionLoadError, setSessionLoadError] = useState("")
   return <div className="relative flex h-full w-full items-center justify-center bg-slate-950"><img src={src} alt={alt} onLoad={() => setLoading(false)} onError={() => setLoading(false)} className="h-auto w-auto max-h-[82vh] max-w-[96vw] object-contain" />{loading ? <span className="absolute inset-0 grid place-items-center bg-slate-950/70 text-white"><Loader2 className="h-9 w-9 animate-spin" /><span className="sr-only">Cargando imagen</span></span> : null}</div>
 }
 
@@ -303,6 +301,8 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState("")
+  const [sessionLoadFailed, setSessionLoadFailed] = useState(false)
+  const [sessionLoadError, setSessionLoadError] = useState("")
   const [mqttStatus, setMqttStatus] = useState<"connecting" | "connected" | "reconnecting" | "offline" | "error">("connecting")
   const [mqttStartupPending, setMqttStartupPending] = useState(true)
   const [showStartupCurtain, setShowStartupCurtain] = useState(true)
@@ -964,8 +964,8 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
         const data = await api("session", { resume_token: token })
         if (!data.requires_profile) {
           syncChatAssignee(data.chat)
+          const nextMessages = data.chat.messages ?? []
           setMessages((current) => {
-            const nextMessages = data.chat.messages ?? []
             const incomingMessages = nextMessages.filter((message: Message) => !current.some((item) => String(item.id) === String(message.id)))
             if (incomingMessages.length) scrollToNewMessageRef.current = true
             return nextMessages

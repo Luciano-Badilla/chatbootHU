@@ -123,9 +123,59 @@ class AuditController extends Controller
             ];
         }
 
-        $contents = File::get($path);
-        $allLines = preg_split('/\r\n|\r|\n/', $contents) ?: [];
-        $tailLines = array_slice($allLines, -1 * $lines);
+        $handle = @fopen($path, 'rb');
+
+        if ($handle === false) {
+            return [
+                'path' => $path,
+                'updated_at' => null,
+                'lines' => ['No se pudo leer el archivo de log principal.'],
+            ];
+        }
+
+        $fileSize = (int) (fstat($handle)['size'] ?? 0);
+        $position = $fileSize;
+        $bytesRead = 0;
+        $maxBytes = 4 * 1024 * 1024;
+        $buffer = '';
+        $tailLines = [];
+
+        while ($position > 0 && count($tailLines) < $lines && $bytesRead < $maxBytes) {
+            $chunkSize = min(8192, $position, $maxBytes - $bytesRead);
+            $position -= $chunkSize;
+
+            if (fseek($handle, $position) !== 0) {
+                break;
+            }
+
+            $chunk = fread($handle, $chunkSize);
+
+            if ($chunk === false || $chunk === '') {
+                break;
+            }
+
+            $bytesRead += strlen($chunk);
+            $parts = preg_split('/\r\n|\r|\n/', $chunk.$buffer) ?: [];
+
+            if ($position > 0) {
+                $buffer = array_shift($parts) ?? '';
+            } else {
+                $buffer = '';
+            }
+
+            $tailLines = array_slice(array_merge($parts, $tailLines), -1 * $lines);
+        }
+
+        fclose($handle);
+
+        if ($position > 0 && $bytesRead >= $maxBytes && count($tailLines) < $lines) {
+            if ($tailLines === [] && $buffer !== '') {
+                $tailLines[] = '[Línea truncada] '.mb_substr($buffer, -10000);
+            }
+
+            array_unshift($tailLines, '[Se omitieron líneas anteriores por tamaño del archivo.]');
+            $tailLines = array_slice($tailLines, -1 * $lines);
+        }
 
         return [
             'path' => $path,

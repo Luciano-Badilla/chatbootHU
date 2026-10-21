@@ -28,14 +28,14 @@ class OperatorControlController extends Controller
     {
     }
 
-    public function index()
+    public function index(Request $request)
     {
-        return Inertia::render('OperatorControl', $this->controlPayload());
+        return Inertia::render('OperatorControl', $this->controlPayload($request->user()));
     }
 
-    public function snapshot()
+    public function snapshot(Request $request)
     {
-        return response()->json($this->controlPayload());
+        return response()->json($this->controlPayload($request->user()));
     }
 
     public function timeline(User $user)
@@ -68,15 +68,16 @@ class OperatorControlController extends Controller
         ]);
     }
 
-    private function controlPayload(): array
+    private function controlPayload(?User $viewer): array
     {
+        $canViewSpecialties = $viewer?->hasPermission('can_view_all_chats') ?? false;
         $maxAssignedChats = max(1, (int) (SystemSetting::query()
             ->where('key', 'operators.max_assigned_chats')
             ->value('value') ?? 5));
 
         $operators = User::query()->where('is_active', true)->with('role')->get()
             ->filter(fn (User $user) => $user->canHandleChats())
-            ->map(function (User $operator) use ($maxAssignedChats) {
+            ->map(function (User $operator) use ($maxAssignedChats, $canViewSpecialties) {
                 $isDisconnected = ! $operator->last_operator_activity_at || $operator->last_operator_activity_at->lt(now()->subSeconds(90));
                 $assignedChats = Chat::query()
                     ->with([
@@ -116,6 +117,7 @@ class OperatorControlController extends Controller
                     'id' => $operator->id,
                     'name' => $operator->name,
                     'email' => $operator->email,
+                    'assignment_specialties' => $canViewSpecialties ? ($operator->assignment_specialties ?? []) : [],
                     'availability' => $isDisconnected || $operator->operator_availability === 'unavailable'
                         ? 'disconnected'
                         : ($operator->operator_availability ?: 'paused'),
@@ -147,6 +149,7 @@ class OperatorControlController extends Controller
 
         return [
             'operators' => $operators,
+            'canManageUsers' => $viewer?->hasPermission('can_manage_users') ?? false,
             'pendingCount' => $pendingQuery->count(),
             'queue' => [
                 'oldest_waiting_minutes' => $oldestPendingAt ? \Carbon\Carbon::parse($oldestPendingAt)->diffInMinutes(now()) : 0,

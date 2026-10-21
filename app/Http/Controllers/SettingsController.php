@@ -166,13 +166,12 @@ class SettingsController extends Controller
                 ->map(fn (Role $role) => [
                     'id' => $role->id,
                     'name' => $role->displayName(),
-                    'can_handle_chats' => in_array($role->normalizedName(), ['admin', 'operator'], true),
                 ])
                 ->values(),
             'users' => User::query()
                 ->with('role')
                 ->orderBy('name')
-                ->get(['id', 'name', 'email', 'validated', 'requestsPassword', 'role_id', 'is_active', 'deactivated_at', 'created_at', 'assignment_specialties'])
+                ->get(['id', 'name', 'email', 'validated', 'requestsPassword', 'role_id', 'is_active', 'deactivated_at', 'created_at'])
                 ->map(fn (User $user) => $this->userPayload($user))
                 ->values(),
             'currentUserId' => $this->resolveCurrentUserId(request()),
@@ -874,13 +873,16 @@ class SettingsController extends Controller
             'role' => $user->roleLabel(),
             'assignment_specialties' => $user->assignment_specialties ?? [],
         ];
+        $assignmentSpecialties = in_array($targetRole->normalizedName(), ['admin', 'operator'], true)
+            ? (array_key_exists('assignment_specialties', $data)
+                ? $this->normalizeAssignmentSpecialties($data['assignment_specialties'] ?? [])
+                : ($user->assignment_specialties ?? []))
+            : [];
         $user->update([
             'name' => trim($data['name']),
             'email' => strtolower(trim($data['email'])),
             'role_id' => $targetRole->id,
-            'assignment_specialties' => in_array($targetRole->normalizedName(), ['admin', 'operator'], true)
-                ? $this->normalizeAssignmentSpecialties($data['assignment_specialties'] ?? [])
-                : [],
+            'assignment_specialties' => $assignmentSpecialties,
         ]);
         $user->load('role');
         $after = [
@@ -897,6 +899,38 @@ class SettingsController extends Controller
         }
 
         return response()->json(['ok' => true, 'user' => $this->userPayload($user)]);
+    }
+
+    public function updateUserSpecialties(Request $request, User $user)
+    {
+        $user->loadMissing('role');
+
+        if (! $user->canHandleChats()) {
+            return response()->json(['message' => 'Solo se pueden configurar especialidades para operadores.'], 422);
+        }
+
+        $data = $request->validate([
+            'assignment_specialties' => ['nullable', 'array', 'max:100'],
+            'assignment_specialties.*.specialty_id' => ['nullable', 'string', 'max:80'],
+            'assignment_specialties.*.name' => ['required', 'string', 'max:120'],
+            'assignment_specialties.*.aliases' => ['nullable', 'array', 'max:20'],
+            'assignment_specialties.*.aliases.*' => ['string', 'max:120'],
+            'assignment_specialties.*.priority' => ['required', 'integer', 'min:1', 'max:10'],
+        ]);
+
+        $before = $user->assignment_specialties ?? [];
+        $specialties = $this->normalizeAssignmentSpecialties($data['assignment_specialties'] ?? []);
+        $user->update(['assignment_specialties' => $specialties]);
+
+        if ($before !== $specialties) {
+            $this->auditService->record('users', 'assignment_specialties_updated', "Actualizo las especialidades de derivacion de {$user->name}", $request->user(), $user, [
+                'target_user' => $user->only(['id', 'name', 'email']),
+                'before' => ['assignment_specialties' => $before],
+                'after' => ['assignment_specialties' => $specialties],
+            ]);
+        }
+
+        return response()->json(['ok' => true, 'assignment_specialties' => $specialties]);
     }
 
     public function updateUserStatus(Request $request, User $user)
@@ -1028,7 +1062,6 @@ class SettingsController extends Controller
             'role_id' => (int) $user->role_id, 'role_name' => $user->roleName(), 'role_label' => $user->roleLabel(),
             'is_active' => (bool) $user->is_active, 'deactivated_at' => $user->deactivated_at?->toIso8601String(),
             'created_at' => $user->created_at?->toIso8601String(),
-            'assignment_specialties' => $user->assignment_specialties ?? [],
         ];
     }
 
