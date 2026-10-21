@@ -183,10 +183,30 @@ class ChatAssignmentService
                 ...(is_array($specialty['aliases'] ?? null) ? $specialty['aliases'] : []),
             ]);
             $idMatches = $requestedId !== '' && $configuredId !== '' && $requestedId === $configuredId;
-            $nameMatches = array_intersect(
-                $normalizedRequestedNames,
-                array_map(fn ($name) => $this->normalizeSpecialtyName((string) $name), $configuredNames),
-            ) !== [];
+            $normalizedConfiguredNames = array_map(
+                fn ($name) => $this->normalizeSpecialtyName((string) $name),
+                $configuredNames,
+            );
+            $nameMatches = false;
+
+            foreach ($normalizedRequestedNames as $requestedName) {
+                foreach ($normalizedConfiguredNames as $configuredName) {
+                    if ($requestedName === $configuredName) {
+                        $nameMatches = true;
+                        break 2;
+                    }
+
+                    // Allow a sufficiently specific prefix such as "Oculis" to
+                    // match a configured "Oculista" specialty or alias.
+                    if (
+                        (mb_strlen($requestedName) >= 4 && str_starts_with($configuredName, $requestedName))
+                        || (mb_strlen($configuredName) >= 4 && str_starts_with($requestedName, $configuredName))
+                    ) {
+                        $nameMatches = true;
+                        break 2;
+                    }
+                }
+            }
 
             if ($idMatches || $nameMatches) {
                 return ['priority' => max(1, (int) ($specialty['priority'] ?? 1))];

@@ -194,7 +194,7 @@ export default function OperatorControl({ operators: initialOperators, pendingCo
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="text-[#013765]">Especialidades para derivación</DialogTitle>
-          <DialogDescription>{specialtyDialogOperator?.name}. Agregá especialidades, alias e ID de Alephoo. La prioridad 1 es la más alta.</DialogDescription>
+          <DialogDescription>{specialtyDialogOperator?.name}. Agregá especialidades, alias e ID de Alephoo. La prioridad 1 es la más alta; también se reconocen prefijos desde 4 letras. Usá alias para sinónimos.</DialogDescription>
         </DialogHeader>
         <div className="max-h-[55vh] space-y-3 overflow-y-auto pr-1">
           {specialties.map((specialty, index) => <div key={`${specialty.specialty_id}-${index}`} className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[minmax(120px,1fr)_minmax(100px,0.8fr)_minmax(130px,1.2fr)_80px_40px] sm:items-end">
