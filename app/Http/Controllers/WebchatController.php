@@ -181,8 +181,13 @@ class WebchatController extends Controller
             // No esperes a que termine todo el flujo inicial para responderle
             // al navegador: puede incluir consultas a Alephoo y demoras de nodos.
             app()->terminating(function () use ($chat, $flow) {
+                $chat = $chat->fresh();
+                // Las notificaciones MQTT y el arranque del flujo son tareas
+                // secundarias; no deben mantener cargando el boton del paciente.
+                $this->publishRestartedChatStatus($chat);
+
                 try {
-                    app(WhatsAppController::class)->startWebchatConversation($chat->fresh(), $flow);
+                    app(WhatsAppController::class)->startWebchatConversation($chat, $flow);
                 } catch (\Throwable $e) {
                     Log::error('No se pudo iniciar el flujo del webchat reiniciado.', [
                         'chat_id' => $chat->id,
@@ -194,12 +199,6 @@ class WebchatController extends Controller
         }
 
         $chat->refresh();
-
-        if ($shouldRestart) {
-            // El panel interno no conoce la respuesta HTTP del webchat. Avisamos
-            // por MQTT que este chat volvió a ser atendido por el bot.
-            $this->publishRestartedChatStatus($chat);
-        }
 
         return response()->json([
             'ok' => true,

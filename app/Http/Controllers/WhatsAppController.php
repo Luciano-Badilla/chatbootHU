@@ -4949,7 +4949,10 @@ class WhatsAppController extends Controller
 
         try {
             $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_archive_chat_'.uniqid());
-            $mqtt->connect();
+            // Archivar ocurre dentro del envio del ultimo mensaje del bot. MQTT
+            // solo notifica al panel; una caida del broker no debe bloquear la
+            // respuesta HTTP del Webchat ni dejar sus botones cargando.
+            $mqtt->connect($this->mqttConnectionSettings());
             $mqtt->publish("operator/chat/{$chat->id}", json_encode([
                 'chat_id' => (int) $chat->id,
                 'active' => false,
