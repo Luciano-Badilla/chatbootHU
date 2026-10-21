@@ -1,3 +1,5 @@
+import { webchatRateLimitHeaders } from "./webchatRateLimit"
+
 const appUrl = String(import.meta.env.VITE_APP_URL ?? "").replace(/\/$/, "")
 
 const base64UrlToBytes = (value: string) => {
@@ -27,7 +29,7 @@ export const subscribeToWebPush = async (path: string, extra: Record<string, str
     : await Notification.requestPermission()
   if (permission !== "granted") throw new Error("No se otorgó permiso para las notificaciones.")
 
-  const keyResponse = await fetch(`${appUrl}/api/push/vapid-public-key`, { headers: { Accept: "application/json" } })
+  const keyResponse = await fetch(`${appUrl}/api/push/vapid-public-key`, { headers: { Accept: "application/json", ...webchatRateLimitHeaders(extra.resume_token) } })
   const keyData = await keyResponse.json().catch(() => ({}))
   if (!keyResponse.ok || !keyData.enabled || !keyData.public_key) {
     throw new Error("Las notificaciones push todavía no están configuradas en el servidor.")
@@ -45,7 +47,7 @@ export const subscribeToWebPush = async (path: string, extra: Record<string, str
 
   const saveResponse = await fetch(`${appUrl}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
+    headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders(), ...webchatRateLimitHeaders(extra.resume_token) },
     body: JSON.stringify({ ...extra, subscription: subscription.toJSON() }),
   })
   const saveData = await saveResponse.json().catch(() => ({}))
@@ -60,7 +62,7 @@ export const isWebPushSubscriptionEnabled = async (path: string, extra: Record<s
 
   const response = await fetch(`${appUrl}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
+    headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders(), ...webchatRateLimitHeaders(extra.resume_token) },
     body: JSON.stringify({ ...extra, endpoint: subscription.endpoint }),
   })
   if (!response.ok) return false
@@ -74,7 +76,7 @@ export const unsubscribeFromWebPush = async (path: string, extra: Record<string,
 
   const response = await fetch(`${appUrl}${path}`, {
     method: "DELETE",
-    headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
+    headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders(), ...webchatRateLimitHeaders(extra.resume_token) },
     body: JSON.stringify({ ...extra, endpoint: subscription.endpoint }),
   })
   if (!response.ok) throw new Error("No se pudo desactivar la suscripción push.")

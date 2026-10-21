@@ -33,7 +33,7 @@ Route::post('/webhook', [WhatsAppController::class, 'receiveMessage']);
 
 Route::post('/webchat/session', [WebchatController::class, 'session']);
 Route::post('/webchat/status', [WebchatController::class, 'status']);
-Route::post('/webchat/presence', [WebchatController::class, 'presence'])->middleware('throttle:30,1');
+Route::post('/webchat/presence', [WebchatController::class, 'presence'])->middleware('throttle:webchat-presence');
 Route::post('/webchat/start', [WebchatController::class, 'start']);
 Route::post('/webchat/restart', [WebchatController::class, 'restart']);
 Route::post('/webchat/messages', [WebchatController::class, 'messages']);
@@ -43,10 +43,10 @@ Route::post('/webchat/send-contact', [WebchatController::class, 'sendContact']);
 Route::post('/webchat/send-location', [WebchatController::class, 'sendLocation']);
 Route::post('/webchat/delivery', [WebchatController::class, 'markDelivered']);
 Route::post('/webchat/read', [WebchatController::class, 'markRead']);
-Route::post('/webchat/push-subscription', [WebPushSubscriptionController::class, 'subscribeWebchat'])->middleware('throttle:20,1');
-Route::delete('/webchat/push-subscription', [WebPushSubscriptionController::class, 'unsubscribeWebchat'])->middleware('throttle:20,1');
-Route::post('/webchat/push-subscription/status', [WebPushSubscriptionController::class, 'webchatStatus'])->middleware('throttle:30,1');
-Route::get('/push/vapid-public-key', [WebPushSubscriptionController::class, 'publicKey'])->middleware('throttle:30,1');
+Route::post('/webchat/push-subscription', [WebPushSubscriptionController::class, 'subscribeWebchat'])->middleware('throttle:webchat-push-write');
+Route::delete('/webchat/push-subscription', [WebPushSubscriptionController::class, 'unsubscribeWebchat'])->middleware('throttle:webchat-push-write');
+Route::post('/webchat/push-subscription/status', [WebPushSubscriptionController::class, 'webchatStatus'])->middleware('throttle:webchat-push-status');
+Route::get('/push/vapid-public-key', [WebPushSubscriptionController::class, 'publicKey'])->middleware('throttle:public-push-key');
 Route::get('/webchat/location/search', [LocationController::class, 'webchatSearch']);
 
 $sessionAuthenticated = [
@@ -59,9 +59,9 @@ $sessionAuthenticated = [
 ];
 
 Route::middleware($sessionAuthenticated)->group(function () {
-    Route::post('/push/subscriptions', [WebPushSubscriptionController::class, 'subscribeOperator'])->middleware('throttle:20,1');
-    Route::delete('/push/subscriptions', [WebPushSubscriptionController::class, 'unsubscribeOperator'])->middleware('throttle:20,1');
-    Route::post('/push/subscriptions/status', [WebPushSubscriptionController::class, 'operatorStatus'])->middleware('throttle:30,1');
+    Route::post('/push/subscriptions', [WebPushSubscriptionController::class, 'subscribeOperator'])->middleware('throttle:operator-push-write');
+    Route::delete('/push/subscriptions', [WebPushSubscriptionController::class, 'unsubscribeOperator'])->middleware('throttle:operator-push-write');
+    Route::post('/push/subscriptions/status', [WebPushSubscriptionController::class, 'operatorStatus'])->middleware('throttle:operator-push-status');
     Route::post('/message/markAsRead/{chatId}', [ChatController::class, 'markAsReadMessages']);
     Route::get('/chat/messages/{chatId}', [ChatController::class, 'getMessages']);
     Route::get('/chats/snapshot', [ChatController::class, 'snapshot']);

@@ -27,7 +27,8 @@ class WebchatController extends Controller
     {
         $settings = $this->settings();
         $settings['available'] = $this->availabilityService->isBotAvailable($settings);
-        $settings['operators_available'] = $this->availabilityService->areOperatorsAvailable($settings);
+        $settings['operators_scheduled'] = $this->availabilityService->areOperatorsAvailable($settings);
+        $settings['operators_available'] = $settings['operators_scheduled'] && $this->availabilityService->hasAvailableOperators();
         return Inertia::render('Webchat', ['webchat' => $settings]);
     }
 
@@ -35,7 +36,8 @@ class WebchatController extends Controller
     {
         $settings = $this->settings();
         $settings['available'] = $this->availabilityService->isBotAvailable($settings);
-        $settings['operators_available'] = $this->availabilityService->areOperatorsAvailable($settings);
+        $settings['operators_scheduled'] = $this->availabilityService->areOperatorsAvailable($settings);
+        $settings['operators_available'] = $settings['operators_scheduled'] && $this->availabilityService->hasAvailableOperators();
 
         return response()->json(['webchat' => $settings]);
     }

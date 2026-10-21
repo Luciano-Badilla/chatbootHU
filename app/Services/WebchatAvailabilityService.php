@@ -4,6 +4,8 @@ namespace App\Services;
 
 use App\Models\Chat;
 use App\Models\SystemSetting;
+use App\Models\User;
+use Illuminate\Support\Facades\Cache;
 
 class WebchatAvailabilityService
 {
@@ -47,6 +49,39 @@ class WebchatAvailabilityService
     {
         return (bool) ($settings['enabled'] ?? false)
             && (($settings['availability_mode'] ?? 'always') !== 'schedule' || $this->isWithinSchedule($settings));
+    }
+
+    /** Whether at least one online operator has room for another chat. */
+    public function hasAvailableOperators(): bool
+    {
+        return Cache::remember('webchat.has_available_operators', now()->addSeconds(5), function (): bool {
+            $maxAssignedChats = max(1, min(100, (int) (SystemSetting::query()
+                ->where('key', 'operators.max_assigned_chats')
+                ->value('value') ?? 5)));
+
+            $operators = User::query()
+                ->where('is_active', true)
+                ->where('operator_availability', 'available')
+                ->where('last_operator_activity_at', '>=', now()->subSeconds(90))
+                ->with('role')
+                ->get()
+                ->filter(fn (User $user) => $user->canHandleChats())
+                ->values();
+
+            if ($operators->isEmpty()) {
+                return false;
+            }
+
+            $activeChatsByOperator = Chat::query()
+                ->selectRaw('operator_id, COUNT(*) as active_chat_count')
+                ->where('status', 'open')
+                ->where('attention_status', 'assigned')
+                ->whereIn('operator_id', $operators->pluck('id'))
+                ->groupBy('operator_id')
+                ->pluck('active_chat_count', 'operator_id');
+
+            return $operators->contains(fn (User $operator) => (int) ($activeChatsByOperator[$operator->id] ?? 0) < $maxAssignedChats);
+        });
     }
 
     private function isWithinSchedule(array $settings): bool

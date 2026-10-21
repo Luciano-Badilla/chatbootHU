@@ -2,21 +2,29 @@ import { Fragment, FormEvent, type ReactNode, useCallback, useEffect, useRef, us
 import mqtt from "mqtt"
 import { Gallery, Item } from "react-photoswipe-gallery"
 import "photoswipe/dist/photoswipe.css"
-import { ArrowUp, ArrowUpRight, AudioLines, Bell, BellOff, Camera, Check, ChevronDown, Clock3, Contact, FileText, Headset, ImageIcon, Info, Loader2, MapPin, Menu, MessageCircle, Mic, Play, Plus, Search, Send, Share, Square, User, Wrench, X } from "lucide-react"
+import { ArrowUp, ArrowUpRight, AudioLines, Bell, BellOff, Camera, Check, ChevronDown, Clock3, Contact, FileText, Headset, ImageIcon, Info, Loader2, MapPin, Menu, MessageCircle, Mic, Play, Plus, RefreshCw, Search, Send, Share, Square, User, Wrench, X } from "lucide-react"
 import { toast } from "sonner"
 import { getWebPushSubscription, isWebPushSubscriptionEnabled, subscribeToWebPush, unsubscribeFromWebPush } from "../lib/webPush"
+import { webchatRateLimitHeaders } from "../lib/webchatRateLimit"
 import { mqttWebSocketUrl } from "../lib/mqtt"
 import StartupCurtain from "../Components/StartupCurtain"
 
 type Option = { id: string; label: string; value?: string | null; description?: string; kind?: string; disabled?: boolean; group_id?: string | null }
 type RetryPayload = { message: string; optionId?: string }
 type Message = { id: number | string; sender: "contact" | "user"; sender_subtype?: "contact" | "operator" | "bot"; operator_name?: string | null; body: string | null; created_at?: string; timestamp?: string; message_type?: string | null; media_url?: string | null; media_name?: string | null; interactive_options?: Option[] | null; delivery_status?: "sending" | "failed"; retry_payload?: RetryPayload }
-type WebchatSettings = { enabled: boolean; available: boolean; operators_available?: boolean; title: string; subtitle: string; logo_url: string; offline_message: string }
+type WebchatSettings = { enabled: boolean; available: boolean; operators_available?: boolean; operators_scheduled?: boolean; title: string; subtitle: string; logo_url: string; offline_message: string }
 type PendingMedia = { id: string; file: File; previewUrl: string; type: "image" | "video" }
 type LocationDraft = { latitude: number; longitude: number; name: string; address: string }
 type LocationSearchResult = LocationDraft & { id: string }
 type DeviceContact = { name?: string[]; tel?: string[] }
 type ContactPicker = { getProperties: () => Promise<string[]>; select: (properties: string[], options?: { multiple?: boolean }) => Promise<DeviceContact[]> }
+
+class WebchatApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = "WebchatApiError"
+  }
+}
 
 const MAX_ATTACHMENTS_PER_SEND = 5
 const MAX_FILE_BYTES = { image: 10 * 1024 * 1024, video: 50 * 1024 * 1024, audio: 16 * 1024 * 1024, document: 25 * 1024 * 1024 }
@@ -216,6 +224,8 @@ function WebchatModal({ open, children, className = "", cardClassName = "" }: { 
 
 function WebchatGalleryImage({ src, alt }: { src: string; alt: string }) {
   const [loading, setLoading] = useState(true)
+  const [sessionLoadFailed, setSessionLoadFailed] = useState(false)
+  const [sessionLoadError, setSessionLoadError] = useState("")
   return <div className="relative flex h-full w-full items-center justify-center bg-slate-950"><img src={src} alt={alt} onLoad={() => setLoading(false)} onError={() => setLoading(false)} className="h-auto w-auto max-h-[82vh] max-w-[96vw] object-contain" />{loading ? <span className="absolute inset-0 grid place-items-center bg-slate-950/70 text-white"><Loader2 className="h-9 w-9 animate-spin" /><span className="sr-only">Cargando imagen</span></span> : null}</div>
 }
 
@@ -303,7 +313,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   const [chatStatus, setChatStatus] = useState<"open" | "closed">("open")
   const [closedBy, setClosedBy] = useState<string | null>(null)
   const [closedByName, setClosedByName] = useState<string | null>(null)
-  const [channelAvailability, setChannelAvailability] = useState(() => ({ enabled: webchat.enabled, available: webchat.available, operatorsAvailable: webchat.operators_available ?? webchat.available }))
+  const [channelAvailability, setChannelAvailability] = useState(() => ({ enabled: webchat.enabled, available: webchat.available, operatorsAvailable: webchat.operators_available ?? webchat.available, operatorsScheduled: webchat.operators_scheduled ?? webchat.operators_available ?? webchat.available }))
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported">(() => typeof window === "undefined" || !("Notification" in window) ? "unsupported" : Notification.permission)
   const [pushNotificationsEnabled, setPushNotificationsEnabled] = useState(false)
   const [notificationStatusLoaded, setNotificationStatusLoaded] = useState(false)
@@ -374,12 +384,12 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     try {
       const response = await fetch(`${import.meta.env.VITE_APP_URL}/api/webchat/${path}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        headers: { "Content-Type": "application/json", Accept: "application/json", ...webchatRateLimitHeaders() },
         body: JSON.stringify(data),
         signal: controller?.signal,
       })
       const json = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(json.message || "No se pudo completar la operación.")
+      if (!response.ok) throw new WebchatApiError(json.message || "No se pudo completar la operación.", response.status)
       return json
     } catch (exception) {
       if (controller?.signal.aborted) throw new Error("La solicitud tardó demasiado. Probá continuar nuevamente.")
@@ -605,19 +615,52 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
 
   const loadSession = async (resumeToken: string) => {
     const data = await api("session", { resume_token: resumeToken })
-    if (data.requires_profile) { setProfileRequired(true); return }
+    if (data.requires_profile) {
+      localStorage.removeItem(SESSION_KEY)
+      setToken("")
+      setMessages([])
+      setProfileRequired(true)
+      return
+    }
     syncChatAssignee(data.chat)
     setToken(data.resume_token)
+    localStorage.setItem(SESSION_KEY, data.resume_token)
     setProfileRequired(false)
+    setSessionLoadFailed(false)
+    setSessionLoadError("")
     scrollToInitialMessagesRef.current = true
     setMessages(data.chat.messages ?? [])
     acknowledgeIncomingMessages(data.chat.messages ?? [], data.resume_token)
   }
 
-  useEffect(() => {
+  const restoreSavedSession = async () => {
     const saved = localStorage.getItem(SESSION_KEY) ?? ""
-    loadSession(saved).catch(() => setProfileRequired(true)).finally(() => setLoading(false))
+    if (!saved) {
+      setProfileRequired(true)
+      return
+    }
+
+    try {
+      await loadSession(saved)
+    } catch (exception) {
+      setSessionLoadFailed(true)
+      setSessionLoadError(exception instanceof WebchatApiError && exception.status === 429
+        ? "Recibimos muchas solicitudes en este momento. Tu conversación sigue guardada; esperá unos segundos y volvé a intentarlo."
+        : "No pudimos recuperar la conversación por un problema temporal. Tu sesión sigue guardada; volvé a intentarlo.")
+    }
+  }
+
+  useEffect(() => {
+    restoreSavedSession().finally(() => setLoading(false))
   }, [])
+
+  const retryRestoreSession = async () => {
+    setLoading(true)
+    setSessionLoadFailed(false)
+    setSessionLoadError("")
+    await restoreSavedSession()
+    setLoading(false)
+  }
 
   useEffect(() => {
     let refreshing = false
@@ -627,7 +670,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
       try {
         const data = await api("status", {})
         if (typeof data.webchat?.enabled === "boolean" && typeof data.webchat?.available === "boolean") {
-          setChannelAvailability({ enabled: data.webchat.enabled, available: data.webchat.available, operatorsAvailable: typeof data.webchat.operators_available === "boolean" ? data.webchat.operators_available : data.webchat.available })
+          setChannelAvailability({ enabled: data.webchat.enabled, available: data.webchat.available, operatorsAvailable: typeof data.webchat.operators_available === "boolean" ? data.webchat.operators_available : data.webchat.available, operatorsScheduled: typeof data.webchat.operators_scheduled === "boolean" ? data.webchat.operators_scheduled : data.webchat.operators_available ?? data.webchat.available })
         }
       } catch {
         // La configuración mostrada al cargar sigue disponible si falla la actualización.
@@ -1033,7 +1076,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
         formData.append("file", file)
         formData.append("media_kind", mediaKind)
         if (caption && file === files[0]) formData.append("caption", caption)
-        const response = await fetch(`${import.meta.env.VITE_APP_URL}/api/webchat/send-media`, { method: "POST", body: formData })
+        const response = await fetch(`${import.meta.env.VITE_APP_URL}/api/webchat/send-media`, { method: "POST", headers: webchatRateLimitHeaders(token), body: formData })
         const data = await response.json().catch(() => ({}))
         if (!response.ok) throw new Error(data.message || "No se pudo enviar el archivo.")
         append(data.message)
@@ -1224,7 +1267,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     setError("")
     setLocationSearching(true)
     try {
-      const response = await fetch(`${import.meta.env.VITE_APP_URL}/api/webchat/location/search?q=${encodeURIComponent(query)}&limit=6`)
+      const response = await fetch(`${import.meta.env.VITE_APP_URL}/api/webchat/location/search?q=${encodeURIComponent(query)}&limit=6`, { headers: webchatRateLimitHeaders(token) })
       const payload = await response.json().catch(() => null)
       if (!response.ok || !payload?.ok) throw new Error(payload?.message || "No se pudo buscar la ubicación.")
       const results = Array.isArray(payload.data) ? payload.data : []
@@ -1340,14 +1383,15 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
       : !channelAvailability.available
         ? { label: "Fuera de horario", dot: "bg-slate-300" }
         : !channelAvailability.operatorsAvailable
-          ? { label: "Operadores fuera de horario", dot: "bg-amber-300" }
+          ? { label: channelAvailability.operatorsScheduled ? "Operadores no disponibles" : "Operadores fuera de horario", dot: "bg-amber-300" }
           : { label: "En línea", dot: "bg-[#a9d7bd]" }
   const conversationUnavailable = !channelAvailability.enabled || !channelAvailability.available
   const isOperatorHandling = !conversationUnavailable && !botEnabled
   const isWaitingForOperator = isOperatorHandling && !operatorName
-  const headerName = isOperatorHandling ? operatorName || "Buscando un operador" : webchat.title
-  const attentionTitle = conversationUnavailable ? "Canal temporalmente no disponible" : isWaitingForOperator ? "Buscando un operador" : isOperatorHandling ? `Atiende ${operatorName}` : "Asistente virtual activo"
-  const attentionDescription = conversationUnavailable ? "La conversación se retomará cuando el canal vuelva a estar disponible." : isWaitingForOperator ? "Te avisaremos cuando una persona tome la conversación." : isOperatorHandling ? "Podés continuar escribiendo por este mismo chat." : "Podés consultar o seguir las opciones disponibles en la conversación."
+  const waitingWithoutOperator = isWaitingForOperator && !channelAvailability.operatorsAvailable
+  const headerName = isOperatorHandling ? operatorName || (waitingWithoutOperator ? "En espera de atención" : "Buscando un operador") : webchat.title
+  const attentionTitle = conversationUnavailable ? "Canal temporalmente no disponible" : waitingWithoutOperator ? "Conversación en espera" : isWaitingForOperator ? "Buscando un operador" : isOperatorHandling ? `Atiende ${operatorName}` : "Asistente virtual activo"
+  const attentionDescription = conversationUnavailable ? "La conversación se retomará cuando el canal vuelva a estar disponible." : waitingWithoutOperator ? channelAvailability.operatorsScheduled ? "En este momento no hay operadores disponibles. Tu conversación quedó en espera y te atenderán por este chat cuando uno se libere." : "La atención con operadores está fuera del horario. Tu conversación quedó en espera y te atenderán por este chat cuando el servicio esté disponible." : isWaitingForOperator ? "Estamos buscando un operador. Podés seguir esperando o continuar con HUni." : isOperatorHandling ? "Podés continuar escribiendo por este mismo chat." : "Podés consultar o seguir las opciones disponibles en la conversación."
   const sharedMedia = messages.filter((message) => ["image", "video", "audio", "document"].includes(message.message_type ?? "text")).slice(-12).reverse()
   const hasOperatorMessages = messages.some((message) => message.sender_subtype === "operator")
 
@@ -1366,7 +1410,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
           <div className="pointer-events-none absolute -right-12 -top-24 h-56 w-56 rounded-full border-[28px] border-white/[0.06]" />
           <div className="pointer-events-none absolute -right-5 -top-16 h-40 w-40 rounded-full border-[18px] border-white/[0.06]" />
           <div className="relative flex items-center gap-3">
-            <div className={`grid h-11 w-11 shrink-0 place-items-center rounded-full shadow-sm ${isOperatorHandling ? "bg-[#e8f0f6] text-[#003f73]" : "bg-white p-1.5"}`}>{isWaitingForOperator ? <Loader2 className="h-5 w-5 animate-spin" aria-label="Buscando un operador" /> : isOperatorHandling ? <Headset className="h-5 w-5" aria-label="Operador" /> : <img src={webchat.logo_url ? publicAssetUrl(webchat.logo_url) : `${import.meta.env.VITE_APP_URL}/images/hu_icon_new.png`} alt="Hospital Universitario" className="h-full w-full object-contain" />}</div>
+            <div className={`grid h-11 w-11 shrink-0 place-items-center rounded-full shadow-sm ${isOperatorHandling ? "bg-[#e8f0f6] text-[#003f73]" : "bg-white p-1.5"}`}>{isWaitingForOperator && !waitingWithoutOperator ? <Loader2 className="h-5 w-5 animate-spin" aria-label="Buscando un operador" /> : isOperatorHandling ? waitingWithoutOperator ? <Clock3 className="h-5 w-5" aria-label="En espera" /> : <Headset className="h-5 w-5" aria-label="Operador" /> : <img src={webchat.logo_url ? publicAssetUrl(webchat.logo_url) : `${import.meta.env.VITE_APP_URL}/images/hu_icon_new.png`} alt="Hospital Universitario" className="h-full w-full object-contain" />}</div>
             <div className="min-w-0"><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/70">{webchat.subtitle}</p><h1 className="mt-0.5 text-base font-bold tracking-tight sm:text-lg">{headerName}</h1><p className="mt-0.5 flex items-center gap-1.5 text-xs text-white/80"><span className={`h-1.5 w-1.5 rounded-full ${channelStatus.dot}`} />{channelStatus.label}</p></div>
             <div className="ml-auto flex shrink-0 items-center gap-2"><button type="button" onClick={() => setInfoSheetOpen(true)} title="Información de la conversación" aria-label="Información de la conversación" className="grid h-9 w-9 place-items-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20"><Info className="h-4 w-4" /></button>{notificationStatusLoaded && token && !pushNotificationsEnabled && <button type="button" onClick={() => void enableNotifications()} title={notificationPermission === "denied" ? "Notificaciones bloqueadas. Habilitalas desde la configuración del navegador." : "Activar notificaciones"} aria-label="Activar notificaciones" className="grid h-9 w-9 place-items-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20"><BellOff className="h-4 w-4" /></button>}</div>
           </div>
@@ -1394,6 +1438,18 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
           <div className="m-auto w-full max-w-lg px-5 text-center sm:px-8">
             <div className="rounded-3xl border border-slate-200 bg-white px-6 py-9 shadow-[0_18px_45px_rgba(21,49,79,0.08)] sm:px-10">
               <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-[#e8f0f6] text-[#003f73]"><Clock3 className="h-7 w-7" /></div><p className="mt-6 text-[10px] font-bold uppercase tracking-[0.2em] text-[#003f73]">Horario de atención</p><h2 className="mt-2 text-2xl font-bold tracking-tight text-slate-800">Ahora no estamos disponibles</h2><p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-slate-500">{webchat.offline_message}</p><a href="https://turnos.hospital.uncu.edu.ar/formulario" target="_blank" rel="noopener noreferrer" className="mt-6 inline-flex items-center justify-center gap-2 rounded-xl bg-[#003f73] px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-[#003461] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#003f73] focus-visible:ring-offset-2">Solicitar turno mediante autogestión<ArrowUpRight className="h-4 w-4" /></a><div className="mt-7 rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500"><MessageCircle className="mr-1.5 inline h-3.5 w-3.5 text-[#003f73]" /> Podés volver a escribirnos durante el horario de atención.</div>
+            </div>
+          </div>
+        ) : sessionLoadFailed ? (
+          <div className="m-auto w-full max-w-lg px-5 text-center sm:px-8">
+            <div className="rounded-3xl border border-amber-200 bg-white px-6 py-9 shadow-[0_18px_45px_rgba(21,49,79,0.08)] sm:px-10">
+              <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-amber-50 text-amber-700"><RefreshCw className="h-7 w-7" /></div>
+              <h2 className="mt-6 text-2xl font-bold tracking-tight text-slate-800">No pudimos recuperar tu conversación</h2>
+              <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-slate-500">{sessionLoadError}</p>
+              <button type="button" onClick={() => void retryRestoreSession()} className="mt-6 inline-flex items-center justify-center gap-2 rounded-xl bg-[#003f73] px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-[#003461] disabled:opacity-60" disabled={loading}>
+                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                Volver a intentar
+              </button>
             </div>
           </div>
         ) : profileRequired ? (
@@ -1459,7 +1515,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
             {showScrollToBottom ? <button type="button" onClick={scrollToBottom} title="Ir al final" aria-label="Ir al final" className="absolute bottom-4 left-1/2 grid h-10 w-10 -translate-x-1/2 place-items-center rounded-full bg-[#003f73] text-white shadow-lg transition hover:bg-[#003461]"><ChevronDown className="h-5 w-5" /></button> : null}
           </div>
           <form onSubmit={(event) => { event.preventDefault(); void sendComposer() }} className="shrink-0 border-t border-slate-200 bg-white px-4 py-3 sm:px-8 sm:py-4"><div className="mx-auto max-w-3xl">
-            {chatStatus === "closed" || (isWaitingForOperator && !channelAvailability.operatorsAvailable) ? <div><button type="button" onClick={() => void restartConversation()} disabled={sending} className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#003f73] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-[#003f73]/20 transition hover:bg-[#003461] disabled:opacity-60">{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}{chatStatus === "closed" ? "Nueva conversación" : `Continuar con ${webchat.title}`}</button></div> : <>
+            {chatStatus === "closed" || isWaitingForOperator ? <div><button type="button" onClick={() => void restartConversation()} disabled={sending} className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#003f73] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-[#003f73]/20 transition hover:bg-[#003461] disabled:opacity-60">{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : chatStatus === "closed" ? <MessageCircle className="h-4 w-4" /> : <MessageCircle className="h-4 w-4" />}{chatStatus === "closed" ? "Nueva conversación" : "Continuar con HUni"}</button></div> : <>
               {manualInputLocked ? <p className="mb-2 text-center text-xs font-medium text-[#003f73]">Elegí una de las opciones del mensaje para continuar.</p> : null}
               {pendingMedia.length ? <div className="mb-2 flex gap-2 overflow-x-auto pb-1">{pendingMedia.map((media) => <div key={media.id} className="relative h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100"><button type="button" onClick={() => removePendingMedia(media.id)} aria-label={`Quitar ${media.file.name}`} className="absolute right-1 top-1 z-10 grid h-5 w-5 place-items-center rounded-full bg-slate-900/70 text-white"><X className="h-3 w-3" /></button>{media.type === "image" ? <img src={media.previewUrl} alt={media.file.name} className="h-full w-full object-cover" /> : <><video src={media.previewUrl} muted preload="metadata" className="h-full w-full object-cover" /><span className="absolute inset-0 grid place-items-center text-white drop-shadow"><Play className="h-5 w-5 fill-current" /></span></>}</div>)}</div> : null}
               <input ref={fileInputRef} type="file" multiple accept={fileAccept} className="hidden" onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; queueMedia(files) }} />
