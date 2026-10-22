@@ -25,6 +25,10 @@ class BotInactivityService
 
     public function processExpiredChat(Chat $chat, ?BotFlow $flow = null): bool
     {
+        if ($this->isWhatsAppFlowDisabled($chat)) {
+            return false;
+        }
+
         if ($chat->status !== 'open'
             || $chat->attention_status === 'archived'
             || $chat->operator_id !== null
@@ -33,7 +37,7 @@ class BotInactivityService
             return false;
         }
 
-        $flow = $flow ?? ($chat->bot_flow_id ? BotFlow::find($chat->bot_flow_id) : null) ?? $this->getDefaultFlow();
+        $flow = $flow ?? ($chat->bot_flow_id ? BotFlow::find($chat->bot_flow_id) : null) ?? $this->getDefaultFlow($chat->channel ?? 'whatsapp');
 
         if (!$flow || !$this->shouldResetByTimeout($chat, $flow)) {
             return false;
@@ -186,6 +190,9 @@ class BotInactivityService
 
         if ($channel === 'whatsapp') {
             $configuredFlowId = SystemSetting::query()->where('key', 'whatsapp.default_flow_id')->value('value');
+            if ($configuredFlowId === 'none') {
+                return null;
+            }
         } elseif ($channel === 'webchat') {
             $settings = SystemSetting::query()->whereIn('key', [
                 'webchat.flow_schedule',
@@ -207,6 +214,12 @@ class BotInactivityService
 
         return (clone $flows)->where('is_default', true)->first()
             ?? $flows->orderBy('id')->first();
+    }
+
+    private function isWhatsAppFlowDisabled(Chat $chat): bool
+    {
+        return ($chat->channel ?? 'whatsapp') === 'whatsapp'
+            && SystemSetting::query()->where('key', 'whatsapp.default_flow_id')->value('value') === 'none';
     }
 
     public function shouldResetByTimeout(Chat $chat, ?BotFlow $flow = null): bool

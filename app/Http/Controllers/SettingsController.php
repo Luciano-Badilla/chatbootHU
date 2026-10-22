@@ -68,10 +68,13 @@ class SettingsController extends Controller
             ->orderBy('name')
             ->get(['id', 'name', 'is_default', 'channels']);
 
-        $whatsappDefaultFlowId = $activeFlows->first(fn (BotFlow $flow) => (int) $flow->id === (int) ($settings['whatsapp.default_flow_id'] ?? 0)
-            && in_array('whatsapp', $flow->channels ?? [], true))?->id
-            ?? $activeFlows->first(fn (BotFlow $flow) => $flow->is_default && in_array('whatsapp', $flow->channels ?? [], true))?->id
-            ?? $activeFlows->first(fn (BotFlow $flow) => in_array('whatsapp', $flow->channels ?? [], true))?->id;
+        $storedWhatsappFlowId = (string) ($settings['whatsapp.default_flow_id'] ?? '');
+        $whatsappDefaultFlowId = $storedWhatsappFlowId === 'none'
+            ? 'none'
+            : ($activeFlows->first(fn (BotFlow $flow) => (int) $flow->id === (int) $storedWhatsappFlowId
+                && in_array('whatsapp', $flow->channels ?? [], true))?->id
+                ?? $activeFlows->first(fn (BotFlow $flow) => $flow->is_default && in_array('whatsapp', $flow->channels ?? [], true))?->id
+                ?? $activeFlows->first(fn (BotFlow $flow) => in_array('whatsapp', $flow->channels ?? [], true))?->id);
         $fallbackWebchatFlowId = $activeFlows->first(fn (BotFlow $flow) => $flow->is_default && in_array('webchat', $flow->channels ?? [], true))?->id
             ?? $activeFlows->first(fn (BotFlow $flow) => in_array('webchat', $flow->channels ?? [], true))?->id;
         $webchatFlowSchedule = json_decode((string) ($settings['webchat.flow_schedule'] ?? ''), true);
@@ -682,6 +685,26 @@ class SettingsController extends Controller
 
     public function saveWhatsAppFlow(Request $request)
     {
+        if ($request->input('default_flow_id') === 'none') {
+            $request->validate([
+                'default_flow_id' => ['required', 'in:none'],
+            ]);
+
+            $before = ['default_flow_id' => $this->settingValue('whatsapp.default_flow_id')];
+            SystemSetting::updateOrCreate(
+                ['key' => 'whatsapp.default_flow_id'],
+                ['value' => 'none'],
+            );
+            $this->auditService->recordSettingsChange(
+                'whatsapp',
+                $before,
+                ['default_flow_id' => 'none', 'flow_name' => null],
+                $request->user(),
+            );
+
+            return response()->json(['ok' => true, 'settings' => ['whatsapp' => ['default_flow_id' => 'none']]]);
+        }
+
         $data = $request->validate([
             'default_flow_id' => ['required', 'integer', 'exists:bot_flows,id'],
         ]);

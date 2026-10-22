@@ -204,6 +204,12 @@ class WhatsAppController extends Controller
         $type = $messageData['type'] ?? 'text';
         $whatsappMessageId = $messageData['id'] ?? null;
 
+        // Meta can retry a webhook when processing takes too long. Ignore a
+        // message already stored before touching the chat or running its flow.
+        if ($whatsappMessageId && Message::query()->where('whatsapp_message_id', $whatsappMessageId)->exists()) {
+            return response('EVENT_RECEIVED', 200);
+        }
+
         // --------------------------------
         // 2) Variables base
         // --------------------------------
@@ -375,7 +381,7 @@ class WhatsAppController extends Controller
                 'bot_flow_id' => $flow->id ?? null,
                 'bot_node_id' => $flow->start_node_id ?? null,
                 'status' => 'open',
-                'bot_enabled' => true,
+                'bot_enabled' => (bool) $flow,
                 'bot_state' => [],
                 'last_user_message_at' => now(), // primer contacto
             ]);
@@ -493,6 +499,12 @@ class WhatsAppController extends Controller
                 'media_name' => $mediaName,
             ]
         );
+
+        // This second check covers two identical webhook deliveries arriving
+        // concurrently between the initial existence check and the insert.
+        if (! $message->wasRecentlyCreated) {
+            return response('EVENT_RECEIVED', 200);
+        }
 
         // --------------------------------
         // 9) MQTT (mensaje entrante)
@@ -1879,6 +1891,10 @@ class WhatsAppController extends Controller
     private function ensureChatUsesDefaultFlow(Chat $chat, bool $forceConfiguredFlow = false): ?BotFlow
     {
         $channel = $chat->channel ?? 'whatsapp';
+        if ($channel === 'whatsapp' && $this->isWhatsAppFlowDisabled()) {
+            return null;
+        }
+
         $currentFlow = $chat->bot_flow_id
             ? BotFlow::query()
                 ->whereKey($chat->bot_flow_id)
@@ -1931,6 +1947,10 @@ class WhatsAppController extends Controller
         // input pendiente, ya que ese camino también puede generar respuestas.
         $chat->refresh();
         if (! $chat->bot_enabled) {
+            return null;
+        }
+
+        if (($chat->channel ?? 'whatsapp') === 'whatsapp' && $this->isWhatsAppFlowDisabled()) {
             return null;
         }
 
@@ -5011,6 +5031,10 @@ class WhatsAppController extends Controller
             ? SystemSetting::query()->where('key', 'whatsapp.default_flow_id')->value('value')
             : null;
 
+        if ($channel === 'whatsapp' && $configuredFlowId === 'none') {
+            return null;
+        }
+
         if ($configuredFlowId) {
             $configuredFlow = (clone $flows)->whereKey($configuredFlowId)->first();
             if ($configuredFlow) return $configuredFlow;
@@ -5020,6 +5044,11 @@ class WhatsAppController extends Controller
             ->where('is_default', true)
             ->first()
             ?? $flows->orderBy('id')->first();
+    }
+
+    private function isWhatsAppFlowDisabled(): bool
+    {
+        return SystemSetting::query()->where('key', 'whatsapp.default_flow_id')->value('value') === 'none';
     }
 
     private function resetChatToStart(Chat $chat): void

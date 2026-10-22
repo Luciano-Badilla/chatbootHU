@@ -50,7 +50,7 @@ import { AppShell, AppShellBackButton } from "../Components/AppShell"
 interface SettingsPanelProps {
   settings?: {
     webchat?: WebchatSettings
-    whatsapp?: { default_flow_id: number | null }
+    whatsapp?: { default_flow_id: number | "none" | null }
     general?: {
       timezone?: string
       language?: string
@@ -210,10 +210,12 @@ export default function SettingsPanel({
   const initialAutogestionBaseUrl = settings?.integrations?.autogestion?.base_url ?? ""
   const initialAutogestionToken = settings?.integrations?.autogestion?.token ?? ""
   const initialAutogestionTimeout = settings?.integrations?.autogestion?.timeout ?? "15"
-  const initialWhatsAppFlowId = settings?.whatsapp?.default_flow_id
-    ?? botFlows.find((flow) => flow.is_default && flow.channels?.includes("whatsapp"))?.id
-    ?? botFlows.find((flow) => flow.channels?.includes("whatsapp"))?.id
-    ?? null
+  const initialWhatsAppFlowId = settings?.whatsapp?.default_flow_id === "none"
+    ? "none"
+    : settings?.whatsapp?.default_flow_id
+      ?? botFlows.find((flow) => flow.is_default && flow.channels?.includes("whatsapp"))?.id
+      ?? botFlows.find((flow) => flow.channels?.includes("whatsapp"))?.id
+      ?? "none"
   const initialInactivityTimeoutMinutes = settings?.bot?.inactivity_timeout_minutes ?? "1440"
   const initialInactivityTimeoutMessage =
     settings?.bot?.inactivity_timeout_message ??
@@ -284,8 +286,8 @@ export default function SettingsPanel({
   const [savedAlephooEndpoints, setSavedAlephooEndpoints] = useState(initialAlephooEndpoints)
   const [savedAlephooV3, setSavedAlephooV3] = useState([initialAlephooV3BaseUrl, initialAlephooV3Username, initialAlephooV3Password, initialAlephooV3Timeout])
   const [savedAutogestion, setSavedAutogestion] = useState([initialAutogestionBaseUrl, initialAutogestionToken, initialAutogestionTimeout])
-  const [whatsappFlowId, setWhatsappFlowId] = useState<number | null>(initialWhatsAppFlowId)
-  const [savedWhatsappFlowId, setSavedWhatsappFlowId] = useState<number | null>(initialWhatsAppFlowId)
+  const [whatsappFlowId, setWhatsappFlowId] = useState<number | "none" | null>(initialWhatsAppFlowId)
+  const [savedWhatsappFlowId, setSavedWhatsappFlowId] = useState<number | "none" | null>(initialWhatsAppFlowId)
   const [savingWhatsappFlow, setSavingWhatsappFlow] = useState(false)
   const [whatsappFlowSaved, setWhatsappFlowSaved] = useState(false)
   const [inactivityTimeoutMinutes, setInactivityTimeoutMinutes] = useState(initialInactivityTimeoutMinutes)
@@ -572,7 +574,7 @@ export default function SettingsPanel({
   }
 
   const handleSaveWhatsappFlow = async () => {
-    if (!whatsappFlowId) return
+    if (whatsappFlowId === null) return
     setSavingWhatsappFlow(true)
     setWhatsappFlowSaved(false)
     try {
@@ -589,13 +591,13 @@ export default function SettingsPanel({
       const payload = await res.json().catch(() => null)
       if (!res.ok) {
         toast.error("No se pudo guardar el flujo de WhatsApp", {
-          description: getErrorMessage(payload, "Elegí un flujo habilitado para WhatsApp."),
+          description: getErrorMessage(payload, "Elegí un flujo activo habilitado para WhatsApp o seleccioná Sin flujo."),
         })
         return
       }
       setSavedWhatsappFlowId(whatsappFlowId)
       setWhatsappFlowSaved(true)
-      toast.success("Flujo de WhatsApp guardado")
+      toast.success(whatsappFlowId === "none" ? "WhatsApp configurado sin flujo" : "Flujo de WhatsApp guardado")
     } catch (error) {
       console.error("Error guardando flujo de WhatsApp:", error)
       toast.error("Error de red", { description: "No se pudo guardar el flujo de WhatsApp." })
@@ -1146,7 +1148,7 @@ export default function SettingsPanel({
             ) : null}
             {activeSettingsSection === "whatsapp" ? (
               <div className="flex flex-col items-center gap-1.5 text-center">
-                <Button className="bg-[#013765] text-white hover:bg-[#024a8a]" onClick={handleSaveWhatsappFlow} disabled={savingWhatsappFlow || !hasUnsavedWhatsappFlowChanges || !whatsappFlowId}>{savingWhatsappFlow ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Guardando...</> : "Guardar flujo de WhatsApp"}</Button>
+                <Button className="bg-[#013765] text-white hover:bg-[#024a8a]" onClick={handleSaveWhatsappFlow} disabled={savingWhatsappFlow || !hasUnsavedWhatsappFlowChanges || whatsappFlowId === null}>{savingWhatsappFlow ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Guardando...</> : "Guardar configuración de WhatsApp"}</Button>
                 <p className="text-xs text-[#013765]/70">{hasUnsavedWhatsappFlowChanges ? "Hay cambios sin guardar." : whatsappFlowSaved ? "Configuración guardada." : "Sin cambios pendientes."}</p>
               </div>
             ) : null}
@@ -1169,32 +1171,33 @@ export default function SettingsPanel({
           <Card className="border-[#dbe5ef] bg-white">
             <CardHeader>
               <CardTitle className="text-[#013765]">Configuración de WhatsApp</CardTitle>
-              <CardDescription className="text-[#013765]/70">Elegí el flujo que iniciará las conversaciones nuevas de WhatsApp.</CardDescription>
+              <CardDescription className="text-[#013765]/70">Elegí el flujo que responderá en WhatsApp o seleccioná “Sin flujo” para desactivar las respuestas automáticas por flujo.</CardDescription>
             </CardHeader>
             <CardContent>
               <SettingsGroup title="Flujo del canal" description="Solo aparecen flujos activos y habilitados para WhatsApp.">
                 <div className="max-w-xl space-y-2">
                   <label className="text-sm font-medium text-[#013765]">Flujo asignado</label>
                   <Select
-                    value={whatsappFlowId ? String(whatsappFlowId) : undefined}
-                    onValueChange={(value) => setWhatsappFlowId(Number(value))}
-                    disabled={botFlows.filter((flow) => flow.channels?.includes("whatsapp")).length === 0}
+                    value={whatsappFlowId === null ? "none" : String(whatsappFlowId)}
+                    onValueChange={(value) => setWhatsappFlowId(value === "none" ? "none" : Number(value))}
                   >
                     <SelectTrigger className="h-20 border-dashed border-[#013765]/25 bg-[#013765]/[0.03] px-3 hover:border-[#013765]/45 hover:bg-[#013765]/[0.06]">
                       <div className="flex min-w-0 items-center gap-3">
                         <span className="grid h-14 w-14 shrink-0 place-items-center rounded-xl bg-white text-[#013765] shadow-sm"><MessageCircle className="h-5 w-5" /></span>
                         <span className="min-w-0 text-left">
-                          <span className="block truncate text-sm font-medium text-[#013765]">{botFlows.find((flow) => flow.id === whatsappFlowId)?.name ?? "Seleccioná un flujo"}</span>
+                          <span className="block truncate text-sm font-medium text-[#013765]">{whatsappFlowId === "none" ? "Sin flujo" : botFlows.find((flow) => flow.id === whatsappFlowId)?.name ?? "Seleccioná un flujo"}</span>
                           <span className="mt-0.5 block text-xs text-[#013765]/65">Hacé clic para cambiarlo</span>
                         </span>
                       </div>
                     </SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="none">Sin flujo</SelectItem>
                       {botFlows.filter((flow) => flow.channels?.includes("whatsapp")).map((flow) => (
                         <SelectItem key={flow.id} value={String(flow.id)}>{flow.name}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-xs text-[#013765]/70">Sin flujo: los mensajes entrantes se guardan en los chats, pero WhatsApp no inicia ni continúa una automatización.</p>
                   {botFlows.filter((flow) => flow.channels?.includes("whatsapp")).length === 0 ? (
                     <p className="text-xs text-amber-700">No hay flujos activos habilitados para WhatsApp.</p>
                   ) : null}
