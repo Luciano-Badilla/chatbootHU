@@ -79,6 +79,23 @@
 }
 
 @layer components {
+  .email-body-editor ul {
+    list-style: disc;
+    margin: 0.5rem 0;
+    padding-left: 1.5rem;
+  }
+
+  .email-body-editor ol {
+    list-style: decimal;
+    margin: 0.5rem 0;
+    padding-left: 1.5rem;
+  }
+
+  .email-body-editor li {
+    display: list-item;
+    padding-left: 0.125rem;
+  }
+
   @keyframes webchat-modal-backdrop-in {
     from { opacity: 0; }
     to { opacity: 1; }

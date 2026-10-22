@@ -9,7 +9,7 @@ import { webchatRateLimitHeaders } from "../lib/webchatRateLimit"
 import { mqttWebSocketUrl } from "../lib/mqtt"
 import StartupCurtain from "../Components/StartupCurtain"
 
-type Option = { id: string; label: string; value?: string | null; description?: string; kind?: string; disabled?: boolean; group_id?: string | null }
+type Option = { id: string; label: string; value?: string | null; url?: string | null; title?: string | null; description?: string; kind?: string; disabled?: boolean; group_id?: string | null }
 type RetryPayload = { message: string; optionId?: string }
 type Message = { id: number | string; sender: "contact" | "user"; sender_subtype?: "contact" | "operator" | "bot"; operator_name?: string | null; body: string | null; created_at?: string; timestamp?: string; message_type?: string | null; media_url?: string | null; media_name?: string | null; interactive_options?: Option[] | null; delivery_status?: "sending" | "failed"; retry_payload?: RetryPayload }
 type WebchatSettings = { enabled: boolean; available: boolean; operators_available?: boolean; operators_scheduled?: boolean; title: string; subtitle: string; logo_url: string; offline_message: string }
@@ -927,6 +927,11 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
 
     if (type === "document" && mediaUrl) return <><a href={mediaUrl} target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-xl bg-slate-100 px-3 py-3 text-slate-800 transition hover:bg-slate-200"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-white text-[#003f73] shadow-sm"><FileText className="h-6 w-6" /></span><span className="min-w-0"><span className="block truncate text-sm font-semibold">{message.media_name || "Documento"}</span><span className="mt-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-500">Abrir documento</span></span></a>{caption ? <p className="px-2 pt-2 whitespace-pre-wrap">{caption}</p> : null}</>
 
+    if (message.bot_node_type === "link_button") {
+      const title = message.interactive_options?.find((option) => option.kind === "url")?.title?.trim()
+      return <>{title ? <p className="px-2 pb-1 font-semibold text-slate-800">{title}</p> : null}{body ? <p className="whitespace-pre-wrap">{body}</p> : null}</>
+    }
+
     if (type === "contacts" || message.bot_node_type === "contact") {
       let data: any = {}
       try { data = JSON.parse(body) } catch { /* El mensaje puede provenir de una integración externa. */ }
@@ -1212,8 +1217,9 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   }
 
   const lastMessageIndex = messages.length - 1
-  const activeOptionGroupId = messages[lastMessageIndex]?.interactive_options?.find((option) => option.group_id)?.group_id
-  const pendingOptionsMessage = messages[lastMessageIndex]?.interactive_options?.length
+  const activeReplyOptions = messages[lastMessageIndex]?.interactive_options?.filter((option) => option.kind !== "url") ?? []
+  const activeOptionGroupId = activeReplyOptions.find((option) => option.group_id)?.group_id
+  const pendingOptionsMessage = activeReplyOptions.length
     ? messages[lastMessageIndex]
     : undefined
   const manualInputLocked = Boolean(pendingOptionsMessage)
@@ -1477,10 +1483,19 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
                   const isBotMessage = message.sender_subtype === "bot"
                   const time = formatMessageTime(message)
                   const richMessage = isRichMessage(message)
-                  const responseToOptions = message.interactive_options?.length
-                    ? messages.slice(index + 1).find((candidate) => candidate.sender === "contact" && message.interactive_options?.some((option) => (option.value ?? option.label) === candidate.body))
+                  const replyOptions = message.interactive_options?.filter((option) => option.kind !== "url") ?? []
+                  const linkOption = message.interactive_options?.find((option) => option.kind === "url")
+                  let linkUrl = ""
+                  try {
+                    const parsedLink = new URL(String(linkOption?.url ?? linkOption?.value ?? ""))
+                    if (parsedLink.protocol === "https:" || parsedLink.protocol === "http:") linkUrl = parsedLink.toString()
+                  } catch {
+                    linkUrl = ""
+                  }
+                  const responseToOptions = replyOptions.length
+                    ? messages.slice(index + 1).find((candidate) => candidate.sender === "contact" && replyOptions.some((option) => (option.value ?? option.label) === candidate.body))
                     : undefined
-                  const selectedOptionId = selectedOptions[String(message.id)] ?? message.interactive_options?.find((option) => (option.value ?? option.label) === responseToOptions?.body)?.id
+                  const selectedOptionId = selectedOptions[String(message.id)] ?? replyOptions.find((option) => (option.value ?? option.label) === responseToOptions?.body)?.id
                   const messagesBefore = messages.slice(0, index)
                   const lastHandoffIndex = messagesBefore.reduce((lastIndex, candidate, candidateIndex) => (
                     candidate.sender_subtype === "bot" && candidate.bot_node_type === "handoff"
@@ -1496,9 +1511,10 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
                     </div> : null}
                     <div className={`max-w-[88%] rounded-2xl text-sm leading-6 sm:max-w-[76%] ${richMessage ? "overflow-hidden p-1.5" : "px-4 py-3"} ${isOwnMessage ? "rounded-br-md bg-[#003f73] text-white shadow-sm" : "rounded-bl-md bg-white text-slate-700 shadow-sm ring-1 ring-slate-200"}`}>
                       {renderMessageContent(message)}
-                      {!isOwnMessage && message.interactive_options?.length ? <div className="mt-3 space-y-2">{message.interactive_options.map((option) => {
+                      {!isOwnMessage && linkOption && linkUrl ? <a href={linkUrl} target="_blank" rel="noopener noreferrer" className="mt-3 flex w-full items-center justify-between gap-3 rounded-xl border border-[#003f73]/20 bg-[#edf4f8] px-3 py-2.5 text-xs font-bold text-[#003f73] transition hover:bg-[#dcebf3]">{linkOption.label}<ArrowUpRight className="h-4 w-4 shrink-0" /></a> : null}
+                      {!isOwnMessage && replyOptions.length ? <div className="mt-3 space-y-2">{replyOptions.map((option) => {
                         const isSelected = selectedOptionId === option.id
-                        const optionGroupId = message.interactive_options?.find((option) => option.group_id)?.group_id
+                        const optionGroupId = replyOptions.find((option) => option.group_id)?.group_id
                         const isCurrentOptionsMessage = index === lastMessageIndex
                           || Boolean(activeOptionGroupId && optionGroupId === activeOptionGroupId)
                         const isLocked = Boolean(selectedOptionId) || !isCurrentOptionsMessage

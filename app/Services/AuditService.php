@@ -759,6 +759,7 @@ class AuditService
                 'list' => 'Lista',
                 'input' => 'Captura de dato',
                 'handoff' => 'Derivar a operador',
+                'email' => 'Enviar correo',
                 'person_lookup' => 'Consulta de persona',
                 'person_create' => 'Alta de paciente',
                 'appointment_lookup' => 'Consulta de turnos activos',

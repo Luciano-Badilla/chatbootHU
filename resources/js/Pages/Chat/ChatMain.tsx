@@ -2193,6 +2193,8 @@ export default function ChatMain({
         return "Nodo: Input"
       case "text":
         return "Nodo: Text"
+      case "link_button":
+        return "Nodo: Botón con enlace"
       case "image":
         return "Nodo: Imagen"
       case "document":
@@ -2344,6 +2346,17 @@ export default function ChatMain({
     const type = message.message_type ?? "text"
     const src = buildMediaSrc(message.media_url || undefined)
     const isSticker = type === "image" && message.body === "[Sticker]"
+
+    if (message.bot_node_type === "link_button") {
+      const title = message.interactive_options?.find((option) => option.kind === "url")?.title?.trim()
+
+      return (
+        <div className="space-y-1">
+          {title ? <p className="text-sm font-semibold leading-relaxed break-words [overflow-wrap:anywhere]">{title}</p> : null}
+          <p className="text-sm font-medium leading-relaxed break-words [overflow-wrap:anywhere]">{message.body ?? ""}</p>
+        </div>
+      )
+    }
 
     if (isSticker && src) {
       const label = message.media_name ?? "Sticker"
@@ -2703,6 +2716,16 @@ export default function ChatMain({
               const isLocationCard = message.message_type === "location"
               const isMediaCard = isVisualMedia || isAudio || isDocument || isContactCard || isLocationCard
               const isBotMessage = message.sender === "user" && message.sender_subtype === "bot"
+              const linkButtonOption = isBotMessage && message.bot_node_type === "link_button"
+                ? message.interactive_options?.find((option) => option.kind === "url")
+                : undefined
+              let linkButtonUrl = ""
+              try {
+                const parsedUrl = new URL(String(linkButtonOption?.url ?? linkButtonOption?.value ?? ""))
+                if (parsedUrl.protocol === "https:" || parsedUrl.protocol === "http:") linkButtonUrl = parsedUrl.toString()
+              } catch {
+                linkButtonUrl = ""
+              }
               const isOperatorMessage = message.sender === "user" && !isBotMessage
               const operatorTooltip = isOperatorMessage
                 ? `${message.operator_name ?? chat?.operator_name ?? "Sin nombre"}`
@@ -2770,12 +2793,25 @@ export default function ChatMain({
                     >
                       {renderMessageContent(message)}
 
+                      {linkButtonOption && linkButtonUrl ? (
+                        <a
+                          href={linkButtonUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={linkButtonUrl}
+                          className="mt-2 inline-flex w-full items-center justify-between gap-3 rounded-lg border border-white/25 bg-white/10 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-white/20"
+                        >
+                          <span className="min-w-0 break-words [overflow-wrap:anywhere]">{linkButtonOption.label}</span>
+                          <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                        </a>
+                      ) : null}
+
                       {message.sender === "user" &&
                         message.sender_subtype === "bot" &&
                         Array.isArray(message.interactive_options) &&
-                        message.interactive_options.length > 0 && (
+                        message.interactive_options.some((option) => option.kind !== "url") && (
                           <div className="mt-2 flex flex-wrap gap-1.5">
-                            {message.interactive_options.map((opt, idx) => (
+                            {message.interactive_options.filter((option) => option.kind !== "url").map((opt, idx) => (
                               <span
                                 key={`${message.id}-opt-${idx}-${opt.id}`}
                                 className="inline-flex max-w-full items-center rounded-full border border-white/30 bg-white/15 px-2 py-0.5 text-[11px] font-medium text-white break-words [overflow-wrap:anywhere]"

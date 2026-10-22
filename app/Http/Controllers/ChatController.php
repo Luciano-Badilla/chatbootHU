@@ -28,6 +28,11 @@ class ChatController extends Controller
     public function index()
     {
         $botName = SystemSetting::query()->where('key', 'webchat.title')->value('value') ?: 'Asistente virtual';
+        $defaultChannelFilter = SystemSetting::query()->where('key', 'chat_panel.default_channel_filter')->value('value') ?: 'all';
+        if (! in_array($defaultChannelFilter, ['all', 'whatsapp', 'webchat'], true)) {
+            $defaultChannelFilter = 'all';
+        }
+
         $chats = Chat::query()
             ->with(['contact', 'messages' => fn ($query) => $query->latest(), 'operator', 'lastOperator', 'botFlow', 'botNode'])
             ->get()
@@ -70,6 +75,9 @@ class ChatController extends Controller
 
         return Inertia::render('MessagePanel', [
             'chats' => $chats,
+            'chatPanel' => [
+                'defaultChannelFilter' => $defaultChannelFilter,
+            ],
         ]);
     }
 

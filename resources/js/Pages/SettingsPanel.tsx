@@ -55,6 +55,9 @@ interface SettingsPanelProps {
       timezone?: string
       language?: string
     }
+    chat_panel?: {
+      default_channel_filter?: "all" | "whatsapp" | "webchat"
+    }
     integrations?: {
       whatsapp?: {
         token?: string
@@ -189,6 +192,7 @@ export default function SettingsPanel({
 }: SettingsPanelProps) {
   const initialTimezone = settings?.general?.timezone ?? "America/Argentina/Buenos_Aires"
   const initialLanguage = settings?.general?.language ?? "es"
+  const initialDefaultChatChannelFilter = settings?.chat_panel?.default_channel_filter ?? "all"
   const initialWhatsappToken = settings?.integrations?.whatsapp?.token ?? ""
   const initialWhatsappWabaId = settings?.integrations?.whatsapp?.waba_id ?? ""
   const initialWhatsappPhoneNumberId = settings?.integrations?.whatsapp?.phone_number_id ?? ""
@@ -236,6 +240,8 @@ export default function SettingsPanel({
   const [language, setLanguage] = useState(initialLanguage)
   const [savedTimezone, setSavedTimezone] = useState(initialTimezone)
   const [savedLanguage, setSavedLanguage] = useState(initialLanguage)
+  const [defaultChatChannelFilter, setDefaultChatChannelFilter] = useState(initialDefaultChatChannelFilter)
+  const [savedDefaultChatChannelFilter, setSavedDefaultChatChannelFilter] = useState(initialDefaultChatChannelFilter)
   const [whatsappToken, setWhatsappToken] = useState(initialWhatsappToken)
   const [whatsappWabaId, setWhatsappWabaId] = useState(initialWhatsappWabaId)
   const [whatsappPhoneNumberId, setWhatsappPhoneNumberId] = useState(initialWhatsappPhoneNumberId)
@@ -330,6 +336,8 @@ export default function SettingsPanel({
     setLanguage(initialLanguage)
     setSavedTimezone(initialTimezone)
     setSavedLanguage(initialLanguage)
+    setDefaultChatChannelFilter(initialDefaultChatChannelFilter)
+    setSavedDefaultChatChannelFilter(initialDefaultChatChannelFilter)
     setWhatsappToken(initialWhatsappToken)
     setWhatsappWabaId(initialWhatsappWabaId)
     setWhatsappPhoneNumberId(initialWhatsappPhoneNumberId)
@@ -363,6 +371,7 @@ export default function SettingsPanel({
   }, [
     initialTimezone,
     initialLanguage,
+    initialDefaultChatChannelFilter,
     initialWhatsappToken,
     initialWhatsappWabaId,
     initialWhatsappPhoneNumberId,
@@ -397,8 +406,8 @@ export default function SettingsPanel({
   }, [])
 
   const hasUnsavedGeneralChanges = useMemo(() => {
-    return timezone !== savedTimezone || language !== savedLanguage
-  }, [timezone, language, savedTimezone, savedLanguage])
+    return timezone !== savedTimezone || language !== savedLanguage || defaultChatChannelFilter !== savedDefaultChatChannelFilter
+  }, [timezone, language, savedTimezone, savedLanguage, defaultChatChannelFilter, savedDefaultChatChannelFilter])
 
   const hasUnsavedIntegrationsChanges = useMemo(() => {
     return (
@@ -483,6 +492,7 @@ export default function SettingsPanel({
         body: JSON.stringify({
           timezone,
           language,
+          default_chat_channel_filter: defaultChatChannelFilter,
         }),
       })
 
@@ -497,9 +507,10 @@ export default function SettingsPanel({
 
       setSavedTimezone(timezone)
       setSavedLanguage(language)
+      setSavedDefaultChatChannelFilter(defaultChatChannelFilter)
       setGeneralSaved(true)
       toast.success("Configuracion general guardada", {
-        description: "Los cambios de zona horaria e idioma se guardaron correctamente.",
+        description: "Los cambios de zona horaria, idioma y panel de chats se guardaron correctamente.",
       })
     } catch (err) {
       console.error("Error de red guardando configuracion general:", err)
@@ -1508,6 +1519,28 @@ export default function SettingsPanel({
                 </p>
               </div>
             </div>
+
+            <SettingsGroup
+              title="Panel de chats"
+              description="Elegí qué canal queda seleccionado automáticamente al entrar al panel de mensajes."
+            >
+              <div className="max-w-md space-y-1.5">
+                <label className="text-sm font-medium text-[#013765]">Filtro de canal predeterminado</label>
+                <Select value={defaultChatChannelFilter} onValueChange={(value: "all" | "whatsapp" | "webchat") => setDefaultChatChannelFilter(value)}>
+                  <SelectTrigger className="border-[#dbe5ef] text-sm text-[#013765]">
+                    <SelectValue placeholder="Seleccioná un filtro" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Sin filtro (todos los canales)</SelectItem>
+                    <SelectItem value="whatsapp">WhatsApp</SelectItem>
+                    <SelectItem value="webchat">Webchat</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-[#013765]/60">
+                  Este filtro se activa al abrir el panel. Después podés cambiarlo desde los botones de canal.
+                </p>
+              </div>
+            </SettingsGroup>
 
           </CardContent>
         </Card>

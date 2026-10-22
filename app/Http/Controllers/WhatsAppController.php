@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\SendBotFlowEmail;
 use App\Models\BotFlow;
 use App\Models\BotNode;
 use App\Models\CampaignRecipient;
@@ -16,6 +17,7 @@ use App\Services\BotInactivityService;
 use App\Services\CampaignMetricsService;
 use App\Services\ChatAssignmentService;
 use App\Support\SpecialtyMatcher;
+use App\Support\EmailHtmlSanitizer;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -40,6 +42,7 @@ class WhatsAppController extends Controller
         private readonly BotInactivityService $botInactivityService,
         private readonly AuditService $auditService,
         private readonly ChatAssignmentService $chatAssignmentService,
+        private readonly EmailHtmlSanitizer $emailHtmlSanitizer,
     ) {}
 
     public function verify(Request $request)
@@ -2103,6 +2106,7 @@ class WhatsAppController extends Controller
             case 'audio':
             case 'location':
             case 'text':
+            case 'link_button':
                 if (in_array(mb_strtolower($text), ['menÃƒÂº', 'menu'], true)) {
                     $menuNode = BotNode::where('flow_id', $currentNode->flow_id)
                         ->where('key', 'menu_principal')
@@ -2275,6 +2279,18 @@ class WhatsAppController extends Controller
 
             $chat->bot_node_id = $node->id;
             $chat->save();
+
+            return;
+        }
+
+        if ($node->type === 'email') {
+            $this->sendBotEmailNode($chat, $node);
+
+            return;
+        }
+
+        if ($node->type === 'link_button') {
+            $this->sendBotLinkButtonNode($chat, $node);
 
             return;
         }
@@ -2486,6 +2502,146 @@ class WhatsAppController extends Controller
             $filename !== '' ? $filename : null,
             $waMessageId,
             $mediaType,
+        );
+    }
+
+    private function sendBotEmailNode(Chat $chat, BotNode $node): void
+    {
+        $settings = $this->nodeSettings($node);
+        $recipient = trim($this->renderTemplate((string) ($settings['recipient'] ?? ''), $chat, $node));
+        $subject = trim(preg_replace('/[\r\n]+/u', ' ', strip_tags($this->renderTemplate((string) ($settings['subject'] ?? ''), $chat, $node))) ?? '');
+        $html = $this->emailHtmlSanitizer->sanitize($this->renderTemplate($node->body ?? '', $chat, $node));
+        $errorTarget = filter_var($settings['error_next_node_id'] ?? null, FILTER_VALIDATE_INT);
+        $successTarget = $node->next_node_id;
+
+        // El nodo se ejecuta desde el mismo motor para WhatsApp y Webchat. La
+        // salida principal significa que el correo quedó aceptado en la cola;
+        // los fallos posteriores del transporte se reintentan en el Job.
+        $node->next_node_id = null;
+
+        if (! filter_var($recipient, FILTER_VALIDATE_EMAIL) || $subject === '' || mb_strlen($subject) > 255 || trim(strip_tags($html)) === '') {
+            $node->next_node_id = $errorTarget ? (int) $errorTarget : null;
+            Log::warning('No se pudo preparar el correo del flujo.', [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'reason' => 'invalid_recipient_subject_or_body',
+            ]);
+
+            return;
+        }
+
+        try {
+            SendBotFlowEmail::dispatch(
+                (int) $chat->id,
+                (int) $node->id,
+                $recipient,
+                $subject,
+                $html,
+            )->afterCommit();
+
+            $node->next_node_id = $successTarget;
+        } catch (\Throwable $exception) {
+            $node->next_node_id = $errorTarget ? (int) $errorTarget : null;
+            Log::warning('No se pudo encolar el correo del flujo.', [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'exception' => $exception::class,
+            ]);
+        }
+    }
+
+    private function sendBotLinkButtonNode(Chat $chat, BotNode $node): void
+    {
+        $settings = $this->nodeSettings($node);
+        $body = trim($this->renderTemplate($node->body ?? '', $chat, $node));
+        $buttonText = trim($this->renderTemplate((string) ($settings['button_text'] ?? 'Abrir enlace'), $chat, $node));
+        $header = trim($this->renderTemplate((string) ($settings['header'] ?? ''), $chat, $node));
+        $destination = trim($this->renderTemplate((string) ($settings['url'] ?? ''), $chat, $node));
+        $parsedUrl = filter_var($destination, FILTER_VALIDATE_URL) ? parse_url($destination) : false;
+        $validUrl = is_array($parsedUrl)
+            && in_array(strtolower((string) ($parsedUrl['scheme'] ?? '')), ['http', 'https'], true)
+            && ! empty($parsedUrl['host'])
+            && mb_strlen($destination) <= 2000;
+
+        if ($body === '' || $buttonText === '' || ! $validUrl) {
+            Log::warning('No se pudo enviar el botón con enlace del flujo.', [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'reason' => 'invalid_body_label_or_url',
+            ]);
+
+            return;
+        }
+
+        $body = mb_substr($body, 0, 1024);
+        $buttonText = mb_substr($buttonText, 0, 20);
+        $header = mb_substr($header, 0, 60);
+        $interactiveOptions = [[
+            'id' => 'link_button_'.$node->id,
+            'label' => $buttonText,
+            'kind' => 'url',
+            'url' => $destination,
+            'value' => $destination,
+            'title' => $header,
+        ]];
+
+        if (($chat->channel ?? 'whatsapp') === 'webchat') {
+            $this->sendWhatsAppText($chat, $body, 'user', 'bot', 'link_button', $interactiveOptions);
+
+            return;
+        }
+
+        $contact = $chat->contact;
+        if (! $contact || ! $contact->whatsapp_id) {
+            Log::warning('No se pudo enviar el botón con enlace: contacto sin WhatsApp.', [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+            ]);
+
+            return;
+        }
+
+        $interactive = [
+            'type' => 'cta_url',
+            'body' => ['text' => $body],
+            'action' => [
+                'name' => 'cta_url',
+                'parameters' => [
+                    'display_text' => $buttonText,
+                    'url' => $destination,
+                ],
+            ],
+        ];
+        if ($header !== '') {
+            $interactive['header'] = ['type' => 'text', 'text' => $header];
+        }
+
+        $payload = [
+            'messaging_product' => 'whatsapp',
+            'recipient_type' => 'individual',
+            'to' => $this->formatPhoneNumber($contact->whatsapp_id),
+            'type' => 'interactive',
+            'interactive' => $interactive,
+        ];
+        $response = Http::withToken($this->whatsappAccessToken())
+            ->post('https://graph.facebook.com/v22.0/'.$this->whatsappPhoneId().'/messages', $payload);
+
+        if ($response->failed()) {
+            Log::error('API Error (sendBotLinkButtonNode): '.$response->body(), [
+                'chat_id' => $chat->id,
+                'node_id' => $node->id,
+                'payload' => $payload,
+            ]);
+
+            return;
+        }
+
+        $this->persistAndPublishOutgoing(
+            $chat,
+            $body,
+            $response->json('messages.0.id'),
+            'link_button',
+            $interactiveOptions,
         );
     }
 
@@ -4917,7 +5073,7 @@ class WhatsAppController extends Controller
         }
 
         // Ã¢Å“â€¦ text y person_lookup pueden ser terminales automÃƒÂ¡ticos
-        if (in_array($sentNode->type, ['text', 'person_lookup', 'person_create', 'appointment_lookup', 'appointment_create', 'appointment_cancel', 'image', 'document', 'video', 'audio', 'location'], true) && empty($sentNode->next_node_id)) {
+        if (in_array($sentNode->type, ['text', 'link_button', 'person_lookup', 'person_create', 'appointment_lookup', 'appointment_create', 'appointment_cancel', 'image', 'document', 'video', 'audio', 'location'], true) && empty($sentNode->next_node_id)) {
             $this->resetChatToStartFromFlow($chat, $flow, 'terminal_text');
             $this->archiveBotChat($chat, 'terminal_text');
 
@@ -4978,6 +5134,10 @@ class WhatsAppController extends Controller
 
     private function shouldAutoAdvance(BotNode $node): bool
     {
+        if ($node->type === 'email') {
+            return true;
+        }
+
         if ($node->type === 'appointment_lookup' && $node->getAttribute('runtime_waiting_input')) {
             return false;
         }

@@ -17,6 +17,7 @@ interface ChatSidebarProps {
   onSelectChat: (chatId: string) => void
   canViewAll?: boolean
   currentOperatorId?: number | null
+  defaultChannelFilter?: "all" | "whatsapp" | "webchat"
 }
 
 function InboxChats({
@@ -144,12 +145,12 @@ function CompactFilterButton({
   )
 }
 
-export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canViewAll = false, currentOperatorId = null }: ChatSidebarProps) {
+export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canViewAll = false, currentOperatorId = null, defaultChannelFilter = "all" }: ChatSidebarProps) {
   const [search, setSearch] = useState("")
   const [statusFilters, setStatusFilters] = useState<Array<"bot" | "assigned" | "pending_assignment" | "archived">>(
     () => canViewAll ? [] : ["assigned"],
   )
-  const [channelFilters, setChannelFilters] = useState<Array<"whatsapp" | "webchat">>([])
+  const [channelFilters, setChannelFilters] = useState<Array<"whatsapp" | "webchat">>(() => defaultChannelFilter === "all" ? [] : [defaultChannelFilter])
   const [now, setNow] = useState(Date.now())
   const [failedAvatars, setFailedAvatars] = useState<Record<string, boolean>>({})
 

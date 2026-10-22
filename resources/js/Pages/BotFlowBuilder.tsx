@@ -1,10 +1,10 @@
 "use client"
 
 import { createPortal } from "react-dom"
-import { memo, useEffect, useMemo, useRef, useState } from "react"
+import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { usePage } from "@inertiajs/react"
 import { toast } from "sonner"
-import { Plus, RefreshCcw, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp, ArrowLeft, PanelLeft, Settings2, X, ArrowDown, InfoIcon, FileText, AudioLines, ImageIcon, Video, Contact, MapPin, ShieldAlert, MessageCircle, Globe2, Check } from "lucide-react"
+import { Plus, RefreshCcw, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp, ArrowLeft, PanelLeft, Settings2, X, ArrowDown, InfoIcon, FileText, AudioLines, ImageIcon, Video, Contact, MapPin, ShieldAlert, MessageCircle, Globe2, Check, Mail, Bold, Italic, Underline, List, ListOrdered, Link2, type LucideIcon } from "lucide-react"
 import {
   applyNodeChanges,
   ReactFlow,
@@ -30,7 +30,7 @@ import "@xyflow/react/dist/style.css"
 import { Button } from "shadcn/components/ui/button"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "shadcn/components/ui/command"
 import { Input } from "shadcn/components/ui/input"
-import { Popover, PopoverContent, PopoverTrigger } from "shadcn/components/ui/popover"
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "shadcn/components/ui/popover"
 import { Textarea } from "shadcn/components/ui/textarea"
 import { Checkbox } from "shadcn/components/ui/checkbox"
 
@@ -51,7 +51,7 @@ import {
 import { cn } from "shadcn/lib/utils"
 import { Badge } from "shadcn/components/ui/badge"
 
-type NodeType = "text" | "buttons" | "list" | "input" | "handoff" | "person_lookup" | "person_create" | "appointment_lookup" | "appointment_create" | "appointment_cancel" | "health_insurance_select" | "health_insurance_plan_select" | "specialty_search" | "doctor_select" | "availability_select" | "image" | "document" | "video" | "audio" | "contact" | "location"
+type NodeType = "text" | "link_button" | "buttons" | "list" | "input" | "handoff" | "email" | "person_lookup" | "person_create" | "appointment_lookup" | "appointment_create" | "appointment_cancel" | "health_insurance_select" | "health_insurance_plan_select" | "specialty_search" | "doctor_select" | "availability_select" | "image" | "document" | "video" | "audio" | "contact" | "location"
 type FlowChannel = "whatsapp" | "webchat"
 
 function FlowChannelOption({
@@ -143,6 +143,569 @@ interface TemplateVariableOption {
   key: string
   label: string
   kind: "builtin" | "flow"
+}
+
+function TemplateVariableSuggestions({
+  options,
+  selectedIndex,
+  onSelect,
+}: {
+  options: TemplateVariableOption[]
+  selectedIndex: number
+  onSelect: (key: string) => void
+}) {
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
+
+  useEffect(() => {
+    optionRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" })
+  }, [selectedIndex])
+
+  if (!options.length) return null
+
+  return (
+    <div className="absolute left-0 top-full z-30 mt-1 w-64 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+      <div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+        Variables disponibles
+      </div>
+      <div className="max-h-56 overflow-y-auto py-1">
+        {options.map((item, index) => (
+          <button
+            ref={(element) => { optionRefs.current[index] = element }}
+            key={`${item.kind}-${item.key}`}
+            type="button"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => onSelect(item.key)}
+            className={cn(
+              "flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-xs transition-colors",
+              index === selectedIndex ? "bg-[#013765] text-white" : "text-slate-700 hover:bg-slate-50",
+            )}
+          >
+            <span className="truncate font-medium">{item.label}</span>
+            <span className={cn(
+              "shrink-0 rounded-full px-2 py-0.5 text-[10px]",
+              index === selectedIndex
+                ? "bg-white/15 text-white"
+                : item.kind === "flow" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600",
+            )}>
+              {item.kind === "flow" ? "flujo" : "sistema"}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function TemplateVariableInput({
+  value,
+  variables,
+  onChange,
+  placeholder,
+  maxLength,
+}: {
+  value: string
+  variables: TemplateVariableOption[]
+  onChange: (value: string) => void
+  placeholder: string
+  maxLength?: number
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState("")
+  const [matchStart, setMatchStart] = useState<number | null>(null)
+  const [cursorPosition, setCursorPosition] = useState<number | null>(null)
+  const [selectedIndex, setSelectedIndex] = useState(0)
+  const filteredOptions = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase()
+    return normalizedQuery
+      ? variables.filter((item) => item.key.toLowerCase().includes(normalizedQuery))
+      : variables
+  }, [query, variables])
+
+  const updateAutocomplete = (nextValue: string, cursor: number | null) => {
+    if (cursor === null) {
+      setOpen(false)
+      return
+    }
+    const match = nextValue.slice(0, cursor).match(/\{\{\s*([A-Za-z0-9._-]*)$/)
+    if (!match || match.index === undefined) {
+      setOpen(false)
+      setMatchStart(null)
+      return
+    }
+    setOpen(true)
+    setQuery(match[1] ?? "")
+    setMatchStart(match.index)
+    setCursorPosition(cursor)
+    setSelectedIndex(0)
+  }
+
+  const insertVariable = (key: string) => {
+    if (matchStart === null || cursorPosition === null) return
+    const currentInput = inputRef.current
+    const currentCursor = currentInput?.selectionStart ?? cursorPosition
+    const token = `{{ ${key} }}`
+    const nextValue = `${value.slice(0, matchStart)}${token}${value.slice(currentCursor)}`
+    onChange(nextValue)
+    setOpen(false)
+    setMatchStart(null)
+    requestAnimationFrame(() => {
+      currentInput?.focus()
+      currentInput?.setSelectionRange(matchStart + token.length, matchStart + token.length)
+    })
+  }
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (!open || !filteredOptions.length) return
+    if (event.key === "ArrowDown") {
+      event.preventDefault()
+      setSelectedIndex((current) => (current + 1) % filteredOptions.length)
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault()
+      setSelectedIndex((current) => (current - 1 + filteredOptions.length) % filteredOptions.length)
+    } else if (event.key === "Enter" || event.key === "Tab") {
+      event.preventDefault()
+      const selected = filteredOptions[selectedIndex]
+      if (selected) insertVariable(selected.key)
+    } else if (event.key === "Escape") {
+      event.preventDefault()
+      setOpen(false)
+    }
+  }
+
+  return (
+    <div className="relative min-w-0 flex-1">
+      <Input
+        ref={inputRef}
+        value={value}
+        onChange={(event) => {
+          onChange(event.target.value)
+          updateAutocomplete(event.target.value, event.target.selectionStart)
+        }}
+        onClick={(event) => updateAutocomplete(event.currentTarget.value, event.currentTarget.selectionStart)}
+        onKeyUp={(event) => updateAutocomplete(event.currentTarget.value, event.currentTarget.selectionStart)}
+        onBlur={() => setTimeout(() => setOpen(false), 120)}
+        onKeyDown={handleKeyDown}
+        placeholder={placeholder}
+        maxLength={maxLength}
+        className="h-9 text-xs"
+      />
+      {open && filteredOptions.length > 0 ? (
+        <TemplateVariableSuggestions options={filteredOptions} selectedIndex={selectedIndex} onSelect={insertVariable} />
+      ) : null}
+    </div>
+  )
+}
+
+type EmailEditorTab = "visual" | "html" | "preview"
+
+const sanitizeEmailPreviewHtml = (html: string) => {
+  if (typeof DOMParser === "undefined") return ""
+
+  const document = new DOMParser().parseFromString(html, "text/html")
+  document.querySelectorAll("script,style,iframe,object,embed,form,svg,math,img,video,audio").forEach((element) => element.remove())
+  const allowedTags = new Set([
+    "A", "B", "BLOCKQUOTE", "BR", "DIV", "EM", "H1", "H2", "H3", "H4", "I", "LI", "OL", "P", "SPAN", "STRONG", "U", "UL",
+    "TABLE", "TBODY", "TD", "TH", "THEAD", "TR",
+  ])
+  const elements = Array.from(document.body.querySelectorAll("*"))
+  elements.reverse().forEach((element) => {
+    if (!allowedTags.has(element.tagName)) {
+      element.replaceWith(...Array.from(element.childNodes))
+      return
+    }
+
+    Array.from(element.attributes).forEach((attribute) => {
+      if (element.tagName === "A" && attribute.name === "href") {
+        const href = attribute.value.trim()
+        if (!/^(https?:|mailto:|tel:)/i.test(href)) element.removeAttribute(attribute.name)
+        return
+      }
+      if (attribute.name !== "title") element.removeAttribute(attribute.name)
+    })
+  })
+
+  return document.body.innerHTML
+}
+
+function EmailBodyEditor({
+  value,
+  variables,
+  onChange,
+}: {
+  value: string
+  variables: TemplateVariableOption[]
+  onChange: (value: string) => void
+}) {
+  const [tab, setTab] = useState<EmailEditorTab>("visual")
+  const editorRef = useRef<HTMLDivElement | null>(null)
+  const htmlRef = useRef<HTMLTextAreaElement | null>(null)
+  const selectionRef = useRef<Range | null>(null)
+  const visualVariableMatchRef = useRef<{ node: Text; start: number; cursor: number } | null>(null)
+  const [variableOpen, setVariableOpen] = useState(false)
+  const [variableQuery, setVariableQuery] = useState("")
+  const [variableMatchStart, setVariableMatchStart] = useState<number | null>(null)
+  const [variableCursorPosition, setVariableCursorPosition] = useState<number | null>(null)
+  const [variableTarget, setVariableTarget] = useState<"visual" | "html">("visual")
+  const [variableSelectedIndex, setVariableSelectedIndex] = useState(0)
+  const [formattingState, setFormattingState] = useState({ bold: false, italic: false, underline: false, unorderedList: false, orderedList: false, link: false })
+  const [linkPopoverOpen, setLinkPopoverOpen] = useState(false)
+  const [linkUrl, setLinkUrl] = useState("")
+  const [linkError, setLinkError] = useState("")
+  const previewHtml = useMemo(() => sanitizeEmailPreviewHtml(value), [value])
+  const filteredVariables = useMemo(() => {
+    const query = variableQuery.trim().toLowerCase()
+    return query ? variables.filter((item) => item.key.toLowerCase().includes(query)) : variables
+  }, [variableQuery, variables])
+
+  useEffect(() => {
+    if (tab === "visual" && editorRef.current && editorRef.current.innerHTML !== value) {
+      editorRef.current.innerHTML = value
+    }
+  }, [tab, value])
+
+  const rememberSelection = () => {
+    const selection = window.getSelection()
+    if (!selection?.rangeCount || !editorRef.current?.contains(selection.anchorNode)) return
+    selectionRef.current = selection.getRangeAt(0).cloneRange()
+  }
+
+  const refreshFormattingState = () => {
+    const editor = editorRef.current
+    const selection = window.getSelection()
+    const anchor = selection?.anchorNode
+    const anchorElement = anchor instanceof Element ? anchor : anchor?.parentElement
+    const formatContext = anchorElement && editor?.contains(anchorElement) ? anchorElement : null
+    const list = formatContext?.closest("ul, ol")
+    setFormattingState({
+      bold: document.queryCommandState("bold"),
+      italic: document.queryCommandState("italic"),
+      underline: document.queryCommandState("underline"),
+      unorderedList: list?.tagName === "UL",
+      orderedList: list?.tagName === "OL",
+      link: Boolean(formatContext?.closest("a")),
+    })
+  }
+
+  const getSelectedLinkHref = () => {
+    const range = selectionRef.current
+    const node = range?.startContainer
+    const element = node instanceof Element ? node : node?.parentElement
+    return element?.closest("a")?.getAttribute("href") ?? ""
+  }
+
+  const updateHtmlVariableAutocomplete = (nextValue: string, cursorPosition: number | null) => {
+    const match = cursorPosition === null
+      ? null
+      : nextValue.slice(0, cursorPosition).match(/\{\{\s*([A-Za-z0-9._-]*)$/)
+    if (!match || match.index === undefined || cursorPosition === null) {
+      setVariableOpen(false)
+      setVariableMatchStart(null)
+      return
+    }
+    setVariableTarget("html")
+    setVariableOpen(true)
+    setVariableQuery(match[1] ?? "")
+    setVariableMatchStart(match.index)
+    setVariableCursorPosition(cursorPosition)
+    setVariableSelectedIndex(0)
+  }
+
+  const updateVisualVariableAutocomplete = () => {
+    const selection = window.getSelection()
+    const node = selection?.anchorNode
+    if (!selection?.rangeCount || !node || node.nodeType !== Node.TEXT_NODE || !editorRef.current?.contains(node)) {
+      setVariableOpen(false)
+      visualVariableMatchRef.current = null
+      return
+    }
+    const textNode = node as Text
+    const cursor = selection.anchorOffset
+    const match = textNode.data.slice(0, cursor).match(/\{\{\s*([A-Za-z0-9._-]*)$/)
+    if (!match || match.index === undefined) {
+      setVariableOpen(false)
+      visualVariableMatchRef.current = null
+      return
+    }
+    setVariableTarget("visual")
+    setVariableOpen(true)
+    setVariableQuery(match[1] ?? "")
+    setVariableMatchStart(match.index)
+    setVariableCursorPosition(cursor)
+    visualVariableMatchRef.current = { node: textNode, start: match.index, cursor }
+    setVariableSelectedIndex(0)
+  }
+
+  const runCommand = (command: string, argument?: string) => {
+    const editor = editorRef.current
+    if (!editor) return
+    editor.focus()
+    const selection = window.getSelection()
+    if (selectionRef.current && selection && editor.contains(selectionRef.current.commonAncestorContainer)) {
+      selection.removeAllRanges()
+      selection.addRange(selectionRef.current)
+    } else if (selection && (!selection.rangeCount || !editor.contains(selection.anchorNode))) {
+      const range = document.createRange()
+      range.selectNodeContents(editor)
+      range.collapse(false)
+      selection.removeAllRanges()
+      selection.addRange(range)
+    }
+    document.execCommand(command, false, argument)
+    onChange(editor.innerHTML)
+    rememberSelection()
+    refreshFormattingState()
+  }
+
+  const openLinkPopover = (open: boolean) => {
+    if (open) {
+      setLinkUrl(getSelectedLinkHref())
+      setLinkError("")
+    }
+    setLinkPopoverOpen(open)
+  }
+
+  const applyLink = () => {
+    const enteredUrl = linkUrl.trim()
+    if (!enteredUrl) {
+      setLinkError("Ingresá una dirección para el enlace.")
+      return
+    }
+    const href = /^(https?:\/\/|mailto:|tel:)/i.test(enteredUrl)
+      ? enteredUrl
+      : /^[\w.-]+\.[a-z]{2,}(?:[/:?#].*)?$/i.test(enteredUrl) ? `https://${enteredUrl}` : ""
+    if (!href) {
+      setLinkError("Usá una dirección web, mailto: o tel:.")
+      return
+    }
+    runCommand("createLink", href)
+    setLinkPopoverOpen(false)
+    setLinkUrl("")
+  }
+
+  const insertVariable = (key: string) => {
+    if (!key) return
+    const token = `{{ ${key} }}`
+
+    if (tab === "html" && htmlRef.current) {
+      const textarea = htmlRef.current
+      const start = variableMatchStart ?? textarea.selectionStart
+      const end = variableCursorPosition ?? textarea.selectionStart
+      const next = `${value.slice(0, start)}${token}${value.slice(end)}`
+      onChange(next)
+      setVariableOpen(false)
+      requestAnimationFrame(() => {
+        textarea.focus()
+        textarea.setSelectionRange(start + token.length, start + token.length)
+      })
+      return
+    }
+
+    const visualMatch = visualVariableMatchRef.current
+    if (!editorRef.current || !visualMatch || !editorRef.current.contains(visualMatch.node)) return
+    editorRef.current.focus()
+    const selection = window.getSelection()
+    if (selection) {
+      const node = visualMatch.node
+      const nextText = `${node.data.slice(0, visualMatch.start)}${token}${node.data.slice(visualMatch.cursor)}`
+      node.data = nextText
+      const range = document.createRange()
+      range.setStart(node, visualMatch.start + token.length)
+      range.collapse(true)
+      selection.removeAllRanges()
+      selection.addRange(range)
+    }
+    onChange(editorRef.current.innerHTML)
+    setVariableOpen(false)
+    visualVariableMatchRef.current = null
+    rememberSelection()
+  }
+
+  const handleVariableKeyDown = (event: KeyboardEvent<HTMLTextAreaElement | HTMLDivElement>) => {
+    if (!variableOpen || !filteredVariables.length) return
+    if (event.key === "ArrowDown") {
+      event.preventDefault()
+      setVariableSelectedIndex((index) => (index + 1) % filteredVariables.length)
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault()
+      setVariableSelectedIndex((index) => (index - 1 + filteredVariables.length) % filteredVariables.length)
+    } else if (event.key === "Enter" || event.key === "Tab") {
+      event.preventDefault()
+      const selected = filteredVariables[variableSelectedIndex]
+      if (selected) insertVariable(selected.key)
+    } else if (event.key === "Escape") {
+      event.preventDefault()
+      setVariableOpen(false)
+    }
+  }
+
+  const toolbarButton = (label: string, Icon: LucideIcon, onClick: () => void, active = false) => (
+    <button
+      key={label}
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={active}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={onClick}
+      className={cn(
+        "inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors",
+        active ? "bg-[#013765] text-white shadow-sm" : "text-slate-600 hover:bg-slate-100 hover:text-[#013765]",
+      )}
+    >
+      <Icon className="h-4 w-4" />
+    </button>
+  )
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-2 py-1.5">
+        <div className="flex items-center gap-1">
+          {([
+            ["visual", "Visual"], ["html", "HTML"], ["preview", "Vista previa"],
+          ] as Array<[EmailEditorTab, string]>).map(([value, label]) => (
+            <button
+              type="button"
+              key={value}
+              onClick={() => setTab(value)}
+              className={cn(
+                "rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors",
+                tab === value ? "bg-white text-[#013765] shadow-sm" : "text-slate-500 hover:text-slate-800",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {tab === "visual" ? (
+          <div className="flex items-center gap-0.5">
+            {toolbarButton("Negrita", Bold, () => runCommand("bold"), formattingState.bold)}
+            {toolbarButton("Cursiva", Italic, () => runCommand("italic"), formattingState.italic)}
+            {toolbarButton("Subrayado", Underline, () => runCommand("underline"), formattingState.underline)}
+            {toolbarButton("Lista", List, () => runCommand("insertUnorderedList"), formattingState.unorderedList)}
+            {toolbarButton("Lista numerada", ListOrdered, () => runCommand("insertOrderedList"), formattingState.orderedList)}
+            <Popover open={linkPopoverOpen} onOpenChange={openLinkPopover}>
+              <PopoverAnchor asChild>
+                <button
+                  type="button"
+                  title="Enlace"
+                  aria-label="Enlace"
+                  aria-pressed={formattingState.link}
+                  onMouseDown={rememberSelection}
+                  onClick={() => openLinkPopover(!linkPopoverOpen)}
+                  className={cn(
+                    "inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors",
+                    formattingState.link ? "bg-[#013765] text-white shadow-sm" : "text-slate-600 hover:bg-slate-100 hover:text-[#013765]",
+                  )}
+                >
+                  <Link2 className="h-4 w-4" />
+                </button>
+              </PopoverAnchor>
+              {linkPopoverOpen ? (
+                <PopoverContent align="end" className="w-72 space-y-2 p-3">
+                <label className="block text-xs font-medium text-slate-700" htmlFor="email-editor-link-url">Dirección del enlace</label>
+                <Input
+                  id="email-editor-link-url"
+                  value={linkUrl}
+                  onChange={(event) => {
+                    setLinkUrl(event.target.value)
+                    setLinkError("")
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault()
+                      applyLink()
+                    } else if (event.key === "Escape") {
+                      setLinkPopoverOpen(false)
+                    }
+                  }}
+                  autoFocus
+                  placeholder="https://..."
+                  className="h-9 text-xs"
+                />
+                {linkError ? <p className="text-[11px] text-red-600">{linkError}</p> : null}
+                <div className="flex justify-end gap-2">
+                  <Button type="button" variant="outline" size="sm" onClick={() => setLinkPopoverOpen(false)}>Cancelar</Button>
+                  <Button type="button" size="sm" onClick={applyLink}>Aplicar enlace</Button>
+                </div>
+                </PopoverContent>
+              ) : null}
+            </Popover>
+          </div>
+        ) : null}
+      </div>
+
+      {tab === "visual" ? (
+        <div className="relative">
+          <div
+            ref={editorRef}
+            contentEditable
+            suppressContentEditableWarning
+            role="textbox"
+            aria-label="Cuerpo del correo"
+            aria-multiline="true"
+            data-placeholder="Escribí el cuerpo del correo..."
+            onInput={(event) => {
+              onChange(event.currentTarget.innerHTML)
+              updateVisualVariableAutocomplete()
+              refreshFormattingState()
+            }}
+            onKeyUp={() => {
+              rememberSelection()
+              updateVisualVariableAutocomplete()
+              refreshFormattingState()
+            }}
+            onMouseUp={() => {
+              rememberSelection()
+              updateVisualVariableAutocomplete()
+              refreshFormattingState()
+            }}
+            onClick={refreshFormattingState}
+            onBlur={() => {
+              rememberSelection()
+              setTimeout(() => setVariableOpen(false), 120)
+            }}
+            onKeyDown={handleVariableKeyDown}
+            className="email-body-editor min-h-40 max-h-72 overflow-y-auto px-3 py-3 text-sm text-slate-800 outline-none"
+          />
+          {variableTarget === "visual" && variableOpen ? (
+            <TemplateVariableSuggestions options={filteredVariables} selectedIndex={variableSelectedIndex} onSelect={insertVariable} />
+          ) : null}
+        </div>
+      ) : tab === "html" ? (
+        <div className="relative">
+          <Textarea
+            ref={htmlRef}
+            value={value}
+            onChange={(event) => {
+              onChange(event.target.value)
+              updateHtmlVariableAutocomplete(event.target.value, event.target.selectionStart)
+            }}
+            onClick={(event) => updateHtmlVariableAutocomplete(event.currentTarget.value, event.currentTarget.selectionStart)}
+            onKeyUp={(event) => updateHtmlVariableAutocomplete(event.currentTarget.value, event.currentTarget.selectionStart)}
+            onBlur={() => setTimeout(() => setVariableOpen(false), 120)}
+            onKeyDown={handleVariableKeyDown}
+            rows={8}
+            className="min-h-40 resize-y rounded-none border-0 font-mono text-xs shadow-none focus-visible:ring-0"
+            placeholder="<p>Hola {{ persona_nombre }}</p>"
+          />
+          {variableTarget === "html" && variableOpen ? (
+            <TemplateVariableSuggestions options={filteredVariables} selectedIndex={variableSelectedIndex} onSelect={insertVariable} />
+          ) : null}
+        </div>
+      ) : (
+        <iframe
+          title="Vista previa del correo"
+          sandbox=""
+          srcDoc={`<!doctype html><html><head><meta charset="utf-8"><style>body{font:14px Arial,sans-serif;color:#334155;line-height:1.6;margin:16px}a{color:#013765}</style></head><body>${previewHtml || "<p style='color:#94a3b8'>La vista previa del correo aparecerá acá.</p>"}</body></html>`}
+          className="h-52 w-full bg-white"
+        />
+      )}
+      <div className="border-t border-slate-100 px-3 py-1.5 text-[10px] text-slate-400">
+        Se permiten formato básico, listas y enlaces. Las variables se reemplazan al enviar.
+      </div>
+    </div>
+  )
 }
 
 type FlowDiagnosticSeverity = "error" | "warning" | "info"
@@ -1103,7 +1666,7 @@ interface LocationSearchResult {
 }
 
 const getNodeBodyMaxLength = (type: NodeType) =>
-  type === "buttons" || type === "list" || type === "image" || type === "video" || type === "document"
+  type === "buttons" || type === "list" || type === "link_button" || type === "image" || type === "video" || type === "document"
     ? INTERACTIVE_MESSAGE_MAX
     : TEXT_MESSAGE_MAX
 
@@ -1111,6 +1674,8 @@ const getNodeTypeLabel = (type: NodeType) => {
   switch (type) {
     case "text":
       return "Texto"
+    case "link_button":
+      return "Botón con enlace"
     case "buttons":
       return "Botones"
     case "list":
@@ -1149,6 +1714,8 @@ const getNodeTypeLabel = (type: NodeType) => {
       return "Contacto"
     case "location":
       return "Ubicación"
+    case "email":
+      return "Enviar correo"
     case "handoff":
       return "Desactivar bot y pasar a operador"
     default:
@@ -1158,6 +1725,7 @@ const getNodeTypeLabel = (type: NodeType) => {
 
 const nodeTypeOptions: NodeType[] = [
   "text",
+  "link_button",
   "image",
   "document",
   "video",
@@ -1167,6 +1735,7 @@ const nodeTypeOptions: NodeType[] = [
   "buttons",
   "list",
   "input",
+  "email",
   "person_lookup",
   "person_create",
   "appointment_lookup",
@@ -1251,6 +1820,8 @@ const isContactNodeType = (type: NodeType) => {
 const isLocationNodeType = (type: NodeType) => {
   return type === "location"
 }
+
+const isEmailNodeType = (type: NodeType) => type === "email"
 
 const validateLocationSettings = (settings: any) => {
   const latitudeRaw = String(settings?.latitude ?? "").trim()
@@ -1530,6 +2101,28 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
   const canSaveNode = useMemo(() => {
     if (!editNode) return false
+    if (isEmailNodeType(editNode.type)) {
+      const recipient = String(editNode.settings?.recipient ?? "").trim()
+      const subject = String(editNode.settings?.subject ?? "").trim()
+      const bodyText = String(editNode.body ?? "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/gi, " ").trim()
+      return recipient.length > 0 && subject.length > 0 && bodyText.length > 0
+    }
+    if (editNode.type === "link_button") {
+      const body = String(editNode.body ?? "").trim()
+      const label = String(editNode.settings?.button_text ?? "").trim()
+      const url = String(editNode.settings?.url ?? "").trim()
+      const urlWithoutVariables = url.replace(/\{\{\s*[^{}]+\s*\}\}/g, "variable")
+      const isVariableUrl = /^\{\{\s*[A-Za-z0-9._-]+\s*\}\}$/.test(url)
+      let hasHttpUrl = false
+      try {
+        const parsedUrl = new URL(urlWithoutVariables)
+        hasHttpUrl = parsedUrl.protocol === "https:" || parsedUrl.protocol === "http:"
+      } catch {
+        hasHttpUrl = false
+      }
+
+      return body.length > 0 && label.length > 0 && (hasHttpUrl || isVariableUrl)
+    }
     if (editNode.type === "input") {
       const mode = editNode.settings?.response_mode ?? "text"
       const hasOptions =
@@ -2077,7 +2670,15 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         key,
         type: newNodeType,
         body: newNodeType === "person_create" ? "Tus datos fueron registrados correctamente." : "",
-        settings: newNodeType === "person_create" ? {
+        settings: newNodeType === "email" ? {
+          recipient: "{{ persona_email }}",
+          subject: "",
+          error_next_node_id: null,
+        } : newNodeType === "link_button" ? {
+          button_text: "Abrir enlace",
+          url: "",
+          header: "",
+        } : newNodeType === "person_create" ? {
           dni_variable: "dni",
           first_name_variable: "registro_nombres",
           last_name_variable: "registro_apellidos",
@@ -2675,6 +3276,17 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
       return [name || address || "Ubicación sin configurar", latitude && longitude ? `${latitude}, ${longitude}` : ""].filter(Boolean).join(" · ").slice(0, 90)
     }
 
+    if (isEmailNodeType(node.type)) {
+      const recipient = String(node.settings?.recipient ?? "Destinatario sin configurar").trim()
+      const subject = String(node.settings?.subject ?? "Asunto sin configurar").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim()
+      return `${recipient} · ${subject}`.slice(0, 90)
+    }
+
+    if (node.type === "link_button") {
+      const label = String(node.settings?.button_text ?? "Botón sin configurar").trim()
+      return `${label} · ${String(node.settings?.url ?? "Enlace sin configurar").trim()}`.slice(0, 90)
+    }
+
     if (node.type === "audio") {
       return ""
     }
@@ -2762,7 +3374,24 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         targetLabel: getNodeLabel(errorTargetId),
         tone: "danger",
       })
-    } else if (node.type === "text" || isMediaNodeType(node.type) || isContactNodeType(node.type) || isLocationNodeType(node.type) || (node.type === "input" && settings.response_mode !== "buttons" && settings.response_mode !== "list")) {
+    } else if (isEmailNodeType(node.type)) {
+      const successTargetId = node.next_node_id ? Number(node.next_node_id) : null
+      const errorTargetId = settings.error_next_node_id ? Number(settings.error_next_node_id) : null
+      branches.push({
+        id: `email-success-${node.id}`,
+        label: "Encolado",
+        targetId: successTargetId,
+        targetLabel: getNodeLabel(successTargetId),
+        tone: "success",
+      })
+      branches.push({
+        id: `email-error-${node.id}`,
+        label: "Error",
+        targetId: errorTargetId,
+        targetLabel: getNodeLabel(errorTargetId),
+        tone: "danger",
+      })
+    } else if (node.type === "text" || node.type === "link_button" || isMediaNodeType(node.type) || isContactNodeType(node.type) || isLocationNodeType(node.type) || (node.type === "input" && settings.response_mode !== "buttons" && settings.response_mode !== "list")) {
       const targetId = node.next_node_id ? Number(node.next_node_id) : null
       branches.push({
         id: `next-${node.id}`,
@@ -2911,7 +3540,11 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
     const producedVariables = (node: BotNode): string[] => {
       if (node.type === "input") return [String(node.settings?.variable ?? "").trim()].filter(Boolean)
-      if (node.type === "person_lookup") return ["persona_id"]
+      if (node.type === "person_lookup") return [
+        "persona_encontrada", "persona_lookup_status", "persona_id", "persona_nombres", "persona_apellidos", "persona_documento",
+        "persona_fecha_nacimiento", "persona_genero", "persona_obra_social", "persona_obra_social_id", "persona_plan_id",
+        "persona_email", "persona_contacto_telefono", "persona_contacto_telefono_2", "persona_planes_activos",
+      ]
       if (node.type === "person_create") return ["persona_creada", "persona_create_status", "persona_id", "persona_domicilio_calle", "persona_domicilio_numero"]
       if (node.type === "appointment_lookup") return ["turnos", "turno_id"]
       if (node.type === "health_insurance_select") return ["registro_obra_social_id", "registro_obra_social_nombre"]
@@ -2923,6 +3556,13 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     }
     const requiredVariables = (node: BotNode): string[] => {
       const settings = node.settings ?? {}
+      if (node.type === "email") {
+        const templates = [settings.recipient, settings.subject, node.body].filter(Boolean).join("\n")
+        const builtins = new Set(["chat.id", "chat.status", "contact.name", "contact.whatsapp_id", "flow.id", "node.id", "node.key"])
+        return Array.from(templates.matchAll(/\{\{\s*([^}|]+)(?:\|[^}]*)?\s*\}\}/gu))
+          .map((match) => String(match[1]).trim())
+          .filter((variable, index, variables) => Boolean(variable) && !builtins.has(variable) && variables.indexOf(variable) === index)
+      }
       if (node.type === "person_lookup") return [settings.dni_variable ?? "dni"]
       if (node.type === "person_create") {
         return [
@@ -2999,7 +3639,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     const autoNode = (nodeId: number) => {
       const node = nodes.find((item) => item.id === nodeId)
       if (!node) return false
-      return ["person_lookup", "person_create", "appointment_lookup", "appointment_create", "appointment_cancel"].includes(node.type)
+      return ["person_lookup", "person_create", "appointment_lookup", "appointment_create", "appointment_cancel", "email"].includes(node.type)
         || Boolean(node.settings?.auto_advance)
     }
     const visiting = new Set<number>()
@@ -3187,18 +3827,25 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           canDelete: !isReadOnly,
           canSource:
             node.type === "text" ||
+            node.type === "link_button" ||
             isMediaNodeType(node.type) ||
             isContactNodeType(node.type) ||
             isLocationNodeType(node.type) ||
             isAlephooSelectionNodeType(node.type) ||
+            isEmailNodeType(node.type) ||
             node.type === "input" ||
             isAlephooBranchNodeType(node.type) ||
             node.type === "buttons" ||
             node.type === "list",
-          canToggleAutoAdvance: !isReadOnly && (node.type === "text" || isMediaNodeType(node.type) || isContactNodeType(node.type) || isLocationNodeType(node.type)),
+          canToggleAutoAdvance: !isReadOnly && (node.type === "text" || node.type === "link_button" || isMediaNodeType(node.type) || isContactNodeType(node.type) || isLocationNodeType(node.type)),
           autoAdvanceEnabled: Boolean(node.settings?.auto_advance),
           sourceHandles:
-            isAlephooBranchNodeType(node.type)
+            isEmailNodeType(node.type)
+              ? [
+                { id: "success", label: "Encolado", tone: "success" as const, hasConnection: Boolean(node.next_node_id) },
+                { id: "error", label: "Error", tone: "danger" as const, hasConnection: Boolean(node.settings?.error_next_node_id) },
+              ]
+              : isAlephooBranchNodeType(node.type)
               ? [
                 {
                   id: "success",
@@ -3233,7 +3880,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     tone: branch.tone ?? "default",
                     hasConnection: Boolean(branch.targetId),
                   }))
-                  : node.type === "text" || isMediaNodeType(node.type) || isContactNodeType(node.type) || isLocationNodeType(node.type) || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
+              : isEmailNodeType(node.type)
+                ? branch.tone === "success" ? "success" : "error"
+                : node.type === "text" || node.type === "link_button" || isMediaNodeType(node.type) || isContactNodeType(node.type) || isLocationNodeType(node.type) || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
                     ? [{ id: "next", label: "Siguiente", tone: "default" as const, hasConnection: Boolean(node.next_node_id) }]
                     : [],
           deleting: deletingNodeId === node.id,
@@ -3313,6 +3962,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               node.type === "list" ||
               (node.type === "input" && (node.settings?.response_mode === "buttons" || node.settings?.response_mode === "list"))
               ? branch.id
+              : isEmailNodeType(node.type)
+                ? branch.tone === "success" ? "success" : "error"
               : isAlephooBranchNodeType(node.type)
                 ? branch.tone === "success"
                   ? "success"
@@ -3321,7 +3972,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                     : branch.tone === "danger"
                       ? "error"
                       : undefined
-                : node.type === "text" || isMediaNodeType(node.type) || isContactNodeType(node.type) || isLocationNodeType(node.type) || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
+              : node.type === "text" || node.type === "link_button" || isMediaNodeType(node.type) || isContactNodeType(node.type) || isLocationNodeType(node.type) || (node.type === "input" && node.settings?.response_mode !== "buttons" && node.settings?.response_mode !== "list")
                   ? "next"
                   : undefined,
           label: branch.label === "Siguiente" ? undefined : branch.label,
@@ -3403,9 +4054,11 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     if (!sourceNode) return
     if (!(
       sourceNode.type === "text" ||
+      sourceNode.type === "link_button" ||
       isMediaNodeType(sourceNode.type) ||
       isContactNodeType(sourceNode.type) ||
       isLocationNodeType(sourceNode.type) ||
+      isEmailNodeType(sourceNode.type) ||
       isAlephooSelectionNodeType(sourceNode.type) ||
       sourceNode.type === "input" ||
       isAlephooBranchNodeType(sourceNode.type) ||
@@ -3419,7 +4072,11 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     const settings = sourceNode.settings ?? {}
 
     const patch: Partial<BotNode> =
-      isAlephooBranchNodeType(sourceNode.type)
+      isEmailNodeType(sourceNode.type)
+        ? sourceHandle === "error"
+          ? { settings: { ...settings, error_next_node_id: targetId } as any }
+          : { next_node_id: targetId }
+        : isAlephooBranchNodeType(sourceNode.type)
         ? sourceHandle === "not_found"
           ? {
             settings: {
@@ -3464,7 +4121,11 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         node.id === sourceId
           ? {
             ...node,
-            ...(isAlephooBranchNodeType(sourceNode.type)
+            ...(isEmailNodeType(sourceNode.type)
+              ? sourceHandle === "error"
+                ? { settings: { ...(node.settings ?? {}), error_next_node_id: targetId } }
+                : { next_node_id: targetId }
+              : isAlephooBranchNodeType(sourceNode.type)
               ? sourceHandle === "not_found"
                 ? {
                   settings: {
@@ -3519,7 +4180,11 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     const settings = sourceNode.settings ?? {}
 
     const patch: Partial<BotNode> =
-      isAlephooBranchNodeType(sourceNode.type)
+      isEmailNodeType(sourceNode.type)
+        ? sourceHandle === "error"
+          ? { settings: { ...settings, error_next_node_id: null } as any }
+          : { next_node_id: null }
+        : isAlephooBranchNodeType(sourceNode.type)
         ? sourceHandle === "not_found"
           ? {
             settings: {
@@ -3564,7 +4229,11 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         node.id === sourceId
           ? {
             ...node,
-            ...(isAlephooBranchNodeType(sourceNode.type)
+            ...(isEmailNodeType(sourceNode.type)
+              ? sourceHandle === "error"
+                ? { settings: { ...(node.settings ?? {}), error_next_node_id: null } }
+                : { next_node_id: null }
+              : isAlephooBranchNodeType(sourceNode.type)
               ? sourceHandle === "not_found"
                 ? {
                   settings: {
@@ -3842,6 +4511,138 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     if (!editNode) return null
 
     const t = editNode.type
+
+    if (t === "email") {
+      const settings = ensureSettings<{ recipient: string; subject: string; error_next_node_id: number | null }>({
+        recipient: "{{ persona_email }}",
+        subject: "",
+        error_next_node_id: null,
+      })
+      const updateEmailSetting = (field: string, value: unknown) => {
+        setEditNode((previous) => previous ? {
+          ...previous,
+          settings: { ...(previous.settings ?? {}), [field]: value },
+        } : previous)
+      }
+
+      return (
+        <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+            <Mail className="h-4 w-4 text-[#013765]" />
+            Configuración del correo
+          </div>
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-slate-700">Destinatario</label>
+            <Select
+              value={settings.recipient || "none"}
+              onValueChange={(value) => updateEmailSetting("recipient", value === "none" ? "" : value)}
+            >
+              <SelectTrigger className="h-9 text-xs">
+                <SelectValue placeholder="Seleccioná una variable de correo" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Seleccionar variable...</SelectItem>
+                {templateVariableOptions.filter((item) => item.kind === "flow").map((item) => (
+                  <SelectItem key={`${item.kind}-${item.key}`} value={`{{ ${item.key} }}`}>{item.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-[10px] text-slate-500">Elegí una variable que contenga el correo del destinatario, por ejemplo {"{{ persona_email }}"}.</p>
+          </div>
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-slate-700">Asunto</label>
+            <TemplateVariableInput
+              value={settings.subject ?? ""}
+              variables={templateVariableOptions}
+              onChange={(subject) => updateEmailSetting("subject", subject)}
+              placeholder="Asunto del correo"
+              maxLength={255}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-slate-700">Cuerpo del correo</label>
+            <EmailBodyEditor
+              value={editNode.body ?? ""}
+              variables={templateVariableOptions}
+              onChange={(body) => setEditNode((previous) => previous ? { ...previous, body } : previous)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-slate-700">Siguiente nodo si hay error</label>
+            <Select
+              value={settings.error_next_node_id ? String(settings.error_next_node_id) : "none"}
+              onValueChange={(value) => updateEmailSetting("error_next_node_id", value === "none" ? null : Number(value))}
+            >
+              <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Sin ruta de error" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Finalizar flujo</SelectItem>
+                {nextNodeOptions.map((option) => (
+                  <SelectItem key={option.id} value={String(option.id)}>{option.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="rounded-md border border-sky-100 bg-sky-50 px-3 py-2 text-[10px] leading-relaxed text-sky-800">
+            Este nodo no publica contenido en el chat. El correo se encola al ejecutar el flujo; si falla la validación o el encolado, continúa por la salida Error.
+          </div>
+        </div>
+      )
+    }
+
+    if (t === "link_button") {
+      const settings = ensureSettings<{ button_text: string; url: string; header: string }>({
+        button_text: "Abrir enlace",
+        url: "",
+        header: "",
+      })
+      const updateLinkSetting = (field: string, value: string) => {
+        setEditNode((previous) => previous ? {
+          ...previous,
+          settings: { ...(previous.settings ?? {}), [field]: value },
+        } : previous)
+      }
+
+      return (
+        <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+            <Link2 className="h-4 w-4 text-[#013765]" />
+            Configuración del botón con enlace
+          </div>
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-slate-700">Encabezado (opcional)</label>
+            <TemplateVariableInput
+              value={settings.header ?? ""}
+              variables={templateVariableOptions}
+              onChange={(value) => updateLinkSetting("header", value)}
+              placeholder="Título del mensaje"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-slate-700">Texto del botón</label>
+            <TemplateVariableInput
+              value={settings.button_text ?? "Abrir enlace"}
+              variables={templateVariableOptions}
+              onChange={(value) => updateLinkSetting("button_text", value)}
+              placeholder="Abrir enlace"
+            />
+            <p className="text-[10px] text-slate-500">WhatsApp admite hasta 20 caracteres en el botón.</p>
+          </div>
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-slate-700">URL de destino</label>
+            <TemplateVariableInput
+              value={settings.url ?? ""}
+              variables={templateVariableOptions}
+              onChange={(value) => updateLinkSetting("url", value)}
+              placeholder="https://ejemplo.com"
+            />
+            <p className="text-[10px] text-slate-500">Usá una dirección http o https. También podés completar la URL con variables del flujo.</p>
+          </div>
+          <div className="rounded-md border border-sky-100 bg-sky-50 px-3 py-2 text-[10px] leading-relaxed text-sky-800">
+            Este nodo funciona en ambos canales: WhatsApp envía su botón de enlace y Webchat abre el destino en una pestaña nueva.
+          </div>
+        </div>
+      )
+    }
 
     if (t === "buttons") {
       const settings = ensureSettings<{ buttons: any[] }>({
@@ -5945,7 +6746,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     return null
   }
 
-  const isLinearType = (t: NodeType) => t === "text" || t === "input" || isAlephooBranchNodeType(t) || isMediaNodeType(t) || isContactNodeType(t) || isLocationNodeType(t)
+  const isLinearType = (t: NodeType) => t === "text" || t === "link_button" || t === "input" || isEmailNodeType(t) || isAlephooBranchNodeType(t) || isMediaNodeType(t) || isContactNodeType(t) || isLocationNodeType(t)
 
   const getBranchToneClass = (tone?: BranchTone) => {
     switch (tone) {
@@ -6685,8 +7486,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                     setEditNode((prev) => {
                                       if (!prev) return prev
 
-                                      const linear = val === "text" || val === "input" || isAlephooBranchNodeType(val) || isMediaNodeType(val) || isContactNodeType(val) || isLocationNodeType(val)
-                                      const supportsAutoAdvance = val === "text" || isMediaNodeType(val) || isContactNodeType(val) || isLocationNodeType(val)
+                                      const linear = val === "text" || val === "link_button" || val === "input" || isEmailNodeType(val) || isAlephooBranchNodeType(val) || isMediaNodeType(val) || isContactNodeType(val) || isLocationNodeType(val)
+                                      const supportsAutoAdvance = val === "text" || val === "link_button" || isMediaNodeType(val) || isContactNodeType(val) || isLocationNodeType(val)
 
                                       const cleanedSettings = (() => {
                                         const s = { ...(prev.settings ?? {}) }
@@ -6696,6 +7497,27 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                           delete s.auto_advance
                                           delete s.auto_advance_delay_ms
                                           delete s.auto_advance_max_hops
+                                        }
+
+                                        if (isEmailNodeType(val)) {
+                                          const keepExistingEmail = isEmailNodeType(prev.type)
+                                          return {
+                                            ...(s.canvas_position ? { canvas_position: s.canvas_position } : {}),
+                                            recipient: keepExistingEmail ? (s.recipient ?? "{{ persona_email }}") : "{{ persona_email }}",
+                                            subject: keepExistingEmail ? (s.subject ?? "") : "",
+                                            error_next_node_id: keepExistingEmail ? (s.error_next_node_id ?? null) : null,
+                                          }
+                                        }
+
+                                        if (val === "link_button") {
+                                          const keepExistingLinkButton = prev.type === "link_button"
+                                          return {
+                                            ...(s.canvas_position ? { canvas_position: s.canvas_position } : {}),
+                                            ...(s.auto_advance ? { auto_advance: s.auto_advance } : {}),
+                                            button_text: keepExistingLinkButton ? (s.button_text ?? "Abrir enlace") : "Abrir enlace",
+                                            url: keepExistingLinkButton ? (s.url ?? "") : "",
+                                            header: keepExistingLinkButton ? (s.header ?? "") : "",
+                                          }
                                         }
 
                                         // opcional: si querés, al pasar a buttons/list/handoff también podés limpiar otras cosas
@@ -6753,6 +7575,16 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                                           delete s.latitude
                                           delete s.longitude
                                         }
+                                        if (isEmailNodeType(prev.type)) {
+                                          delete s.recipient
+                                          delete s.subject
+                                          delete s.error_next_node_id
+                                        }
+                                        if (prev.type === "link_button") {
+                                          delete s.button_text
+                                          delete s.url
+                                          delete s.header
+                                        }
 
                                         return s
                                       })()
@@ -6787,7 +7619,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                             </div>
 
                             {/* Texto principal */}
-                            {!["audio", "contact", "location"].includes(editNode.type) ? (
+                            {!["audio", "contact", "location", "email"].includes(editNode.type) ? (
                             <div className="relative">
                               <div className="mb-1 flex items-center gap-2">
                                 <label className="text-xs block text-muted-foreground">
@@ -6970,7 +7802,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                               )}
 
                             {/* Auto-disparo */}
-                            {(editNode.type === "text" || isMediaNodeType(editNode.type) || isContactNodeType(editNode.type) || isLocationNodeType(editNode.type)) && (
+                            {(editNode.type === "text" || editNode.type === "link_button" || isMediaNodeType(editNode.type) || isContactNodeType(editNode.type) || isLocationNodeType(editNode.type)) && (
                               <div className="border rounded-lg p-3 bg-muted/20 space-y-2">
                                 <div className="flex items-center gap-2">
                                   <Checkbox

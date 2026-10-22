@@ -63,6 +63,9 @@ export type Message = {
   interactive_options?: Array<{
     id: string
     label: string
+    url?: string | null
+    value?: string | null
+    title?: string | null
     description?: string
     kind?: "button" | "list" | string
   }> | null
@@ -840,6 +843,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
           onSelectChat={requestChatSelection}
           canViewAll={Boolean(props?.auth?.permissions?.can_view_all_chats)}
           currentOperatorId={authUser?.id ?? null}
+          defaultChannelFilter={props?.chatPanel?.defaultChannelFilter ?? "all"}
         />
       </div>
 

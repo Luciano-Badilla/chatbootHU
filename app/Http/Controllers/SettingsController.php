@@ -32,6 +32,7 @@ class SettingsController extends Controller
             ->whereIn('key', [
                 'general.timezone',
                 'general.language',
+                'chat_panel.default_channel_filter',
                 'integrations.whatsapp.token',
                 'integrations.whatsapp.waba_id',
                 'integrations.whatsapp.phone_number_id',
@@ -104,6 +105,11 @@ class SettingsController extends Controller
                 'general' => [
                     'timezone' => $settings['general.timezone'] ?? 'America/Argentina/Buenos_Aires',
                     'language' => $settings['general.language'] ?? 'es',
+                ],
+                'chat_panel' => [
+                    'default_channel_filter' => in_array($settings['chat_panel.default_channel_filter'] ?? 'all', ['all', 'whatsapp', 'webchat'], true)
+                        ? ($settings['chat_panel.default_channel_filter'] ?? 'all')
+                        : 'all',
                 ],
                 'integrations' => [
                     'whatsapp' => [
@@ -189,11 +195,15 @@ class SettingsController extends Controller
         $data = $request->validate([
             'timezone' => ['required', 'timezone'],
             'language' => ['required', 'in:es,en'],
+            'default_chat_channel_filter' => ['sometimes', 'required', 'in:all,whatsapp,webchat'],
         ]);
+
+        $data['default_chat_channel_filter'] ??= $this->settingValue('chat_panel.default_channel_filter', 'all');
 
         $before = [
             'timezone' => $this->settingValue('general.timezone', 'America/Argentina/Buenos_Aires'),
             'language' => $this->settingValue('general.language', 'es'),
+            'default_chat_channel_filter' => $this->settingValue('chat_panel.default_channel_filter', 'all'),
         ];
 
         SystemSetting::updateOrCreate(
@@ -206,9 +216,15 @@ class SettingsController extends Controller
             ['value' => $data['language']],
         );
 
+        SystemSetting::updateOrCreate(
+            ['key' => 'chat_panel.default_channel_filter'],
+            ['value' => $data['default_chat_channel_filter']],
+        );
+
         $after = [
             'timezone' => $data['timezone'],
             'language' => $data['language'],
+            'default_chat_channel_filter' => $data['default_chat_channel_filter'],
         ];
 
         $this->auditService->recordSettingsChange('general', $before, $after, $request->user());
@@ -219,6 +235,9 @@ class SettingsController extends Controller
                 'general' => [
                     'timezone' => $data['timezone'],
                     'language' => $data['language'],
+                ],
+                'chat_panel' => [
+                    'default_channel_filter' => $data['default_chat_channel_filter'],
                 ],
             ],
         ]);
@@ -1131,7 +1150,7 @@ class SettingsController extends Controller
 
     protected function importSettings(array $settings): array
     {
-        $allowedPrefixes = ['general.', 'integrations.', 'bot.', 'operators.', 'whatsapp.', 'webchat.'];
+        $allowedPrefixes = ['general.', 'integrations.', 'bot.', 'operators.', 'whatsapp.', 'webchat.', 'chat_panel.'];
         $imported = 0;
 
         foreach ($settings as $key => $value) {
