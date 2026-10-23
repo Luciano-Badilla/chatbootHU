@@ -7,7 +7,6 @@ use App\Models\Chat;
 use App\Models\Message;
 use App\Models\SystemSetting;
 use Carbon\Carbon;
-use Illuminate\Support\Env;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
@@ -338,8 +337,13 @@ class BotInactivityService
         ]);
 
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_inactivity_' . uniqid());
-            $mqtt->connect();
+            $host = env('MQTT_HOST') ?: env('VITE_MOSQUITTO_HOST');
+            if (! $host) {
+                throw new \RuntimeException('MQTT host not configured.');
+            }
+
+            $mqtt = new MqttClient((string) $host, 1883, 'laravel_send_inactivity_' . uniqid());
+            $mqtt->connect((new ConnectionSettings())->setConnectTimeout(1)->setSocketTimeout(1));
 
             $mqtt->publish('sidebar/chat', json_encode([
                 'chat_id' => $chat->id,

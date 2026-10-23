@@ -27,7 +27,6 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use PhpMqtt\Client\ConnectionSettings;
-use PhpMqtt\Client\Exceptions\MqttClientException;
 use PhpMqtt\Client\MqttClient;
 
 class WhatsAppController extends Controller
@@ -165,7 +164,7 @@ class WhatsAppController extends Controller
 
         try {
             $mqtt = new MqttClient((string) $host, 1883, 'laravel_msg_status_'.uniqid());
-            $mqtt->connect();
+            $mqtt->connect($this->mqttConnectionSettings());
             $mqtt->publish("chat/{$message->chat_id}/status", json_encode([
                 'chat_id' => (int) $message->chat_id,
                 'message_id' => (int) $message->id,
@@ -510,8 +509,8 @@ class WhatsAppController extends Controller
         // 9) MQTT (mensaje entrante)
         // --------------------------------
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_recv_'.uniqid());
-            $mqtt->connect();
+            $mqtt = new MqttClient($this->mqttHost(), 1883, 'laravel_recv_'.uniqid());
+            $mqtt->connect($this->mqttConnectionSettings());
 
             // Sidebar
             $mqtt->publish('sidebar/chat', json_encode([
@@ -543,7 +542,7 @@ class WhatsAppController extends Controller
             ]), 0);
 
             $mqtt->disconnect();
-        } catch (MqttClientException $e) {
+        } catch (\Throwable $e) {
             Log::error('MQTT Error (receiveMessage): '.$e->getMessage());
         }
 
@@ -982,8 +981,27 @@ class WhatsAppController extends Controller
                 }
             }
 
+            // Guardar la copia local antes de enviar el mensaje a Meta. Así,
+            // un problema de permisos/disco no deja un mensaje enviado sin
+            // registro ni archivo disponible en el panel.
+            $storedName = uniqid($messageType.'_').'_'.preg_replace('/[^A-Za-z0-9._-]/', '_', $originalName);
+            $localPath = "whatsapp/{$chat->id}/{$storedName}";
+            $stored = Storage::disk('public')->put($localPath, file_get_contents($file->getRealPath()));
+            if (! $stored) {
+                throw new \RuntimeException('No se pudo guardar la copia local del media de WhatsApp.');
+            }
+            $publicMediaUrl = '/storage/'.$localPath;
+
             $sendResponse = Http::withToken($accessToken)->post($sendUrl, $payload);
             if ($sendResponse->failed()) {
+                try {
+                    Storage::disk('public')->delete($localPath);
+                } catch (\Throwable $cleanupError) {
+                    Log::warning('No se pudo eliminar la copia local de un media rechazado por WhatsApp: '.$cleanupError->getMessage(), [
+                        'chat_id' => $chat->id,
+                        'path' => $localPath,
+                    ]);
+                }
                 Log::error('API Error (sendMedia message): '.$sendResponse->body());
                 $this->auditService->recordMessageAction(
                     'media_send_failed',
@@ -1003,13 +1021,7 @@ class WhatsAppController extends Controller
                 return response()->json(['error' => 'Error enviando media a WhatsApp'], 500);
             }
 
-            // 3) Guardar copia local para previsualizaciÃƒÂ³n en front
-            $storedName = uniqid($messageType.'_').'_'.preg_replace('/[^A-Za-z0-9._-]/', '_', $originalName);
-            $localPath = "whatsapp/{$chat->id}/{$storedName}";
-            Storage::disk('public')->put($localPath, file_get_contents($file->getRealPath()));
-            $publicMediaUrl = '/storage/'.$localPath;
-
-            // 4) Persistir mensaje
+            // 3) Persistir mensaje
             $body = $caption !== '' ? $caption : null;
             $message = Message::create([
                 'chat_id' => $chat->id,
@@ -1055,8 +1067,8 @@ class WhatsAppController extends Controller
             }
 
             try {
-                $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_media_'.uniqid());
-                $mqtt->connect();
+                $mqtt = new MqttClient($this->mqttHost(), 1883, 'laravel_send_media_'.uniqid());
+                $mqtt->connect($this->mqttConnectionSettings());
 
                 $mqtt->publish('sidebar/chat', json_encode([
                     'chat_id' => $chat->id,
@@ -1271,8 +1283,8 @@ class WhatsAppController extends Controller
         );
 
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_contact_'.uniqid());
-            $mqtt->connect();
+            $mqtt = new MqttClient($this->mqttHost(), 1883, 'laravel_send_contact_'.uniqid());
+            $mqtt->connect($this->mqttConnectionSettings());
 
             $mqtt->publish('sidebar/chat', json_encode([
                 'chat_id' => $chat->id,
@@ -1299,7 +1311,7 @@ class WhatsAppController extends Controller
             ]), 0);
 
             $mqtt->disconnect();
-        } catch (MqttClientException $e) {
+        } catch (\Throwable $e) {
             Log::error('MQTT Error (sendContact): '.$e->getMessage());
         }
 
@@ -1430,8 +1442,8 @@ class WhatsAppController extends Controller
         $previewText = '[Ubicacion] '.($name !== '' ? $name : ($address !== '' ? $address : "{$location['latitude']}, {$location['longitude']}"));
 
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_location_'.uniqid());
-            $mqtt->connect();
+            $mqtt = new MqttClient($this->mqttHost(), 1883, 'laravel_send_location_'.uniqid());
+            $mqtt->connect($this->mqttConnectionSettings());
 
             $mqtt->publish('sidebar/chat', json_encode([
                 'chat_id' => $chat->id,
@@ -1458,7 +1470,7 @@ class WhatsAppController extends Controller
             ]), 0);
 
             $mqtt->disconnect();
-        } catch (MqttClientException $e) {
+        } catch (\Throwable $e) {
             Log::error('MQTT Error (sendLocation): '.$e->getMessage());
         }
 
@@ -1668,8 +1680,8 @@ class WhatsAppController extends Controller
 
         // MQTT
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_'.uniqid());
-            $mqtt->connect();
+            $mqtt = new MqttClient($this->mqttHost(), 1883, 'laravel_send_'.uniqid());
+            $mqtt->connect($this->mqttConnectionSettings());
 
             // Sidebar
             $mqtt->publish('sidebar/chat', json_encode([
@@ -1698,7 +1710,7 @@ class WhatsAppController extends Controller
             ]), 0);
 
             $mqtt->disconnect();
-        } catch (MqttClientException $e) {
+        } catch (\Throwable $e) {
             Log::error('MQTT Error (sendWhatsAppText): '.$e->getMessage());
         }
 
@@ -1773,6 +1785,17 @@ class WhatsAppController extends Controller
             ->setSocketTimeout(1);
     }
 
+    private function mqttHost(): string
+    {
+        $host = trim((string) (env('MQTT_HOST') ?: env('VITE_MOSQUITTO_HOST', '')));
+
+        if ($host === '') {
+            throw new \RuntimeException('MQTT_HOST or VITE_MOSQUITTO_HOST is not configured.');
+        }
+
+        return $host;
+    }
+
     private function persistAndPublishOutgoing(
         Chat $chat,
         string $body,
@@ -1796,8 +1819,8 @@ class WhatsAppController extends Controller
 
         // MQTT
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_'.uniqid());
-            $mqtt->connect();
+            $mqtt = new MqttClient($this->mqttHost(), 1883, 'laravel_send_'.uniqid());
+            $mqtt->connect($this->mqttConnectionSettings());
 
             $mqtt->publish('sidebar/chat', json_encode([
                 'chat_id' => $chat->id,
@@ -1824,7 +1847,7 @@ class WhatsAppController extends Controller
             ]), 0);
 
             $mqtt->disconnect();
-        } catch (MqttClientException $e) {
+        } catch (\Throwable $e) {
             Log::error('MQTT Error (persistAndPublishOutgoing): '.$e->getMessage());
         }
     }
@@ -1855,8 +1878,8 @@ class WhatsAppController extends Controller
         ]);
 
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_media_bot_'.uniqid());
-            $mqtt->connect();
+            $mqtt = new MqttClient($this->mqttHost(), 1883, 'laravel_send_media_bot_'.uniqid());
+            $mqtt->connect($this->mqttConnectionSettings());
 
             $mqtt->publish('sidebar/chat', json_encode([
                 'chat_id' => $chat->id,
@@ -1883,7 +1906,7 @@ class WhatsAppController extends Controller
             ]), 0);
 
             $mqtt->disconnect();
-        } catch (MqttClientException $e) {
+        } catch (\Throwable $e) {
             Log::error('MQTT Error (persistAndPublishOutgoingMedia): '.$e->getMessage());
         }
     }
@@ -2228,7 +2251,7 @@ class WhatsAppController extends Controller
             $chat = $this->chatAssignmentService->assignPending($chat);
 
             try {
-                $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_status_bot_'.uniqid());
+                $mqtt = new MqttClient($this->mqttHost(), 1883, 'laravel_status_bot_'.uniqid());
                 // La notificación de estado no debe dejar abierta la respuesta
                 // del Webchat si el broker MQTT está lento o no disponible.
                 $mqtt->connect($this->mqttConnectionSettings());
@@ -2780,8 +2803,8 @@ class WhatsAppController extends Controller
         ]);
 
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_contact_bot_'.uniqid());
-            $mqtt->connect();
+            $mqtt = new MqttClient($this->mqttHost(), 1883, 'laravel_send_contact_bot_'.uniqid());
+            $mqtt->connect($this->mqttConnectionSettings());
 
             $mqtt->publish('sidebar/chat', json_encode([
                 'chat_id' => $chat->id,
@@ -2807,7 +2830,7 @@ class WhatsAppController extends Controller
                 'timestamp' => $message->created_at?->toIso8601String(),
             ]), 0);
             $mqtt->disconnect();
-        } catch (MqttClientException $e) {
+        } catch (\Throwable $e) {
             Log::error('MQTT Error (sendBotContactNode): '.$e->getMessage());
         }
     }
@@ -2913,8 +2936,8 @@ class WhatsAppController extends Controller
         $previewText = '[Ubicacion] '.($name !== '' ? $name : ($address !== '' ? $address : "{$latitude}, {$longitude}"));
 
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_send_location_bot_'.uniqid());
-            $mqtt->connect();
+            $mqtt = new MqttClient($this->mqttHost(), 1883, 'laravel_send_location_bot_'.uniqid());
+            $mqtt->connect($this->mqttConnectionSettings());
 
             $mqtt->publish('sidebar/chat', json_encode([
                 'chat_id' => $chat->id,
@@ -2941,7 +2964,7 @@ class WhatsAppController extends Controller
             ]), 0);
 
             $mqtt->disconnect();
-        } catch (MqttClientException $e) {
+        } catch (\Throwable $e) {
             Log::error('MQTT Error (sendBotLocationNode): '.$e->getMessage());
         }
     }
@@ -5133,7 +5156,7 @@ class WhatsAppController extends Controller
         );
 
         try {
-            $mqtt = new MqttClient(Env('VITE_MOSQUITTO_HOST'), 1883, 'laravel_archive_chat_'.uniqid());
+            $mqtt = new MqttClient($this->mqttHost(), 1883, 'laravel_archive_chat_'.uniqid());
             // Archivar ocurre dentro del envio del ultimo mensaje del bot. MQTT
             // solo notifica al panel; una caida del broker no debe bloquear la
             // respuesta HTTP del Webchat ni dejar sus botones cargando.

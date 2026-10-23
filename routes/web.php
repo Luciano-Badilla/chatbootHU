@@ -38,6 +38,8 @@ Route::get('/', function () {
 });
 
 Route::get('/webchat', [WebchatController::class, 'index'])->name('webchat');
+Route::view('/politica-de-privacidad', 'privacy-policy')->name('privacy.policy');
+Route::view('/eliminacion-de-datos', 'data-deletion')->name('privacy.data-deletion');
 
 Route::middleware(['auth', 'active'])->group(function () {
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
