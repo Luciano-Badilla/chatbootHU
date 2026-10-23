@@ -17,14 +17,14 @@
         a:focus-visible { outline: 3px solid #78c9c5; outline-offset: 3px; border-radius: 3px; }
         .skip { position: absolute; left: -9999px; top: 8px; z-index: 10; padding: 9px 14px; background: white; }
         .skip:focus { left: 8px; }
-        .topbar { background: var(--paper); border-bottom: 1px solid var(--line); }
+        .topbar { background: var(--navy); border-bottom: 1px solid rgba(255,255,255,.14); }
         .topbar-inner, .page, .footer-inner { width: min(1060px, calc(100% - 40px)); margin-inline: auto; }
-        .topbar-inner { min-height: 74px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
-        .brand { display: inline-flex; align-items: center; gap: 12px; color: var(--navy); text-decoration: none; }
-        .brand-mark { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 12px; background: var(--navy); color: white; font-size: 13px; font-weight: 800; letter-spacing: .04em; }
-        .brand-name { display: block; font-size: 14px; font-weight: 750; line-height: 1.3; }
-        .brand-sub { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.3; }
-        .top-link { font-size: 13px; font-weight: 650; text-decoration: none; }
+        .topbar-inner { min-height: 82px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+        .brand { display: inline-flex; align-items: center; text-decoration: none; }
+        .brand-logo { display: block; width: 190px; padding: 4px 9px; border-radius: 10px; background: #fff; box-shadow: 0 3px 12px rgba(0, 20, 40, .12); }
+        .brand-logo img { display: block; width: 100%; height: auto; }
+        .top-link { padding: 9px 13px; border: 1px solid rgba(255,255,255,.28); border-radius: 10px; color: #fff; font-size: 13px; font-weight: 650; text-decoration: none; transition: background .18s ease, border-color .18s ease; }
+        .top-link:hover { border-color: rgba(255,255,255,.5); background: rgba(255,255,255,.1); color: #fff; }
         .page { padding: 54px 0 80px; }
         .eyebrow { margin: 0 0 12px; color: var(--navy); font-size: 11px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
         h1 { max-width: 760px; margin: 0; color: var(--navy-deep); font-size: clamp(34px, 5vw, 52px); line-height: 1.12; letter-spacing: -.035em; }
@@ -56,8 +56,9 @@
         .footer-inner p { margin: 0; }
         @media (max-width: 760px) {
             .topbar-inner, .page, .footer-inner { width: min(100% - 28px, 620px); }
-            .topbar-inner { min-height: 66px; }
+            .topbar-inner { min-height: 70px; }
             .top-link { font-size: 12px; }
+            .brand-logo { width: 160px; }
             .page { padding-top: 38px; }
             .lead { font-size: 16px; }
             .content-grid { grid-template-columns: 1fr; gap: 18px; }
@@ -66,9 +67,7 @@
             .document { padding: 26px 20px; }
         }
         @media (max-width: 430px) {
-            .brand-mark { width: 38px; height: 38px; }
-            .brand-name { font-size: 12px; }
-            .brand-sub { font-size: 10px; }
+            .brand-logo { width: 148px; }
             .top-link { max-width: 105px; text-align: right; }
             .contents ul { grid-template-columns: 1fr; }
             .notice { padding: 18px; }
@@ -82,8 +81,7 @@
     <header class="topbar">
         <div class="topbar-inner">
             <a class="brand" href="https://hospital.uncuyo.edu.ar/" aria-label="Hospital Universitario de la UNCUYO">
-                <span class="brand-mark" aria-hidden="true">HU</span>
-                <span><span class="brand-name">Hospital Universitario</span><span class="brand-sub">Universidad Nacional de Cuyo</span></span>
+                <span class="brand-logo"><img src="{{ asset('images/hu_icon_new.png') }}" alt="Hospital Universitario Dra. María Victoria Gómez de Erice" width="1080" height="360"></span>
             </a>
             <a class="top-link" href="{{ route('webchat') }}">Volver al webchat <span aria-hidden="true">↗</span></a>
         </div>

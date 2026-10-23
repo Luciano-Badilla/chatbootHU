@@ -317,6 +317,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported">(() => typeof window === "undefined" || !("Notification" in window) ? "unsupported" : Notification.permission)
   const [pushNotificationsEnabled, setPushNotificationsEnabled] = useState(false)
   const [notificationStatusLoaded, setNotificationStatusLoaded] = useState(false)
+  const [notificationPromptOpen, setNotificationPromptOpen] = useState(false)
   const [isIos, setIsIos] = useState(false)
   const [showIosInstallHelp, setShowIosInstallHelp] = useState(false)
   const [isClosingIosInstallHelp, setIsClosingIosInstallHelp] = useState(false)
@@ -467,17 +468,17 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     }, 180)
   }
 
-  const enableNotifications = async () => {
+  const enableNotifications = async (): Promise<boolean> => {
     if (typeof window === "undefined" || !("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
       toast.info("Notificaciones no disponibles", {
         description: `En iPhone, agregá ${webchat.title} a la pantalla de inicio y abrilo desde su ícono.`,
         action: isIos ? <button type="button" onClick={openIosInstallHelp} aria-label="Ver cómo agregar a pantalla de inicio" className="inline-flex h-9 items-center gap-2 rounded-xl border border-[#003f73]/20 bg-white/70 px-3 text-xs font-semibold text-[#003f73] transition hover:bg-white"><Share className="h-4 w-4" />Agregar</button> : undefined,
       })
-      return
+      return false
     }
     if (Notification.permission === "denied") {
       toast.info("Notificaciones bloqueadas", { description: "Habilitalas desde la configuración de notificaciones del navegador o del webchat." })
-      return
+      return false
     }
     try {
       if (!token) throw new Error("Primero iniciá una conversación para activar las notificaciones.")
@@ -485,8 +486,10 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
       setNotificationPermission(Notification.permission)
       setPushNotificationsEnabled(true)
       toast.success("Notificaciones activadas", { description: "Te avisaremos cuando respondamos tu consulta." })
+      return true
     } catch (error) {
       toast.error("No se pudieron activar las notificaciones", { description: error instanceof Error ? error.message : "Probá nuevamente." })
+      return false
     }
   }
 
@@ -507,6 +510,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
       return
     }
     let active = true
+    setNotificationStatusLoaded(false)
     isWebPushSubscriptionEnabled("/api/webchat/push-subscription/status", { resume_token: token }).then((isEnabled) => {
       if (active) setPushNotificationsEnabled(isEnabled)
     }).catch(() => undefined).finally(() => {
@@ -514,6 +518,19 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     })
     return () => { active = false }
   }, [token])
+
+  useEffect(() => {
+    if (!token || loading || profileRequired || !notificationStatusLoaded || pushNotificationsEnabled) {
+      setNotificationPromptOpen(false)
+      return
+    }
+
+    setNotificationPromptOpen(true)
+  }, [token, loading, profileRequired, notificationStatusLoaded, pushNotificationsEnabled])
+
+  const dismissNotificationPrompt = () => {
+    setNotificationPromptOpen(false)
+  }
 
   useEffect(() => {
     if (!token) return
@@ -1422,6 +1439,48 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
           </div>
         </header>
 
+        <WebchatModal open={notificationPromptOpen && notificationStatusLoaded && !pushNotificationsEnabled} className="p-5" cardClassName="w-full max-w-[420px]">
+          <div role="dialog" aria-modal="true" aria-labelledby="notification-prompt-title" className="max-h-[calc(100dvh-2.5rem)] w-full overflow-y-auto rounded-[28px] border border-white/70 bg-white text-slate-800 shadow-[0_28px_90px_rgba(0,25,50,0.3)]">
+            <div className="relative overflow-hidden bg-gradient-to-br from-[#00345f] via-[#07558b] to-[#2479a9] px-6 pb-7 pt-6 text-white sm:px-7">
+              <div className="pointer-events-none absolute -right-10 -top-14 h-40 w-40 rounded-full border-[20px] border-white/[0.08]" />
+              <div className="pointer-events-none absolute -bottom-16 right-16 h-36 w-36 rounded-full bg-white/[0.06]" />
+              <div className="relative flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="grid h-[58px] w-[58px] shrink-0 place-items-center rounded-2xl bg-white p-2.5 shadow-lg shadow-black/15 ring-1 ring-white/50">
+                    <img src={webchat.logo_url ? publicAssetUrl(webchat.logo_url) : `${import.meta.env.VITE_APP_URL}/images/hu_icon_new.png`} alt={`Logo de ${webchat.title}`} className="h-full w-full object-contain" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold">{webchat.title}</p>
+                    <p className="mt-0.5 flex items-center gap-1.5 text-[11px] font-medium text-white/75"><span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />Atención por chat</p>
+                  </div>
+                </div>
+                <button type="button" onClick={dismissNotificationPrompt} aria-label="Cerrar recomendación" className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-white/15 bg-white/10 text-white/85 transition hover:bg-white/20"><X className="h-4 w-4" /></button>
+              </div>
+              <div className="relative mt-7">
+                <div className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-white/85"><Bell className="h-3.5 w-3.5" />Avisos importantes</div>
+                <h2 id="notification-prompt-title" className="mt-3 max-w-xs text-[25px] font-bold leading-[1.14] tracking-tight sm:text-[28px]">Seguimos en contacto, aunque salgas del chat</h2>
+                <p className="mt-2.5 max-w-sm text-sm leading-6 text-white/80">Activá las notificaciones para enterarte a tiempo cuando haya novedades sobre tu consulta.</p>
+              </div>
+            </div>
+            <div className="px-6 pb-6 pt-5 sm:px-7 sm:pb-7">
+              <p className="text-xs font-bold uppercase tracking-[0.13em] text-slate-400">Te avisaremos cuando</p>
+              <div className="mt-3 space-y-2.5">
+                <div className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-[#f7fafd] p-3.5">
+                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e7f1f8] text-[#07558b]"><MessageCircle className="h-[18px] w-[18px]" /></span>
+                  <span className="min-w-0"><span className="block text-sm font-bold text-slate-800">Tengas una respuesta</span><span className="mt-0.5 block text-xs leading-5 text-slate-500">Del asistente o del equipo que te atiende.</span></span>
+                </div>
+                <div className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-[#f7fafd] p-3.5">
+                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e7f1f8] text-[#07558b]"><Headset className="h-[18px] w-[18px]" /></span>
+                  <span className="min-w-0"><span className="block text-sm font-bold text-slate-800">Un operador se sume</span><span className="mt-0.5 block text-xs leading-5 text-slate-500">Vas a saber cuándo empieza a atenderte.</span></span>
+                </div>
+              </div>
+              <button type="button" onClick={async () => { if (await enableNotifications()) dismissNotificationPrompt() }} className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#064d7d] px-4 py-3.5 text-sm font-bold text-white shadow-lg shadow-[#064d7d]/20 transition hover:-translate-y-0.5 hover:bg-[#003f73] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#064d7d] focus-visible:ring-offset-2"><Bell className="h-4 w-4" />Activar notificaciones</button>
+              <button type="button" onClick={dismissNotificationPrompt} className="mt-2 w-full rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-500 transition hover:bg-slate-50 hover:text-slate-700">Ahora no</button>
+              <p className="mt-2 text-center text-[11px] leading-5 text-slate-400">Tu navegador te pedirá permiso. Podés cambiar esta opción más adelante.</p>
+            </div>
+          </div>
+        </WebchatModal>
+
         <WebchatBottomSheet open={infoSheetOpen} onClose={() => setInfoSheetOpen(false)}><div className="flex items-start justify-between gap-4 px-5 pb-4 pt-4"><div><p className="text-lg font-bold tracking-tight text-slate-800">Información de la conversación</p><p className="mt-1 text-sm text-slate-500">Todo lo importante de tu atención en un solo lugar.</p></div><button type="button" onClick={() => setInfoSheetOpen(false)} aria-label="Cerrar información" className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-slate-500 transition hover:bg-slate-100"><X className="h-4 w-4" /></button></div><div className="border-t border-slate-100 px-5 py-5"><div className="flex items-center gap-3 rounded-2xl bg-[#e8f0f6] p-4"><span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-white p-2 text-[#003f73] shadow-sm">{isOperatorHandling ? <Headset className="h-6 w-6" /> : <img src={webchat.logo_url ? publicAssetUrl(webchat.logo_url) : `${import.meta.env.VITE_APP_URL}/images/hu_icon_new.png`} alt="" className="h-full w-full object-contain" />}</span><span className="min-w-0"><span className="block text-sm font-bold text-slate-800">{attentionTitle}</span><span className="mt-0.5 block text-xs leading-5 text-slate-600">{attentionDescription}</span></span></div><div className="mt-5 space-y-3"><div className="rounded-2xl border border-slate-200 bg-white p-4"><div className="flex items-start gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e8f0f6] text-[#003f73]"><MessageCircle className="h-5 w-5" /></span><span className="min-w-0 flex-1"><span className="block text-sm font-bold text-slate-800">Estado del canal</span><span className="mt-1 flex items-center gap-1.5 text-xs text-slate-500"><span className={`h-2 w-2 rounded-full ${channelStatus.dot}`} />{channelStatus.label}</span></span></div><p className="mt-3 border-t border-slate-100 pt-3 text-xs leading-5 text-slate-500">{messages.length ? `Esta conversación tiene ${messages.length} mensaje${messages.length === 1 ? "" : "s"}.` : "Todavía no hay mensajes en esta conversación."}</p></div><div className="rounded-2xl border border-slate-200 bg-white p-4"><div className="flex items-start gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e8f0f6] text-[#003f73]"><Bell className="h-5 w-5" /></span><span className="min-w-0 flex-1"><span className="block text-sm font-bold text-slate-800">Notificaciones</span><span className="mt-1 block text-xs leading-5 text-slate-500">{pushNotificationsEnabled ? "Te avisaremos cuando recibas una respuesta con el chat cerrado." : "Activá los avisos para enterarte cuando llegue una respuesta."}</span></span></div>{notificationStatusLoaded && token ? (pushNotificationsEnabled ? <button type="button" onClick={() => void disableNotifications()} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-sm font-semibold text-red-700 transition hover:bg-red-100"><BellOff className="h-4 w-4" />Desactivar notificaciones</button> : <button type="button" onClick={() => void enableNotifications()} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-[#003f73]/20 bg-[#e8f0f6] px-3 py-2.5 text-sm font-semibold text-[#003f73] transition hover:bg-[#dcebf3]"><Bell className="h-4 w-4" />Activar notificaciones</button>) : null}</div><div className="flex items-start gap-3"><span></span></div></div><div className="mt-5"><div className="mb-3 flex items-center justify-between"><div><p className="text-sm font-bold text-slate-800">Archivos compartidos</p><p className="mt-0.5 text-xs text-slate-500">Fotos, videos, audios y documentos de esta conversación.</p></div><span className="rounded-full bg-[#e8f0f6] px-2.5 py-1 text-xs font-bold text-[#003f73]">{sharedMedia.length}</span></div>{sharedMedia.length ? <div className="grid grid-cols-3 gap-2">{sharedMedia.map((media) => { const mediaUrl = getMessageMediaUrl(media); const label = media.media_name || (media.message_type === "audio" ? "Audio" : media.message_type === "document" ? "Documento" : media.message_type === "video" ? "Video" : "Imagen"); return <button key={`shared-media-${media.id}`} type="button" onClick={() => goToMessage(media.id)} aria-label={`Ir al mensaje: ${label}`} className="relative aspect-square overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-left transition hover:-translate-y-0.5 hover:border-[#003f73]/45 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[#003f73]/35">{media.message_type === "image" && mediaUrl ? <img src={mediaUrl} alt={label} className="h-full w-full object-cover" /> : media.message_type === "video" && mediaUrl ? <><video src={mediaUrl} muted playsInline preload="metadata" className="h-full w-full object-cover" /><span className="absolute inset-0 grid place-items-center bg-black/20 text-white"><Play className="h-5 w-5 fill-current drop-shadow" /></span></> : <div className="flex h-full flex-col items-center justify-center gap-1.5 px-2 text-center text-[#003f73]">{media.message_type === "audio" ? <AudioLines className="h-6 w-6" /> : <FileText className="h-6 w-6" />}<span className="line-clamp-2 text-[10px] font-semibold leading-3">{label}</span></div>}<span className="absolute bottom-1 right-1 rounded bg-black/55 px-1.5 py-0.5 text-[9px] font-medium text-white">{media.message_type === "image" ? "Foto" : media.message_type === "video" ? "Video" : media.message_type === "audio" ? "Audio" : "Doc"}</span></button> })}</div> : <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-center text-xs leading-5 text-slate-500">Los archivos que se compartan aparecerán acá.</div>}</div><button type="button" onClick={() => setInfoSheetOpen(false)} className="mt-5 w-full rounded-xl bg-[#003f73] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#003461]">Volver a la conversación</button></div></WebchatBottomSheet>
 
         {showIosInstallHelp ? <div className={`webchat-modal-backdrop absolute inset-0 z-30 flex items-center justify-center bg-black/55 p-5 backdrop-blur-[1px]${isClosingIosInstallHelp ? " webchat-modal-backdrop--closing" : ""}`}><div className={`webchat-modal-card w-full max-w-sm rounded-2xl bg-white p-5 text-slate-800 shadow-xl${isClosingIosInstallHelp ? " webchat-modal-card--closing" : ""}`}><div className="flex items-start justify-between gap-4"><div><p className="text-base font-bold">Agregá {webchat.title} a tu iPhone</p><p className="mt-1 text-sm leading-5 text-slate-500">Así podés abrir el chat como una app y habilitar sus notificaciones.</p></div><button type="button" onClick={closeIosInstallHelp} aria-label="Cerrar" className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-500 transition hover:bg-slate-100"><X className="h-4 w-4" /></button></div><ol className="mt-5 space-y-3 text-sm text-slate-600"><li className="flex gap-3"><span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#e8f0f6] text-xs font-bold text-[#003f73]">1</span><span>Tocá el botón de <strong className="font-semibold text-slate-800">menú</strong> <Menu className="inline h-3.5 w-3.5 text-[#003f73]" /> de la barra inferior.</span></li><li className="flex gap-3"><span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#e8f0f6] text-xs font-bold text-[#003f73]">2</span><span>Elegí <strong className="font-semibold text-slate-800">Compartir</strong> <Share className="inline h-3.5 w-3.5 text-[#003f73]" />.</span></li><li className="flex gap-3"><span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#e8f0f6] text-xs font-bold text-[#003f73]">3</span><span>Elegí <strong className="font-semibold text-slate-800">Ver más</strong> <ChevronDown className="inline h-3.5 w-3.5 text-[#003f73]" />.</span></li><li className="flex gap-3"><span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#e8f0f6] text-xs font-bold text-[#003f73]">4</span><span>Tocá <strong className="font-semibold text-slate-800">Agregar a Inicio</strong>.</span></li><li className="flex gap-3"><span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#e8f0f6] text-xs font-bold text-[#003f73]">5</span><span>Abrí {webchat.title} desde el ícono creado y activá la campana.</span></li></ol><button type="button" onClick={closeIosInstallHelp} className="mt-5 w-full rounded-xl bg-[#003f73] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#003461]">Entendido</button></div></div> : null}
@@ -1465,7 +1524,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
               <label className="block"><span className="mb-1.5 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-600">Nombre y apellido</span><input required value={name} onChange={(e) => setName(e.target.value)} placeholder="Ingresá tu nombre y apellido" className="w-full rounded-xl border-slate-200 bg-slate-50 px-4 py-3 text-sm shadow-sm outline-none transition focus:border-[#003f73] focus:ring-[#003f73]" /></label>
               <button disabled={sending} className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#003f73] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-[#003f73]/20 transition hover:bg-[#003461] disabled:opacity-60">{sending ? "Iniciando..." : <>Comenzar conversación <ArrowUp className="h-4 w-4 rotate-90" /></>}</button>
             </form>
-            <p className="mt-4 text-xs leading-5 text-slate-500">Antes de empezar, consultá nuestra <a className="font-semibold text-[#003f73] underline underline-offset-2" href="/politica-de-privacidad">Política de privacidad</a>. <a className="font-semibold text-[#003f73] underline underline-offset-2" href="/eliminacion-de-datos">Solicitá la eliminación de tus datos</a>.</p>
+            <p className="mt-4 text-xs leading-5 text-slate-500">Antes de empezar, consultá nuestra <a className="font-semibold text-[#003f73] underline underline-offset-2" href="/politica-de-privacidad">Política de privacidad</a>.</p>
           </div></div>
         ) : messages.length === 0 ? (
           <div className="m-auto w-full max-w-lg px-5 text-center sm:px-8">
@@ -1539,7 +1598,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
               <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; queueMedia(files) }} />
               <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-1 shadow-sm focus-within:border-[#003f73]/50 focus-within:ring-2 focus-within:ring-[#003f73]/10"><div ref={attachmentMenuRef} className="relative shrink-0"><button type="button" onClick={() => setAttachmentMenuOpen((open) => !open)} disabled={sending || recordingAudio || manualInputLocked} aria-label="Adjuntar" title="Adjuntar" style={attachmentMenuOpen ? { backgroundColor: "#003f73", borderColor: "#003f73", color: "#ffffff" } : undefined} className={`grid h-10 w-10 place-items-center rounded-xl border border-slate-200 text-[#003f73] transition hover:bg-white disabled:opacity-50 ${attachmentMenuOpen ? "rotate-45" : ""}`}><Plus className="h-5 w-5" /></button>{attachmentMenuOpen ? <div className="absolute bottom-14 left-0 z-20 w-56 overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"><button type="button" onClick={pickCamera} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-100"><span className="grid h-9 w-9 place-items-center rounded-full bg-rose-100 text-rose-700"><Camera className="h-4 w-4" /></span>Cámara</button><button type="button" onClick={() => pickFiles("image/*,video/*")} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-100"><span className="grid h-9 w-9 place-items-center rounded-full bg-fuchsia-100 text-fuchsia-700"><ImageIcon className="h-4 w-4" /></span>Fotos y videos</button><button type="button" onClick={() => pickFiles(".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,application/pdf,text/plain")} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-100"><span className="grid h-9 w-9 place-items-center rounded-full bg-indigo-100 text-indigo-700"><FileText className="h-4 w-4" /></span>Documento</button><button type="button" onClick={openLocationModal} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-100"><span className="grid h-9 w-9 place-items-center rounded-full bg-emerald-100 text-emerald-700"><MapPin className="h-4 w-4" /></span>Ubicación</button><button type="button" onClick={() => { setError(""); setContactModalOpen(true) }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-100"><span className="grid h-9 w-9 place-items-center rounded-full bg-sky-100 text-sky-700"><User className="h-4 w-4" /></span>Contacto</button></div> : null}</div>{recordingAudio ? <div className="flex min-h-10 flex-1 items-center gap-2 px-3 text-sm font-semibold text-red-600"><span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />Grabando audio <span className="ml-auto font-mono text-xs tabular-nums text-red-500">{formatRecordingTime(recordingSeconds)}</span></div> : <textarea value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void sendComposer() } }} rows={1} disabled={manualInputLocked} placeholder={manualInputLocked ? "Escribí un mensaje..." : "Escribí un mensaje..."} className="max-h-28 min-h-10 flex-1 resize-none border-0 bg-transparent px-3 py-2 text-sm shadow-none outline-none placeholder:text-slate-400 focus:border-0 focus:ring-0" />}{showAudioControl ? <button type="button" onClick={() => recordingAudio ? stopAudioRecording() : void startAudioRecording()} disabled={sending} aria-label={recordingAudio ? "Detener grabación" : "Grabar audio"} title={recordingAudio ? "Detener grabación" : "Grabar audio"} className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl text-white shadow-md transition disabled:opacity-50 ${recordingAudio ? "bg-red-600 shadow-red-600/20 hover:bg-red-700" : "bg-[#003f73] shadow-[#003f73]/20 hover:bg-[#003461]"}`}>{recordingAudio ? <Square className="h-4 w-4 fill-current" /> : <Mic className="h-4 w-4" />}</button> : <button type="submit" aria-label={sending ? "Enviando mensaje" : "Enviar mensaje"} disabled={sending || manualInputLocked || (!draft.trim() && !pendingMedia.length)} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#003f73] text-white shadow-md shadow-[#003f73]/20 transition hover:bg-[#003461] disabled:opacity-50">{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</button>}</div>
             </>}
-            <p className="mt-2 text-center text-[10px] leading-4 text-slate-500">Al usar este canal, se aplica nuestra <a className="font-semibold text-[#003f73] underline underline-offset-2" href="/politica-de-privacidad">Política de privacidad</a>. <a className="font-semibold text-[#003f73] underline underline-offset-2" href="/eliminacion-de-datos">Eliminar mis datos</a>.</p>
+            <p className="mt-2 text-center text-[10px] leading-4 text-slate-500">Al usar este canal, se aplica nuestra <a className="font-semibold text-[#003f73] underline underline-offset-2" href="/politica-de-privacidad">Política de privacidad</a>.</p>
           </div></form>
         </>}
       </section>
