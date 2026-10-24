@@ -609,6 +609,23 @@ class WhatsAppController extends Controller
         $this->publishWebchatMessage($chat, $message);
 
         try {
+            // Si cambió el día o se actualizó la agenda, mover el chat activo
+            // al flujo que corresponde hoy antes de procesar este mensaje.
+            if ($chat->status === 'open' && $chat->bot_enabled) {
+                try {
+                    $previousFlowId = (int) ($chat->bot_flow_id ?? 0);
+                    $flow = $this->ensureChatUsesDefaultFlow($chat);
+                    if ($flow && $previousFlowId !== (int) $flow->id) {
+                        $this->startWebchatConversation($chat, $flow);
+                    }
+                } catch (\Throwable $e) {
+                    Log::error('Error sincronizando el flujo diario de Webchat.', [
+                        'chat_id' => $chat->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
             $nextNode = $this->handleBotFromDb($chat, $message, $interactiveReplyId);
             if ($nextNode) {
                 $this->sendBotNode($chat, $nextNode);
@@ -1926,7 +1943,7 @@ class WhatsAppController extends Controller
                 ->first()
             : null;
 
-        if (!$forceConfiguredFlow && $currentFlow) {
+        if (!$forceConfiguredFlow && $currentFlow && $channel !== 'webchat') {
             if (!$chat->bot_node_id && $currentFlow->start_node_id) {
                 $chat->bot_node_id = $currentFlow->start_node_id;
                 $chat->save();
@@ -1937,6 +1954,21 @@ class WhatsAppController extends Controller
 
         $flow = $this->getDefaultFlow($channel);
 
+        if (
+            !$forceConfiguredFlow
+            && $channel === 'webchat'
+            && $currentFlow
+            && $flow
+            && (int) $currentFlow->id === (int) $flow->id
+        ) {
+            if (!$chat->bot_node_id && $currentFlow->start_node_id) {
+                $chat->bot_node_id = $currentFlow->start_node_id;
+                $chat->save();
+            }
+
+            return $currentFlow;
+        }
+
         if (! $flow || ! $flow->start_node_id) {
             return null;
         }
@@ -1946,6 +1978,7 @@ class WhatsAppController extends Controller
             $chat->bot_flow_id = $flow->id;
             $chat->bot_node_id = $flow->start_node_id; // resetea el puntero al inicio
             $chat->bot_state = [];                    // opcional: reset state
+            $chat->bot_step = null;
             $chat->bot_enabled = true;
             $chat->save();
 
@@ -5046,6 +5079,10 @@ class WhatsAppController extends Controller
 
     private function getDefaultFlow(?string $channel = null): ?BotFlow
     {
+        if ($channel === 'webchat') {
+            return $this->botInactivityService->getDefaultFlow('webchat');
+        }
+
         $flows = BotFlow::query()
             ->where('is_active', true)
             ->when($channel, fn ($query) => $query->whereJsonContains('channels', $channel));

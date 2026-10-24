@@ -137,7 +137,7 @@ class WebchatController extends Controller
             'bot_state' => [],
             'last_user_message_at' => now(),
         ]);
-        app(WhatsAppController::class)->startWebchatConversation($chat);
+        app(WhatsAppController::class)->startWebchatConversation($chat, $flow);
         $chat->refresh();
 
         return response()->json([
