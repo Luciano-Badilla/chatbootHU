@@ -85,6 +85,7 @@ type DashboardProps = {
     entered_contacts: number
     unentered_contacts: number
     rate: number | null
+    tracking_start_label: string
   }
   summary: SummaryCard[]
   message_activity: ActivityPoint[]
@@ -404,13 +405,13 @@ export default function Dashboard() {
             <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#eaf2f8] text-[#185e9c]"><ArrowRight className="h-5 w-5" /></span>
             <div>
               <p className="font-semibold text-[#013765]">Conversi&oacute;n de WhatsApp a Webchat</p>
-              <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-500">Total acumulado: clasifica por canal las conversaciones anteriores al seguimiento y suma las entradas registradas por enlace desde el 24/10/2026.</p>
+              <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-500">Seguimiento acumulado desde el {props.webchat_conversion.tracking_start_label}. Las conversaciones anteriores a esa fecha no se incluyen en esta estad&iacute;stica.</p>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
             <div className="rounded-lg bg-[#f4f8fb] px-3 py-2.5">
               <p className="text-lg font-bold tabular-nums text-[#013765]">{formatNumber(props.webchat_conversion.received_contacts)}</p>
-              <p className="text-[11px] text-slate-500">Total de chats</p>
+              <p className="text-[11px] text-slate-500">Recibieron el enlace</p>
             </div>
             <div className="rounded-lg bg-[#f4f8fb] px-3 py-2.5">
               <p className="text-lg font-bold tabular-nums text-[#013765]">{formatNumber(props.webchat_conversion.entered_contacts)}</p>
@@ -418,7 +419,7 @@ export default function Dashboard() {
             </div>
             <div className="rounded-lg bg-[#f4f8fb] px-3 py-2.5">
               <p className="text-lg font-bold tabular-nums text-[#013765]">{formatNumber(props.webchat_conversion.unentered_contacts)}</p>
-              <p className="text-[11px] text-slate-500">No entraron</p>
+              <p className="text-[11px] text-slate-500">Sin entrada registrada</p>
             </div>
             <div className="rounded-lg bg-[#eaf2f8] px-3 py-2.5">
               <p className="text-lg font-bold tabular-nums text-[#185e9c]">{props.webchat_conversion.rate === null ? "\u2014" : `${formatNumber(props.webchat_conversion.rate)}%`}</p>

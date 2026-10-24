@@ -30,7 +30,7 @@ class DashboardMetricsService
 
         $current = $this->summaryForRange($user, $start, $end);
         $previous = $this->summaryForRange($user, $previousStart, $previousEnd);
-        $webchatConversion = $this->combinedWebchatConversion($user);
+        $webchatConversion = $this->webchatConversion($user);
 
         return [
             'period' => [
@@ -83,7 +83,7 @@ class DashboardMetricsService
         ];
     }
 
-    private function combinedWebchatConversion(User $user): array
+    private function webchatConversion(User $user): array
     {
         $trackingStart = Carbon::parse(self::WEBCHAT_REFERRAL_TRACKING_START, config('app.timezone'));
         $referrals = WebchatReferral::query()
@@ -105,44 +105,19 @@ class DashboardMetricsService
                 });
         });
 
-        $trackedReceivedChatIds = (clone $receivedReferrals)
-            ->distinct()
-            ->pluck('source_chats.id')
-            ->map(fn ($id) => (int) $id)
-            ->all();
-        $trackedEnteredChatIds = (clone $receivedReferrals)
+        $receivedChats = (clone $receivedReferrals)->distinct()->count('source_chats.id');
+        $enteredChats = (clone $receivedReferrals)
             ->whereNotNull('webchat_referrals.entered_at')
             ->whereColumn('webchat_referrals.entered_at', '>=', 'webchat_referrals.sent_at')
             ->distinct()
-            ->pluck('source_chats.id')
-            ->map(fn ($id) => (int) $id)
-            ->all();
-
-        $historicalChats = Chat::query()
-            ->where('created_at', '<', $trackingStart)
-            ->whereNotExists(function ($query) use ($trackingStart) {
-                $query->selectRaw('1')
-                    ->from('webchat_referrals')
-                    ->whereColumn('webchat_referrals.source_chat_id', 'chats.id')
-                    ->where('webchat_referrals.sent_at', '>=', $trackingStart);
-            });
-
-        if (! $user->hasPermission('can_view_all_chats')) {
-            $historicalChats->where(fn (Builder $scope) => $scope->whereNull('operator_id')->orWhere('operator_id', $user->id));
-        }
-
-        $historicalWhatsAppChats = (clone $historicalChats)
-            ->where(fn (Builder $scope) => $scope->where('channel', 'whatsapp')->orWhereNull('channel'))
-            ->count();
-        $historicalWebchatChats = (clone $historicalChats)->where('channel', 'webchat')->count();
-        $totalChats = $historicalWhatsAppChats + $historicalWebchatChats + count($trackedReceivedChatIds);
-        $enteredChats = $historicalWebchatChats + count($trackedEnteredChatIds);
+            ->count('source_chats.id');
 
         return [
-            'received_contacts' => $totalChats,
+            'received_contacts' => $receivedChats,
             'entered_contacts' => $enteredChats,
-            'unentered_contacts' => max(0, $totalChats - $enteredChats),
-            'rate' => $totalChats > 0 ? round(($enteredChats / $totalChats) * 100, 1) : null,
+            'unentered_contacts' => max(0, $receivedChats - $enteredChats),
+            'rate' => $receivedChats > 0 ? round(($enteredChats / $receivedChats) * 100, 1) : null,
+            'tracking_start_label' => $trackingStart->format('d/m/Y'),
         ];
     }
     private function summaryCard(string $key, string $label, int $value, int $previous, string $description, bool $lowerIsBetter = false): array
