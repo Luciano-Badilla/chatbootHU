@@ -3,6 +3,7 @@ import { useState } from "react"
 import {
   Activity,
   ArrowDownRight,
+  ArrowDownLeft,
   ArrowRight,
   ArrowUpRight,
   Bot,
@@ -177,8 +178,8 @@ const summaryIcons = {
 }
 
 const activityColors: Record<ActivityKey, string> = {
-  incoming_whatsapp: "Recibidos WhatsApp",
-  incoming_webchat: "Recibidos Webchat",
+  incoming_whatsapp: "#0284c7",
+  incoming_webchat: "#0f766e",
   bot: "#10b981",
   operator: "#f59e0b",
   campaign: "#8b5cf6",
@@ -191,8 +192,8 @@ const activityColors: Record<ActivityKey, string> = {
 }
 
 const activityLabels: Record<ActivityKey, string> = {
-  incoming_whatsapp: "Recibidos WhatsApp",
-  incoming_webchat: "Recibidos Webchat",
+  incoming_whatsapp: "WhatsApp",
+  incoming_webchat: "Webchat",
   bot: "Bot",
   operator: "Operadores",
   campaign: "Campa\u00f1as",
@@ -202,6 +203,14 @@ const activityLabels: Record<ActivityKey, string> = {
   bot_webchat: "Bot",
   operator_webchat: "Operadores",
   campaign_webchat: "Campa\u00f1as",
+}
+
+function ActivityDirectionIcon({ activityKey, className }: { activityKey: ActivityKey; className: string }) {
+  const received = activityKey.startsWith("incoming_")
+  const Icon = received ? ArrowDownLeft : ArrowUpRight
+  const label = received ? "Recibido" : "Enviado"
+
+  return <Icon aria-label={label} title={label} className={className} />
 }
 
 function navigateTo(path: string) {
@@ -246,7 +255,11 @@ function ActivityTooltip({ active, payload, label, keys }: Pick<Partial<TooltipC
       <div className="space-y-1.5">
         {keys.map((key) => (
           <div key={key} className="flex items-center justify-between gap-5 text-xs">
-            <span className="flex items-center gap-2 text-slate-600"><span className="h-2 w-2 rounded-sm" style={{ backgroundColor: activityColors[key] }} />{activityLabels[key]}</span>
+            <span className="flex items-center gap-2 text-slate-600">
+              <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: activityColors[key] }} />
+              <ActivityDirectionIcon activityKey={key} className="h-3.5 w-3.5 text-slate-500" />
+              {activityLabels[key]}
+            </span>
             <span className="font-semibold tabular-nums text-slate-800">{formatNumber(Number(point[key] ?? 0))}</span>
           </div>
         ))}
@@ -282,6 +295,7 @@ function MessageActivityChart({ points }: { points: ActivityPoint[] }) {
           {keys.map((key) => (
             <div key={key} className="flex items-center gap-2 text-xs text-slate-600">
               <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: activityColors[key] }} />
+              <ActivityDirectionIcon activityKey={key} className="h-3.5 w-3.5 text-slate-500" />
               {activityLabels[key]}
             </div>
           ))}
