@@ -83,14 +83,8 @@ type DashboardProps = {
   webchat_conversion: {
     received_contacts: number
     entered_contacts: number
+    unentered_contacts: number
     rate: number | null
-  }
-  webchat_historical_estimate: {
-    link_contacts: number
-    possible_contacts: number
-    unmatched_contacts: number
-    rate: number | null
-    window_minutes: number
   }
   summary: SummaryCard[]
   message_activity: ActivityPoint[]
@@ -405,59 +399,31 @@ export default function Dashboard() {
       </section>
 
       <Card className="mt-4 border-[#185e9c]/20 bg-white shadow-sm">
-        <CardContent className="space-y-5 p-5">
+        <CardContent className="space-y-4 p-5">
           <div className="flex items-start gap-3">
             <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#eaf2f8] text-[#185e9c]"><ArrowRight className="h-5 w-5" /></span>
             <div>
               <p className="font-semibold text-[#013765]">Conversi&oacute;n de WhatsApp a Webchat</p>
-              <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-500">Seguimiento por enlace para los datos nuevos y una estimaci&oacute;n temporal para los chats hist&oacute;ricos.</p>
+              <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-500">Total acumulado: clasifica por canal las conversaciones anteriores al seguimiento y suma las entradas registradas por enlace desde el 24/10/2026.</p>
             </div>
           </div>
-          <div className={`grid gap-5 ${props.webchat_historical_estimate.link_contacts > 0 ? "lg:grid-cols-2" : ""}`}>
-            <section>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#185e9c]">Seguimiento por enlace</p>
-              <div className="grid grid-cols-3 gap-2 sm:gap-3">
-                <div className="rounded-lg bg-[#f4f8fb] px-3 py-2.5">
-                  <p className="text-lg font-bold tabular-nums text-[#013765]">{formatNumber(props.webchat_conversion.received_contacts)}</p>
-                  <p className="text-[11px] text-slate-500">Recibieron el enlace</p>
-                </div>
-                <div className="rounded-lg bg-[#f4f8fb] px-3 py-2.5">
-                  <p className="text-lg font-bold tabular-nums text-[#013765]">{formatNumber(props.webchat_conversion.entered_contacts)}</p>
-                  <p className="text-[11px] text-slate-500">Entraron</p>
-                </div>
-                <div className="rounded-lg bg-[#eaf2f8] px-3 py-2.5">
-                  <p className="text-lg font-bold tabular-nums text-[#185e9c]">{props.webchat_conversion.rate === null ? "—" : `${formatNumber(props.webchat_conversion.rate)}%`}</p>
-                  <p className="text-[11px] text-slate-500">Conversi&oacute;n</p>
-                </div>
-              </div>
-            </section>
-
-            {props.webchat_historical_estimate.link_contacts > 0 ? (
-              <section className="border-t border-slate-100 pt-4 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
-                <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">Estimaci&oacute;n hist&oacute;rica</p>
-                  <span className="text-[11px] text-slate-500">Coincidencia dentro de {props.webchat_historical_estimate.window_minutes} min; no confirma la atribuci&oacute;n.</span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
-                  <div className="rounded-lg bg-amber-50 px-3 py-2.5">
-                    <p className="text-lg font-bold tabular-nums text-amber-950">{formatNumber(props.webchat_historical_estimate.link_contacts)}</p>
-                    <p className="text-[11px] text-amber-900/70">Recibieron enlace</p>
-                  </div>
-                  <div className="rounded-lg bg-amber-50 px-3 py-2.5">
-                    <p className="text-lg font-bold tabular-nums text-amber-950">{formatNumber(props.webchat_historical_estimate.possible_contacts)}</p>
-                    <p className="text-[11px] text-amber-900/70">Posibles entradas</p>
-                  </div>
-                  <div className="rounded-lg bg-amber-50 px-3 py-2.5">
-                    <p className="text-lg font-bold tabular-nums text-amber-950">{formatNumber(props.webchat_historical_estimate.unmatched_contacts)}</p>
-                    <p className="text-[11px] text-amber-900/70">Sin coincidencia</p>
-                  </div>
-                  <div className="rounded-lg bg-amber-100 px-3 py-2.5">
-                    <p className="text-lg font-bold tabular-nums text-amber-950">{props.webchat_historical_estimate.rate === null ? "—" : `${formatNumber(props.webchat_historical_estimate.rate)}%`}</p>
-                    <p className="text-[11px] text-amber-900/70">Tasa estimada</p>
-                  </div>
-                </div>
-              </section>
-            ) : null}
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
+            <div className="rounded-lg bg-[#f4f8fb] px-3 py-2.5">
+              <p className="text-lg font-bold tabular-nums text-[#013765]">{formatNumber(props.webchat_conversion.received_contacts)}</p>
+              <p className="text-[11px] text-slate-500">Total de chats</p>
+            </div>
+            <div className="rounded-lg bg-[#f4f8fb] px-3 py-2.5">
+              <p className="text-lg font-bold tabular-nums text-[#013765]">{formatNumber(props.webchat_conversion.entered_contacts)}</p>
+              <p className="text-[11px] text-slate-500">Entraron al Webchat</p>
+            </div>
+            <div className="rounded-lg bg-[#f4f8fb] px-3 py-2.5">
+              <p className="text-lg font-bold tabular-nums text-[#013765]">{formatNumber(props.webchat_conversion.unentered_contacts)}</p>
+              <p className="text-[11px] text-slate-500">No entraron</p>
+            </div>
+            <div className="rounded-lg bg-[#eaf2f8] px-3 py-2.5">
+              <p className="text-lg font-bold tabular-nums text-[#185e9c]">{props.webchat_conversion.rate === null ? "\u2014" : `${formatNumber(props.webchat_conversion.rate)}%`}</p>
+              <p className="text-[11px] text-slate-500">Conversi&oacute;n</p>
+            </div>
           </div>
         </CardContent>
       </Card>

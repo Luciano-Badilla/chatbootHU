@@ -19,6 +19,8 @@ use Spatie\Activitylog\Models\Activity;
 
 class DashboardMetricsService
 {
+    private const WEBCHAT_REFERRAL_TRACKING_START = '2026-10-24 00:00:00';
+
     public function build(User $user, int $days): array
     {
         $end = now()->endOfDay();
@@ -28,6 +30,7 @@ class DashboardMetricsService
 
         $current = $this->summaryForRange($user, $start, $end);
         $previous = $this->summaryForRange($user, $previousStart, $previousEnd);
+        $webchatConversion = $this->combinedWebchatConversion($user);
 
         return [
             'period' => [
@@ -50,8 +53,7 @@ class DashboardMetricsService
                     'description' => 'Espera promedio hasta la respuesta del bot u operador',
                 ],
             ],
-            'webchat_conversion' => $this->webchatConversion($user, $start, $end),
-            'webchat_historical_estimate' => $this->historicalWebchatEstimate($user, $start, $end),
+            'webchat_conversion' => $webchatConversion,
             'message_activity' => $this->messageActivity($user, $start, $end),
             'work_queue' => $this->workQueue($user),
             'chat_snapshot' => $this->chatSnapshot($user),
@@ -81,14 +83,15 @@ class DashboardMetricsService
         ];
     }
 
-    private function webchatConversion(User $user, CarbonInterface $start, CarbonInterface $end): array
+    private function combinedWebchatConversion(User $user): array
     {
+        $trackingStart = Carbon::parse(self::WEBCHAT_REFERRAL_TRACKING_START, config('app.timezone'));
         $referrals = WebchatReferral::query()
             ->join('chats as source_chats', 'source_chats.id', '=', 'webchat_referrals.source_chat_id')
             ->join('messages as source_messages', 'source_messages.id', '=', 'webchat_referrals.source_message_id')
             ->where('source_chats.channel', 'whatsapp')
             ->whereNotNull('webchat_referrals.sent_at')
-            ->whereBetween('webchat_referrals.sent_at', [$start, $end]);
+            ->where('webchat_referrals.sent_at', '>=', $trackingStart);
 
         if (! $user->hasPermission('can_view_all_chats')) {
             $referrals->where(fn (Builder $scope) => $scope->whereNull('source_chats.operator_id')->orWhere('source_chats.operator_id', $user->id));
@@ -102,150 +105,46 @@ class DashboardMetricsService
                 });
         });
 
-        $receivedContacts = (clone $receivedReferrals)->distinct()->count('source_chats.contact_id');
-        $enteredContacts = (clone $receivedReferrals)
+        $trackedReceivedChatIds = (clone $receivedReferrals)
+            ->distinct()
+            ->pluck('source_chats.id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+        $trackedEnteredChatIds = (clone $receivedReferrals)
             ->whereNotNull('webchat_referrals.entered_at')
             ->whereColumn('webchat_referrals.entered_at', '>=', 'webchat_referrals.sent_at')
             ->distinct()
-            ->count('source_chats.contact_id');
+            ->pluck('source_chats.id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
 
-        return [
-            'received_contacts' => $receivedContacts,
-            'entered_contacts' => $enteredContacts,
-            'rate' => $receivedContacts > 0 ? round(($enteredContacts / $receivedContacts) * 100, 1) : null,
-        ];
-    }
-
-    private function historicalWebchatEstimate(User $user, CarbonInterface $start, CarbonInterface $end): array
-    {
-        $windowMinutes = 30;
-        $linksQuery = DB::table('messages')
-            ->join('chats as source_chats', 'source_chats.id', '=', 'messages.chat_id')
-            ->where('source_chats.channel', 'whatsapp')
-            ->where('messages.sender', 'user')
-            ->where('messages.sender_subtype', 'bot')
-            ->where('messages.bot_node_type', 'link_button')
-            ->whereIn('messages.status', ['delivered', 'read'])
-            ->whereNotNull('messages.interactive_options')
-            ->whereBetween('messages.created_at', [$start, $end])
-            ->whereNotExists(function ($query) {
+        $historicalChats = Chat::query()
+            ->where('created_at', '<', $trackingStart)
+            ->whereNotExists(function ($query) use ($trackingStart) {
                 $query->selectRaw('1')
                     ->from('webchat_referrals')
-                    ->whereColumn('webchat_referrals.source_message_id', 'messages.id');
+                    ->whereColumn('webchat_referrals.source_chat_id', 'chats.id')
+                    ->where('webchat_referrals.sent_at', '>=', $trackingStart);
             });
 
         if (! $user->hasPermission('can_view_all_chats')) {
-            $linksQuery->where(fn ($scope) => $scope->whereNull('source_chats.operator_id')->orWhere('source_chats.operator_id', $user->id));
+            $historicalChats->where(fn (Builder $scope) => $scope->whereNull('operator_id')->orWhere('operator_id', $user->id));
         }
 
-        $links = $linksQuery
-            ->orderBy('messages.created_at')
-            ->orderBy('messages.id')
-            ->get([
-                'source_chats.contact_id',
-                'messages.created_at',
-                'messages.interactive_options',
-            ])
-            ->filter(fn ($message) => $this->legacyWebchatUrl($message->interactive_options) !== null)
-            ->map(fn ($message) => [
-                'contact_id' => (int) $message->contact_id,
-                'created_at' => Carbon::parse($message->created_at),
-            ])
-            ->values();
-
-        $linkContacts = $links->pluck('contact_id')->unique()->count();
-        if ($linkContacts === 0) {
-            return [
-                'link_contacts' => 0,
-                'possible_contacts' => 0,
-                'unmatched_contacts' => 0,
-                'rate' => null,
-                'window_minutes' => $windowMinutes,
-            ];
-        }
-
-        $webchatQuery = Chat::query()
-            ->where('channel', 'webchat')
-            ->whereBetween('created_at', [$start, Carbon::parse($end)->addMinutes($windowMinutes)])
-            ->orderBy('created_at')
-            ->orderBy('id');
-
-        if (! $user->hasPermission('can_view_all_chats')) {
-            $webchatQuery->where(fn (Builder $scope) => $scope->whereNull('operator_id')->orWhere('operator_id', $user->id));
-        }
-
-        $webchatChats = $webchatQuery->get(['created_at']);
-        $possibleContacts = [];
-        $nextLink = 0;
-        $firstActiveLink = 0;
-        $activeContacts = [];
-        $linkCount = $links->count();
-
-        foreach ($webchatChats as $webchatChat) {
-            $webchatStartedAt = Carbon::parse($webchatChat->created_at);
-            $oldestPossibleAt = $webchatStartedAt->copy()->subMinutes($windowMinutes);
-
-            while ($nextLink < $linkCount && $links[$nextLink]['created_at']->lte($webchatStartedAt)) {
-                $contactId = $links[$nextLink]['contact_id'];
-                $activeContacts[$contactId] = ($activeContacts[$contactId] ?? 0) + 1;
-                $nextLink++;
-            }
-
-            while ($firstActiveLink < $nextLink && $links[$firstActiveLink]['created_at']->lt($oldestPossibleAt)) {
-                $contactId = $links[$firstActiveLink]['contact_id'];
-                $activeContacts[$contactId]--;
-                if ($activeContacts[$contactId] === 0) {
-                    unset($activeContacts[$contactId]);
-                }
-                $firstActiveLink++;
-            }
-
-            // If several WhatsApp contacts sent a link in this window, the historical visit is ambiguous.
-            if (count($activeContacts) === 1) {
-                $possibleContacts[(int) array_key_first($activeContacts)] = true;
-            }
-        }
-
-        $possibleCount = count($possibleContacts);
+        $historicalWhatsAppChats = (clone $historicalChats)
+            ->where(fn (Builder $scope) => $scope->where('channel', 'whatsapp')->orWhereNull('channel'))
+            ->count();
+        $historicalWebchatChats = (clone $historicalChats)->where('channel', 'webchat')->count();
+        $totalChats = $historicalWhatsAppChats + $historicalWebchatChats + count($trackedReceivedChatIds);
+        $enteredChats = $historicalWebchatChats + count($trackedEnteredChatIds);
 
         return [
-            'link_contacts' => $linkContacts,
-            'possible_contacts' => $possibleCount,
-            'unmatched_contacts' => max(0, $linkContacts - $possibleCount),
-            'rate' => round(($possibleCount / $linkContacts) * 100, 1),
-            'window_minutes' => $windowMinutes,
+            'received_contacts' => $totalChats,
+            'entered_contacts' => $enteredChats,
+            'unentered_contacts' => max(0, $totalChats - $enteredChats),
+            'rate' => $totalChats > 0 ? round(($enteredChats / $totalChats) * 100, 1) : null,
         ];
     }
-
-    private function legacyWebchatUrl(?string $interactiveOptions): ?string
-    {
-        $options = json_decode((string) $interactiveOptions, true);
-        if (! is_array($options)) {
-            return null;
-        }
-
-        foreach ($options as $option) {
-            if (! is_array($option)) {
-                continue;
-            }
-
-            $url = trim((string) ($option['url'] ?? $option['value'] ?? ''));
-            $parsedUrl = filter_var($url, FILTER_VALIDATE_URL) ? parse_url($url) : false;
-            if (! is_array($parsedUrl) || ! str_ends_with(strtolower(rtrim((string) ($parsedUrl['path'] ?? ''), '/')), '/webchat')) {
-                continue;
-            }
-
-            parse_str((string) ($parsedUrl['query'] ?? ''), $query);
-            if (isset($query['wa_ref'])) {
-                continue;
-            }
-
-            return $url;
-        }
-
-        return null;
-    }
-
     private function summaryCard(string $key, string $label, int $value, int $previous, string $description, bool $lowerIsBetter = false): array
     {
         return [
