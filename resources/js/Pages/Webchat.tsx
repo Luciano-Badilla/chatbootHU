@@ -400,6 +400,13 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     }
   }
 
+  useEffect(() => {
+    const referralToken = new URLSearchParams(window.location.search).get("wa_ref")
+    if (!referralToken || !/^[A-Za-z0-9]{32}$/.test(referralToken)) return
+
+    void api("referral-entry", { referral_token: referralToken }).catch(() => undefined)
+  }, [])
+
   const acknowledgeIncomingMessages = (incoming: Message[], resumeToken = token) => {
     const messageIds = incoming.filter((message) => message.sender === "user" && typeof message.id === "number").map((message) => message.id as number)
     if (!resumeToken || !messageIds.length) return

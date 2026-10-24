@@ -7,6 +7,7 @@ use App\Models\Chat;
 use App\Models\Contact;
 use App\Models\Message;
 use App\Models\SystemSetting;
+use App\Models\WebchatReferral;
 use App\Models\WebPushSubscription;
 use App\Services\WebchatAvailabilityService;
 use Illuminate\Http\Request;
@@ -40,6 +41,20 @@ class WebchatController extends Controller
         $settings['operators_available'] = $settings['operators_scheduled'] && $this->availabilityService->hasAvailableOperators();
 
         return response()->json(['webchat' => $settings]);
+    }
+
+    public function referralEntry(Request $request)
+    {
+        $data = $request->validate([
+            'referral_token' => ['required', 'string', 'size:32', 'regex:/\A[A-Za-z0-9]+\z/'],
+        ]);
+
+        WebchatReferral::query()
+            ->where('token', $data['referral_token'])
+            ->whereNull('entered_at')
+            ->update(['entered_at' => now()]);
+
+        return response()->json(['ok' => true]);
     }
 
     public function presence(Request $request)

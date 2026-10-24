@@ -4,10 +4,12 @@ namespace App\Services;
 
 use App\Models\BotFlow;
 use App\Models\Campaign;
+use App\Models\CampaignRecipient;
 use App\Models\Chat;
 use App\Models\Message;
 use App\Models\SystemSetting;
 use App\Models\User;
+use App\Models\WebchatReferral;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
@@ -30,28 +32,33 @@ class DashboardMetricsService
         return [
             'period' => [
                 'days' => $days,
-                'label' => $days === 1 ? 'Hoy' : "Ultimos {$days} dias",
+                'label' => $days === 1 ? 'Hoy' : "Últimos {$days} días",
                 'start' => $start->toDateString(),
                 'end' => $end->toDateString(),
             ],
             'summary' => [
-                $this->summaryCard('active_chats', 'Conversaciones activas', $current['active_chats'], $previous['active_chats'], 'Conversaciones con actividad en el periodo'),
+                $this->summaryCard('active_chats', 'Conversaciones con actividad', $current['active_chats'], $previous['active_chats'], 'Chats con mensajes durante el período'),
                 $this->summaryCard('incoming_messages', 'Mensajes recibidos', $current['incoming_messages'], $previous['incoming_messages'], 'Mensajes enviados por contactos'),
-                $this->summaryCard('pending_chats', 'Esperando respuesta', $current['pending_chats'], $previous['pending_chats'], 'El ultimo mensaje es del contacto'),
+                $this->summaryCard('pending_chats', 'Esperando respuesta', $current['pending_chats'], $previous['pending_chats'], 'Chats abiertos cuyo último mensaje es del contacto', true),
                 [
                     'key' => 'response_time',
-                    'label' => 'Primera respuesta',
+                    'label' => 'Tiempo de respuesta',
                     'value' => $this->formatDuration($current['response_seconds']),
                     'raw_value' => $current['response_seconds'],
                     'delta' => $this->percentageChange($current['response_seconds'], $previous['response_seconds']),
                     'delta_direction' => $this->deltaDirection($current['response_seconds'], $previous['response_seconds'], true),
-                    'description' => 'Promedio de bot u operador',
+                    'description' => 'Espera promedio hasta la respuesta del bot u operador',
                 ],
             ],
+            'webchat_conversion' => $this->webchatConversion($user, $start, $end),
+            'webchat_historical_estimate' => $this->historicalWebchatEstimate($user, $start, $end),
             'message_activity' => $this->messageActivity($user, $start, $end),
             'work_queue' => $this->workQueue($user),
+            'chat_snapshot' => $this->chatSnapshot($user),
             'bot' => $this->botStatus($user, $start, $end),
-            'campaigns' => $user->hasPermission('can_manage_campaigns') ? $this->campaigns() : null,
+            'campaigns' => $user->hasPermission('can_manage_campaigns') ? $this->campaigns($start, $end) : null,
+            'operations' => $user->hasPermission('can_view_audit') ? $this->alephooResults($start, $end) : null,
+            'alerts' => $this->operationalAlerts($user, $start, $end),
             'recent_activity' => $this->recentActivity($user),
             'system_health' => $user->hasPermission('can_view_audit') ? $this->systemHealth() : null,
         ];
@@ -74,7 +81,172 @@ class DashboardMetricsService
         ];
     }
 
-    private function summaryCard(string $key, string $label, int $value, int $previous, string $description): array
+    private function webchatConversion(User $user, CarbonInterface $start, CarbonInterface $end): array
+    {
+        $referrals = WebchatReferral::query()
+            ->join('chats as source_chats', 'source_chats.id', '=', 'webchat_referrals.source_chat_id')
+            ->join('messages as source_messages', 'source_messages.id', '=', 'webchat_referrals.source_message_id')
+            ->where('source_chats.channel', 'whatsapp')
+            ->whereNotNull('webchat_referrals.sent_at')
+            ->whereBetween('webchat_referrals.sent_at', [$start, $end]);
+
+        if (! $user->hasPermission('can_view_all_chats')) {
+            $referrals->where(fn (Builder $scope) => $scope->whereNull('source_chats.operator_id')->orWhere('source_chats.operator_id', $user->id));
+        }
+
+        $receivedReferrals = (clone $referrals)->where(function (Builder $scope) {
+            $scope->whereIn('source_messages.status', ['delivered', 'read'])
+                ->orWhere(function (Builder $entered) {
+                    $entered->whereNotNull('webchat_referrals.entered_at')
+                        ->whereColumn('webchat_referrals.entered_at', '>=', 'webchat_referrals.sent_at');
+                });
+        });
+
+        $receivedContacts = (clone $receivedReferrals)->distinct()->count('source_chats.contact_id');
+        $enteredContacts = (clone $receivedReferrals)
+            ->whereNotNull('webchat_referrals.entered_at')
+            ->whereColumn('webchat_referrals.entered_at', '>=', 'webchat_referrals.sent_at')
+            ->distinct()
+            ->count('source_chats.contact_id');
+
+        return [
+            'received_contacts' => $receivedContacts,
+            'entered_contacts' => $enteredContacts,
+            'rate' => $receivedContacts > 0 ? round(($enteredContacts / $receivedContacts) * 100, 1) : null,
+        ];
+    }
+
+    private function historicalWebchatEstimate(User $user, CarbonInterface $start, CarbonInterface $end): array
+    {
+        $windowMinutes = 30;
+        $linksQuery = DB::table('messages')
+            ->join('chats as source_chats', 'source_chats.id', '=', 'messages.chat_id')
+            ->where('source_chats.channel', 'whatsapp')
+            ->where('messages.sender', 'user')
+            ->where('messages.sender_subtype', 'bot')
+            ->where('messages.bot_node_type', 'link_button')
+            ->whereIn('messages.status', ['delivered', 'read'])
+            ->whereNotNull('messages.interactive_options')
+            ->whereBetween('messages.created_at', [$start, $end])
+            ->whereNotExists(function ($query) {
+                $query->selectRaw('1')
+                    ->from('webchat_referrals')
+                    ->whereColumn('webchat_referrals.source_message_id', 'messages.id');
+            });
+
+        if (! $user->hasPermission('can_view_all_chats')) {
+            $linksQuery->where(fn ($scope) => $scope->whereNull('source_chats.operator_id')->orWhere('source_chats.operator_id', $user->id));
+        }
+
+        $links = $linksQuery
+            ->orderBy('messages.created_at')
+            ->orderBy('messages.id')
+            ->get([
+                'source_chats.contact_id',
+                'messages.created_at',
+                'messages.interactive_options',
+            ])
+            ->filter(fn ($message) => $this->legacyWebchatUrl($message->interactive_options) !== null)
+            ->map(fn ($message) => [
+                'contact_id' => (int) $message->contact_id,
+                'created_at' => Carbon::parse($message->created_at),
+            ])
+            ->values();
+
+        $linkContacts = $links->pluck('contact_id')->unique()->count();
+        if ($linkContacts === 0) {
+            return [
+                'link_contacts' => 0,
+                'possible_contacts' => 0,
+                'unmatched_contacts' => 0,
+                'rate' => null,
+                'window_minutes' => $windowMinutes,
+            ];
+        }
+
+        $webchatQuery = Chat::query()
+            ->where('channel', 'webchat')
+            ->whereBetween('created_at', [$start, Carbon::parse($end)->addMinutes($windowMinutes)])
+            ->orderBy('created_at')
+            ->orderBy('id');
+
+        if (! $user->hasPermission('can_view_all_chats')) {
+            $webchatQuery->where(fn (Builder $scope) => $scope->whereNull('operator_id')->orWhere('operator_id', $user->id));
+        }
+
+        $webchatChats = $webchatQuery->get(['created_at']);
+        $possibleContacts = [];
+        $nextLink = 0;
+        $firstActiveLink = 0;
+        $activeContacts = [];
+        $linkCount = $links->count();
+
+        foreach ($webchatChats as $webchatChat) {
+            $webchatStartedAt = Carbon::parse($webchatChat->created_at);
+            $oldestPossibleAt = $webchatStartedAt->copy()->subMinutes($windowMinutes);
+
+            while ($nextLink < $linkCount && $links[$nextLink]['created_at']->lte($webchatStartedAt)) {
+                $contactId = $links[$nextLink]['contact_id'];
+                $activeContacts[$contactId] = ($activeContacts[$contactId] ?? 0) + 1;
+                $nextLink++;
+            }
+
+            while ($firstActiveLink < $nextLink && $links[$firstActiveLink]['created_at']->lt($oldestPossibleAt)) {
+                $contactId = $links[$firstActiveLink]['contact_id'];
+                $activeContacts[$contactId]--;
+                if ($activeContacts[$contactId] === 0) {
+                    unset($activeContacts[$contactId]);
+                }
+                $firstActiveLink++;
+            }
+
+            // If several WhatsApp contacts sent a link in this window, the historical visit is ambiguous.
+            if (count($activeContacts) === 1) {
+                $possibleContacts[(int) array_key_first($activeContacts)] = true;
+            }
+        }
+
+        $possibleCount = count($possibleContacts);
+
+        return [
+            'link_contacts' => $linkContacts,
+            'possible_contacts' => $possibleCount,
+            'unmatched_contacts' => max(0, $linkContacts - $possibleCount),
+            'rate' => round(($possibleCount / $linkContacts) * 100, 1),
+            'window_minutes' => $windowMinutes,
+        ];
+    }
+
+    private function legacyWebchatUrl(?string $interactiveOptions): ?string
+    {
+        $options = json_decode((string) $interactiveOptions, true);
+        if (! is_array($options)) {
+            return null;
+        }
+
+        foreach ($options as $option) {
+            if (! is_array($option)) {
+                continue;
+            }
+
+            $url = trim((string) ($option['url'] ?? $option['value'] ?? ''));
+            $parsedUrl = filter_var($url, FILTER_VALIDATE_URL) ? parse_url($url) : false;
+            if (! is_array($parsedUrl) || ! str_ends_with(strtolower(rtrim((string) ($parsedUrl['path'] ?? ''), '/')), '/webchat')) {
+                continue;
+            }
+
+            parse_str((string) ($parsedUrl['query'] ?? ''), $query);
+            if (isset($query['wa_ref'])) {
+                continue;
+            }
+
+            return $url;
+        }
+
+        return null;
+    }
+
+    private function summaryCard(string $key, string $label, int $value, int $previous, string $description, bool $lowerIsBetter = false): array
     {
         return [
             'key' => $key,
@@ -82,7 +254,7 @@ class DashboardMetricsService
             'value' => number_format($value, 0, ',', '.'),
             'raw_value' => $value,
             'delta' => $this->percentageChange($value, $previous),
-            'delta_direction' => $this->deltaDirection($value, $previous, false),
+            'delta_direction' => $this->deltaDirection($value, $previous, $lowerIsBetter),
             'description' => $description,
         ];
     }
@@ -173,6 +345,7 @@ class DashboardMetricsService
         $lastMessageBeforeEnd = 'SELECT %s FROM messages WHERE messages.chat_id = chats.id AND messages.created_at <= ? ORDER BY created_at DESC, id DESC LIMIT 1';
 
         return $this->chatQuery($user)
+            ->where('status', 'open')
             ->whereRaw('('.sprintf($lastMessageBeforeEnd, 'sender').") = 'contact'", [$end])
             ->whereRaw('('.sprintf($lastMessageBeforeEnd, 'created_at').') BETWEEN ? AND ?', [$end, $start, $end])
             ->count();
@@ -180,13 +353,24 @@ class DashboardMetricsService
 
     private function messageActivity(User $user, CarbonInterface $start, CarbonInterface $end): array
     {
-        $rows = $this->messagesQuery($user)
+        $messages = Message::query()
+            ->join('chats', 'chats.id', '=', 'messages.chat_id');
+
+        if (! $user->hasPermission('can_view_all_chats')) {
+            $messages->where(fn (Builder $scope) => $scope->whereNull('chats.operator_id')->orWhere('chats.operator_id', $user->id));
+        }
+
+        $rows = $messages
             ->whereBetween('messages.created_at', [$start, $end])
             ->selectRaw('DATE(messages.created_at) as day')
-            ->selectRaw("SUM(CASE WHEN messages.sender = 'contact' THEN 1 ELSE 0 END) as incoming")
-            ->selectRaw("SUM(CASE WHEN messages.sender = 'user' AND messages.sender_subtype = 'bot' THEN 1 ELSE 0 END) as bot")
-            ->selectRaw("SUM(CASE WHEN messages.sender = 'user' AND messages.sender_subtype = 'operator' THEN 1 ELSE 0 END) as operator")
-            ->selectRaw("SUM(CASE WHEN messages.sender = 'user' AND messages.sender_subtype = 'campaign' THEN 1 ELSE 0 END) as campaign")
+            ->selectRaw("SUM(CASE WHEN messages.sender = 'contact' AND COALESCE(chats.channel, 'whatsapp') = 'whatsapp' THEN 1 ELSE 0 END) as incoming_whatsapp")
+            ->selectRaw("SUM(CASE WHEN messages.sender = 'contact' AND chats.channel = 'webchat' THEN 1 ELSE 0 END) as incoming_webchat")
+            ->selectRaw("SUM(CASE WHEN messages.sender = 'user' AND messages.sender_subtype = 'bot' AND COALESCE(chats.channel, 'whatsapp') = 'whatsapp' THEN 1 ELSE 0 END) as bot_whatsapp")
+            ->selectRaw("SUM(CASE WHEN messages.sender = 'user' AND messages.sender_subtype = 'operator' AND COALESCE(chats.channel, 'whatsapp') = 'whatsapp' THEN 1 ELSE 0 END) as operator_whatsapp")
+            ->selectRaw("SUM(CASE WHEN messages.sender = 'user' AND messages.sender_subtype = 'campaign' AND COALESCE(chats.channel, 'whatsapp') = 'whatsapp' THEN 1 ELSE 0 END) as campaign_whatsapp")
+            ->selectRaw("SUM(CASE WHEN messages.sender = 'user' AND messages.sender_subtype = 'bot' AND chats.channel = 'webchat' THEN 1 ELSE 0 END) as bot_webchat")
+            ->selectRaw("SUM(CASE WHEN messages.sender = 'user' AND messages.sender_subtype = 'operator' AND chats.channel = 'webchat' THEN 1 ELSE 0 END) as operator_webchat")
+            ->selectRaw("SUM(CASE WHEN messages.sender = 'user' AND messages.sender_subtype = 'campaign' AND chats.channel = 'webchat' THEN 1 ELSE 0 END) as campaign_webchat")
             ->groupByRaw('DATE(messages.created_at)')
             ->orderBy('day')
             ->get()
@@ -201,10 +385,14 @@ class DashboardMetricsService
             $series[] = [
                 'date' => $day,
                 'label' => $cursor->format($start->diffInDays($end) > 7 ? 'd/m' : 'D d'),
-                'incoming' => (int) ($row?->incoming ?? 0),
-                'bot' => (int) ($row?->bot ?? 0),
-                'operator' => (int) ($row?->operator ?? 0),
-                'campaign' => (int) ($row?->campaign ?? 0),
+                'incoming_whatsapp' => (int) ($row?->incoming_whatsapp ?? 0),
+                'incoming_webchat' => (int) ($row?->incoming_webchat ?? 0),
+                'bot_whatsapp' => (int) ($row?->bot_whatsapp ?? 0),
+                'operator_whatsapp' => (int) ($row?->operator_whatsapp ?? 0),
+                'campaign_whatsapp' => (int) ($row?->campaign_whatsapp ?? 0),
+                'bot_webchat' => (int) ($row?->bot_webchat ?? 0),
+                'operator_webchat' => (int) ($row?->operator_webchat ?? 0),
+                'campaign_webchat' => (int) ($row?->campaign_webchat ?? 0),
             ];
             $cursor->addDay();
         }
@@ -216,7 +404,7 @@ class DashboardMetricsService
     {
         $items = $this->pendingChatsQuery($user)
             ->with(['contact:id,name,whatsapp_id,profile_pic', 'operator:id,name'])
-            ->orderByDesc('latest_message_at')
+            ->orderBy('latest_message_at')
             ->limit(8)
             ->get()
             ->map(fn (Chat $chat) => [
@@ -227,6 +415,7 @@ class DashboardMetricsService
                 'message' => $chat->latest_message_body ?: 'Mensaje sin contenido',
                 'message_at' => $chat->latest_message_at,
                 'message_at_human' => $chat->latest_message_at ? Carbon::parse($chat->latest_message_at)->diffForHumans() : null,
+                'channel' => $chat->channel ?: 'whatsapp',
                 'operator_name' => $chat->operator?->name,
                 'bot_enabled' => (bool) $chat->bot_enabled,
                 'unread_count' => (int) $chat->unread_count,
@@ -236,10 +425,11 @@ class DashboardMetricsService
 
         return [
             'total' => $this->pendingChatsQuery($user)->count(),
+            'unread_chats' => (int) $this->chatQuery($user)->whereHas('messages', fn (Builder $query) => $query->where('status', 'received'))->count(),
             'unread_messages' => (int) $this->chatQuery($user)
-                ->withSum(['messages as unread_total' => fn (Builder $query) => $query->where('status', 'received')], 'id')
+                ->withCount(['messages as unread_count' => fn (Builder $query) => $query->where('status', 'received')])
                 ->get()
-                ->sum('unread_total'),
+                ->sum('unread_count'),
             'items' => $items,
         ];
     }
@@ -247,6 +437,7 @@ class DashboardMetricsService
     private function pendingChatsQuery(User $user): Builder
     {
         return $this->chatQuery($user)
+            ->where('status', 'open')
             ->addSelect([
                 'latest_message_sender' => Message::query()->select('sender')->whereColumn('chat_id', 'chats.id')->latest('created_at')->latest('id')->limit(1),
                 'latest_message_body' => Message::query()->select('body')->whereColumn('chat_id', 'chats.id')->latest('created_at')->latest('id')->limit(1),
@@ -256,32 +447,69 @@ class DashboardMetricsService
             ->whereRaw("(SELECT sender FROM messages WHERE messages.chat_id = chats.id ORDER BY created_at DESC, id DESC LIMIT 1) = 'contact'");
     }
 
+    private function chatSnapshot(User $user): array
+    {
+        $openChats = $this->chatQuery($user)->where('status', 'open');
+        $channels = (clone $openChats)
+            ->selectRaw("COALESCE(channel, 'whatsapp') as channel_key, COUNT(*) as total")
+            ->groupByRaw("COALESCE(channel, 'whatsapp')")
+            ->pluck('total', 'channel_key');
+        $attention = (clone $openChats)
+            ->selectRaw('attention_status, COUNT(*) as total')
+            ->groupBy('attention_status')
+            ->pluck('total', 'attention_status');
+        $archivedChats = Chat::query()->where('attention_status', 'archived');
+        if (! $user->hasPermission('can_view_all_chats')) {
+            $archivedChats->where('last_operator_id', $user->id);
+        }
+
+        return [
+            'open_total' => (clone $openChats)->count(),
+            'whatsapp' => (int) ($channels['whatsapp'] ?? 0),
+            'webchat' => (int) ($channels['webchat'] ?? 0),
+            'bot' => (int) ($attention['bot'] ?? 0),
+            'assigned' => (int) ($attention['assigned'] ?? 0),
+            'pending_assignment' => (int) ($attention['pending_assignment'] ?? 0),
+            'archived' => $archivedChats->count(),
+        ];
+    }
+
     private function botStatus(User $user, CarbonInterface $start, CarbonInterface $end): array
     {
-        $base = $this->chatQuery($user);
+        $base = $this->chatQuery($user)->where('status', 'open');
         $total = (clone $base)->count();
         $enabled = (clone $base)->where('bot_enabled', true)->count();
+        $visibleChatIds = $this->chatQuery($user)->select('chats.id');
+        $chatEvents = Activity::query()
+            ->where('log_name', 'chat')
+            ->whereIn('subject_id', $visibleChatIds)
+            ->whereBetween('created_at', [$start, $end]);
 
         return [
             'enabled_chats' => $enabled,
             'paused_chats' => max(0, $total - $enabled),
             'active_flows' => BotFlow::query()->where('is_active', true)->count(),
-            'handoffs' => Activity::query()->where('event', 'bot_disabled')->whereBetween('created_at', [$start, $end])->count(),
-            'inactivity_resets' => Activity::query()->whereIn('event', ['bot_inactivity_reset', 'bot_inactivity_archived'])->whereBetween('created_at', [$start, $end])->count(),
+            'handoffs' => (clone $chatEvents)->where('event', 'bot_disabled')->count(),
+            'inactivity_resets' => (clone $chatEvents)->whereIn('event', ['bot_inactivity_reset', 'bot_inactivity_archived'])->count(),
         ];
     }
 
-    private function campaigns(): array
+    private function campaigns(CarbonInterface $start, CarbonInterface $end): array
     {
-        $totals = Campaign::query()->selectRaw('COALESCE(SUM(sent_count), 0) sent, COALESCE(SUM(delivered_count), 0) delivered, COALESCE(SUM(read_count), 0) `read`, COALESCE(SUM(failed_count), 0) failed')->first();
+        $sentRecipients = CampaignRecipient::query()->whereBetween('sent_at', [$start, $end]);
+        $sent = (clone $sentRecipients)->count();
+        $delivered = (clone $sentRecipients)->whereNotNull('delivered_at')->count();
+        $read = (clone $sentRecipients)->whereNotNull('read_at')->count();
+        $failed = CampaignRecipient::query()->whereBetween('failed_at', [$start, $end])->count();
 
         return [
-            'sent' => (int) $totals->sent,
-            'delivered' => (int) $totals->delivered,
-            'read' => (int) $totals->read,
-            'failed' => (int) $totals->failed,
-            'delivery_rate' => $totals->sent > 0 ? round(($totals->delivered / $totals->sent) * 100, 1) : 0,
-            'read_rate' => $totals->delivered > 0 ? round(($totals->read / $totals->delivered) * 100, 1) : 0,
+            'sent' => $sent,
+            'delivered' => $delivered,
+            'read' => $read,
+            'failed' => $failed,
+            'active_count' => Campaign::query()->whereIn('status', ['running', 'scheduled'])->count(),
+            'delivery_rate' => $sent > 0 ? round(($delivered / $sent) * 100, 1) : 0,
+            'read_rate' => $delivered > 0 ? round(($read / $delivered) * 100, 1) : 0,
             'recent' => Campaign::query()->with('template:id,name')->latest()->limit(4)->get()->map(fn (Campaign $campaign) => [
                 'id' => $campaign->id,
                 'name' => $campaign->name,
@@ -319,30 +547,41 @@ class DashboardMetricsService
             'integrations.whatsapp.token',
             'integrations.whatsapp.phone_number_id',
             'integrations.alephoo.base_url',
+            'integrations.alephoo_v3.base_url',
         ])->pluck('value', 'key');
 
         $whatsappConfigured = trim((string) ($settings['integrations.whatsapp.token'] ?? env('WHATSAPP_ACCESS_TOKEN', ''))) !== ''
             && trim((string) ($settings['integrations.whatsapp.phone_number_id'] ?? env('WHATSAPP_PHONE_ID', ''))) !== '';
-        $alephooConfigured = trim((string) ($settings['integrations.alephoo.base_url'] ?? env('HOSPITAL_PERSON_API_BASE', ''))) !== '';
+        $alephooConfigured = trim((string) ($settings['integrations.alephoo.base_url'] ?? env('HOSPITAL_PERSON_API_BASE', ''))) !== ''
+            || trim((string) ($settings['integrations.alephoo_v3.base_url'] ?? config('services.alephoo_v3.base_url', ''))) !== '';
         $failedJobs = DB::table('failed_jobs')->count();
         $queuedJobs = DB::table('jobs')->count();
 
         return [
-            ['key' => 'database', 'label' => 'Base de datos', 'status' => 'ok', 'detail' => 'Conectada'],
+            ['key' => 'database', 'label' => 'Base de datos', 'status' => 'ok', 'detail' => 'Consulta disponible'],
             ['key' => 'queue', 'label' => 'Cola de trabajos', 'status' => $failedJobs > 0 ? 'warning' : 'ok', 'detail' => "{$queuedJobs} pendientes · {$failedJobs} fallidos"],
-            ['key' => 'whatsapp', 'label' => 'WhatsApp', 'status' => $whatsappConfigured ? 'ok' : 'warning', 'detail' => $whatsappConfigured ? 'Configurado' : 'Configuracion incompleta'],
-            ['key' => 'alephoo', 'label' => 'Alephoo', 'status' => $alephooConfigured ? 'ok' : 'neutral', 'detail' => $alephooConfigured ? 'Configurado' : 'Sin configurar'],
+            ['key' => 'whatsapp', 'label' => 'WhatsApp', 'status' => $whatsappConfigured ? 'neutral' : 'warning', 'detail' => $whatsappConfigured ? 'Credenciales presentes' : 'Configuración incompleta'],
+            ['key' => 'alephoo', 'label' => 'Alephoo', 'status' => 'neutral', 'detail' => $alephooConfigured ? 'Configuración presente' : 'Sin configurar'],
         ];
     }
 
-    private function operationalAlerts(User $user): array
+    private function operationalAlerts(User $user, CarbonInterface $start, CarbonInterface $end): array
     {
-        $campaignFailures = Campaign::query()->sum('failed_count');
-        if ($campaignFailures > 0 && $user->hasPermission('can_manage_campaigns')) {
-            $alerts[] = ['severity' => 'warning', 'title' => 'Fallos en campañas', 'detail' => "{$campaignFailures} destinatarios fallaron", 'path' => '/campaigns-panel'];
+        if (! $user->hasPermission('can_manage_campaigns')) {
+            return [];
         }
 
-        return $alerts;
+        $campaignFailures = CampaignRecipient::query()->whereBetween('failed_at', [$start, $end])->count();
+        if ($campaignFailures <= 0) {
+            return [];
+        }
+
+        return [[
+            'severity' => 'warning',
+            'title' => 'Fallos en campañas',
+            'detail' => "{$campaignFailures} destinatarios fallaron en el período",
+            'path' => '/campaigns-panel',
+        ]];
     }
 
     private function alephooResults(CarbonInterface $start, CarbonInterface $end): array

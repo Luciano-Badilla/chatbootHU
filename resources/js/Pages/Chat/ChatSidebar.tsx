@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect } from "react"
 import { motion } from "framer-motion"
-import { Archive, Bot, Clock3, Globe2, Headset, MessageCircle, Search, User } from "lucide-react"
+import { Archive, Bot, Clock3, createLucideIcon, Headset, Search, User } from "lucide-react"
 import { Input } from "shadcn/components/ui/input"
 import { Avatar } from "shadcn/components/ui/avatar"
 import { Badge } from "shadcn/components/ui/badge"
@@ -10,6 +10,19 @@ import { cn } from "shadcn/lib/utils"
 import type { Chat } from "./ChatPanel"
 import { formatDistanceToNow } from "date-fns"
 import { es } from "date-fns/locale"
+
+const MessagesCircle = createLucideIcon("MessagesCircle", [
+  ["path", { d: "M19.95 10.05a7 7 0 011.412 7.872 1 1 0 00-.058.787l.675 2.089a1 1 0 01-1.236 1.168l-2.155-.631a1 1 0 00-.745.06 7 7 0 01-7.793-1.445" }],
+  ["path", { d: "M2.696 12.708a1 1 0 00-.058-.785 7 7 0 113.518 3.473 1 1 0 00-.744-.061l-2.155.63a1 1 0 01-1.236-1.167z" }],
+])
+
+function WhatsAppIcon({ className }: { className?: string }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor" className={className}>
+      <path d="M2.004 22l1.352-4.968A9.954 9.954 0 0 1 2 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10a9.954 9.954 0 0 1-5.03-1.355L2.004 22zM8.391 7.308a.961.961 0 0 0-.371.1 1.293 1.293 0 0 0-.294.228c-.12.113-.188.211-.261.306A2.729 2.729 0 0 0 6.9 9.62c.002.49.13.967.33 1.413.409.902 1.082 1.857 1.971 2.742.214.213.423.427.648.626a9.448 9.448 0 0 0 3.84 2.046l.569.087c.185.01.37-.004.556-.013a1.99 1.99 0 0 0 .833-.231c.166-.088.244-.132.383-.22 0 0 .043-.028.125-.09.135-.1.218-.171.33-.288.083-.086.155-.187.21-.302.078-.163.156-.474.188-.733.024-.198.017-.306.014-.373-.004-.107-.093-.218-.19-.265l-.582-.261s-.87-.379-1.401-.621a.498.498 0 0 0-.177-.041.482.482 0 0 0-.378.127v-.002c-.005 0-.072.057-.795.933a.35.35 0 0 1-.368.13 1.416 1.416 0 0 1-.191-.066c-.124-.052-.167-.072-.252-.109l-.005-.002a6.01 6.01 0 0 1-1.57-1c-.126-.11-.243-.23-.363-.346a6.296 6.296 0 0 1-1.02-1.268l-.059-.095a.923.923 0 0 1-.102-.205c-.038-.147.061-.265.061-.265s.243-.266.356-.41a4.38 4.38 0 0 0 .263-.373c.118-.19.155-.385.093-.536-.28-.684-.57-1.365-.868-2.041-.059-.134-.234-.23-.393-.249-.054-.006-.108-.012-.162-.016a3.385 3.385 0 0 0-.403.004z" />
+    </svg>
+  )
+}
 
 interface ChatSidebarProps {
   chats: Chat[]
@@ -71,11 +84,24 @@ function InboxChats({
                 : "hover:shadow-[inset_3px_0_0_#7fc7ff]",
             )}
           >
-            <Avatar className="h-10 w-10 shrink-0 overflow-hidden bg-[#2b5f90] text-white">
-              {chat.avatar && !failedAvatars[String(chat.id)] ? (
-                <img src={chat.avatar} alt={chat.name} className="h-full w-full object-cover" onError={() => setFailedAvatars((current) => ({ ...current, [String(chat.id)]: true }))} />
-              ) : <User className="m-auto h-5 w-5" />}
-            </Avatar>
+            <span className="relative h-10 w-10 shrink-0">
+              <Avatar className="h-10 w-10 overflow-hidden bg-[#2b5f90] text-white">
+                {chat.avatar && !failedAvatars[String(chat.id)] ? (
+                  <img src={chat.avatar} alt={chat.name} className="h-full w-full object-cover" onError={() => setFailedAvatars((current) => ({ ...current, [String(chat.id)]: true }))} />
+                ) : <User className="m-auto h-5 w-5" />}
+              </Avatar>
+              <span
+                role="img"
+                title={chat.channel === "webchat" ? "Webchat" : "WhatsApp"}
+                aria-label={chat.channel === "webchat" ? "Canal: Webchat" : "Canal: WhatsApp"}
+                className={cn(
+                  "absolute -bottom-1 -right-1 grid h-5 w-5 place-items-center rounded-full border-2 border-white shadow-sm",
+                  chat.channel === "webchat" ? "bg-[#2b5f90] text-white" : "bg-[#25D366] text-white",
+                )}
+              >
+                {chat.channel === "webchat" ? <MessagesCircle className="h-3 w-3" /> : <WhatsAppIcon className="h-3 w-3" />}
+              </span>
+            </span>
             <span className="min-w-0 flex-1">
               <span className="flex items-center justify-between gap-2">
                 <span className={cn("truncate text-sm font-semibold group-hover:text-white", selected ? "text-[#013765]" : "text-slate-800")}>{chat.name}</span>
@@ -320,8 +346,8 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canVi
   ]
 
   const channelFilterOptions = [
-    { key: "whatsapp" as const, label: "WhatsApp", icon: MessageCircle, count: chats.filter((chat) => chat.channel !== "webchat").length },
-    { key: "webchat" as const, label: "Webchat", icon: Globe2, count: chats.filter((chat) => chat.channel === "webchat").length },
+    { key: "whatsapp" as const, label: "WhatsApp", icon: WhatsAppIcon, count: chats.filter((chat) => chat.channel !== "webchat").length },
+    { key: "webchat" as const, label: "Webchat", icon: MessagesCircle, count: chats.filter((chat) => chat.channel === "webchat").length },
   ]
 
   function formatTimestamp(timestamp?: string) {

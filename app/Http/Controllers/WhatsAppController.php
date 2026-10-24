@@ -12,6 +12,7 @@ use App\Models\Message;
 use App\Models\MessageStatus;
 use App\Models\SystemSetting;
 use App\Models\User;
+use App\Models\WebchatReferral;
 use App\Services\AuditService;
 use App\Services\BotInactivityService;
 use App\Services\CampaignMetricsService;
@@ -1819,7 +1820,7 @@ class WhatsAppController extends Controller
         ?string $waMessageId = null,
         ?string $botNodeType = null,
         ?array $interactiveOptions = null
-    ): void {
+    ): Message {
         $contact = $chat->contact;
 
         $message = Message::create([
@@ -1867,6 +1868,8 @@ class WhatsAppController extends Controller
         } catch (\Throwable $e) {
             Log::error('MQTT Error (persistAndPublishOutgoing): '.$e->getMessage());
         }
+
+        return $message;
     }
 
     private function persistAndPublishOutgoingMedia(
@@ -2649,6 +2652,32 @@ class WhatsAppController extends Controller
             return;
         }
 
+        $referral = null;
+        $destinationPath = rtrim((string) ($parsedUrl['path'] ?? ''), '/');
+        if (($chat->channel ?? 'whatsapp') === 'whatsapp' && str_ends_with($destinationPath, '/webchat')) {
+            $referralToken = Str::random(32);
+            $fragmentPosition = strpos($destination, '#');
+            $fragment = $fragmentPosition === false ? '' : substr($destination, $fragmentPosition);
+            $destinationWithoutFragment = $fragmentPosition === false ? $destination : substr($destination, 0, $fragmentPosition);
+            $separator = str_contains($destinationWithoutFragment, '?') ? '&' : '?';
+            $trackedDestination = $destinationWithoutFragment.$separator.'wa_ref='.$referralToken.$fragment;
+
+            if (mb_strlen($trackedDestination) <= 2000) {
+                try {
+                    $referral = WebchatReferral::create([
+                        'token' => $referralToken,
+                        'source_chat_id' => $chat->id,
+                    ]);
+                    $destination = $trackedDestination;
+                } catch (\Throwable $exception) {
+                    Log::warning('No se pudo registrar la invitacion de WhatsApp a Webchat.', [
+                        'chat_id' => $chat->id,
+                        'exception' => $exception::class,
+                    ]);
+                }
+            }
+        }
+
         $body = mb_substr($body, 0, 1024);
         $buttonText = mb_substr($buttonText, 0, 20);
         $header = mb_substr($header, 0, 60);
@@ -2703,6 +2732,7 @@ class WhatsAppController extends Controller
             ->post('https://graph.facebook.com/v22.0/'.$this->whatsappPhoneId().'/messages', $payload);
 
         if ($response->failed()) {
+            $referral?->delete();
             Log::error('API Error (sendBotLinkButtonNode): '.$response->body(), [
                 'chat_id' => $chat->id,
                 'node_id' => $node->id,
@@ -2712,13 +2742,18 @@ class WhatsAppController extends Controller
             return;
         }
 
-        $this->persistAndPublishOutgoing(
+        $message = $this->persistAndPublishOutgoing(
             $chat,
             $body,
             $response->json('messages.0.id'),
             'link_button',
             $interactiveOptions,
         );
+
+        $referral?->update([
+            'source_message_id' => $message->id,
+            'sent_at' => now(),
+        ]);
     }
 
     private function sendBotContactNode(Chat $chat, BotNode $node): void

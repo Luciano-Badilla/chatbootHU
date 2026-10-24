@@ -47,6 +47,7 @@
                     <li><strong>Datos técnicos:</strong> identificador de la conversación, información de sesión y registros técnicos necesarios para que el servicio funcione, prevenir usos indebidos y resolver errores. El servidor y el proveedor de alojamiento también pueden registrar datos de conexión, como la dirección IP, la fecha y el navegador.</li>
                 </ul>
                 <p>El webchat conserva en el almacenamiento local del navegador un token aleatorio para retomar una conversación. También utiliza cookies técnicas necesarias para la sesión y la seguridad del sitio.</p>
+                <p>Los enlaces de WhatsApp que dirigen al webchat incluyen un identificador aleatorio. Se utiliza para registrar si el enlace se abri&oacute; y presentar en el dashboard, de forma agregada, cu&aacute;ntas personas ingresan. El registro t&eacute;cnico se asocia al contacto de WhatsApp que recibi&oacute; el enlace.</p>
             </section>
 
             <section id="finalidades">

@@ -33,6 +33,7 @@ Route::post('/webhook', [WhatsAppController::class, 'receiveMessage']);
 
 Route::post('/webchat/session', [WebchatController::class, 'session']);
 Route::post('/webchat/status', [WebchatController::class, 'status']);
+Route::post('/webchat/referral-entry', [WebchatController::class, 'referralEntry'])->middleware('throttle:webchat-presence');
 Route::post('/webchat/presence', [WebchatController::class, 'presence'])->middleware('throttle:webchat-presence');
 Route::post('/webchat/start', [WebchatController::class, 'start']);
 Route::post('/webchat/restart', [WebchatController::class, 'restart']);
