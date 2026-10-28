@@ -165,10 +165,13 @@ class WebchatController extends Controller
     {
         $data = $request->validate([
             'resume_token' => ['required', 'string', 'max:80'],
+            'force_restart' => ['sometimes', 'boolean'],
         ]);
         $chat = $this->requireChat($request, $data['resume_token']);
 
-        $shouldRestart = $chat->status === 'closed' || ! $chat->bot_enabled;
+        $shouldRestart = (bool) ($data['force_restart'] ?? false)
+            || $chat->status === 'closed'
+            || ! $chat->bot_enabled;
         if ($shouldRestart) {
             $settings = $this->settings();
             $flow = $this->webchatFlow($settings);

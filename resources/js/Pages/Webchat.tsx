@@ -322,6 +322,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   const [showIosInstallHelp, setShowIosInstallHelp] = useState(false)
   const [isClosingIosInstallHelp, setIsClosingIosInstallHelp] = useState(false)
   const [infoSheetOpen, setInfoSheetOpen] = useState(false)
+  const [restartConfirmOpen, setRestartConfirmOpen] = useState(false)
   const [selectedOptions, setSelectedOptions] = useState<Record<string, string>>({})
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false)
   const [fileAccept, setFileAccept] = useState("")
@@ -1028,20 +1029,26 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     } catch (exception) { setError(exception instanceof Error ? exception.message : "No se pudo iniciar el chat.") } finally { setSending(false) }
   }
 
-  const restartConversation = async () => {
+  const restartConversation = async (forceRestart = false) => {
     setError("")
     setSending(true)
     try {
-      const data = await api("restart", { resume_token: token })
+      const data = await api("restart", { resume_token: token, force_restart: forceRestart })
       syncChatAssignee(data.chat)
       setMessages(data.chat.messages ?? [])
       acknowledgeIncomingMessages(data.chat.messages ?? [])
       scrollToNewMessageRef.current = true
+      return true
     } catch (exception) {
       setError(exception instanceof Error ? exception.message : "No se pudo reiniciar la conversación.")
+      return false
     } finally {
       setSending(false)
     }
+  }
+
+  const confirmRestartConversation = async () => {
+    if (await restartConversation(true)) setRestartConfirmOpen(false)
   }
 
   const send = async (message: string, optionId?: string) => {
@@ -1442,7 +1449,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
           <div className="relative flex items-center gap-3">
             <div className={`grid h-11 w-11 shrink-0 place-items-center rounded-full shadow-sm ${isOperatorHandling ? "bg-[#e8f0f6] text-[#003f73]" : "bg-white p-1.5"}`}>{isWaitingForOperator && !waitingWithoutOperator ? <Loader2 className="h-5 w-5 animate-spin" aria-label="Buscando un operador" /> : isOperatorHandling ? waitingWithoutOperator ? <Clock3 className="h-5 w-5" aria-label="En espera" /> : <Headset className="h-5 w-5" aria-label="Operador" /> : <img src={webchat.logo_url ? publicAssetUrl(webchat.logo_url) : `${import.meta.env.VITE_APP_URL}/images/hu_icon_new.png`} alt="Hospital Universitario" className="h-full w-full object-contain" />}</div>
             <div className="min-w-0"><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/70">{webchat.subtitle}</p><h1 className="mt-0.5 text-base font-bold tracking-tight sm:text-lg">{headerName}</h1><p className="mt-0.5 flex items-center gap-1.5 text-xs text-white/80"><span className={`h-1.5 w-1.5 rounded-full ${channelStatus.dot}`} />{channelStatus.label}</p></div>
-            <div className="ml-auto flex shrink-0 items-center gap-2"><button type="button" onClick={() => setInfoSheetOpen(true)} title="Información de la conversación" aria-label="Información de la conversación" className="grid h-9 w-9 place-items-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20"><Info className="h-4 w-4" /></button>{notificationStatusLoaded && token && !pushNotificationsEnabled && <button type="button" onClick={() => void enableNotifications()} title={notificationPermission === "denied" ? "Notificaciones bloqueadas. Habilitalas desde la configuración del navegador." : "Activar notificaciones"} aria-label="Activar notificaciones" className="grid h-9 w-9 place-items-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20"><BellOff className="h-4 w-4" /></button>}</div>
+            <div className="ml-auto flex shrink-0 items-center gap-2">{token ? <button type="button" onClick={() => { setError(""); setRestartConfirmOpen(true) }} disabled={sending} title="Reiniciar la conversación con Huni" aria-label="Reiniciar la conversación con Huni" className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-amber-300 bg-amber-300 px-2.5 text-xs font-semibold text-[#003f73] transition hover:bg-amber-200 disabled:opacity-50 sm:px-3">{sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}<span>Reiniciar</span></button> : null}<button type="button" onClick={() => setInfoSheetOpen(true)} title="Información de la conversación" aria-label="Información de la conversación" className="grid h-9 w-9 place-items-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20"><Info className="h-4 w-4" /></button>{notificationStatusLoaded && token && !pushNotificationsEnabled && <button type="button" onClick={() => void enableNotifications()} title={notificationPermission === "denied" ? "Notificaciones bloqueadas. Habilitalas desde la configuración del navegador." : "Activar notificaciones"} aria-label="Activar notificaciones" className="grid h-9 w-9 place-items-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20"><BellOff className="h-4 w-4" /></button>}</div>
           </div>
         </header>
 
@@ -1484,6 +1491,22 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
               <button type="button" onClick={async () => { if (await enableNotifications()) dismissNotificationPrompt() }} className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#064d7d] px-4 py-3.5 text-sm font-bold text-white shadow-lg shadow-[#064d7d]/20 transition hover:-translate-y-0.5 hover:bg-[#003f73] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#064d7d] focus-visible:ring-offset-2"><Bell className="h-4 w-4" />Activar notificaciones</button>
               <button type="button" onClick={dismissNotificationPrompt} className="mt-2 w-full rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-500 transition hover:bg-slate-50 hover:text-slate-700">Ahora no</button>
               <p className="mt-2 text-center text-[11px] leading-5 text-slate-400">Tu navegador te pedirá permiso. Podés cambiar esta opción más adelante.</p>
+            </div>
+          </div>
+        </WebchatModal>
+
+        <WebchatModal open={restartConfirmOpen} className="p-5" cardClassName="w-full max-w-[420px]">
+          <div role="dialog" aria-modal="true" aria-labelledby="restart-conversation-title" className="w-full rounded-2xl bg-white p-5 text-slate-800 shadow-xl">
+            <div className="flex items-start gap-3">
+              <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e8f0f6] text-[#003f73]"><RefreshCw className="h-5 w-5" /></span>
+              <div>
+                <p id="restart-conversation-title" className="text-base font-bold">¿Reiniciar la conversación con Huni?</p>
+                <p className="mt-1 text-sm leading-5 text-slate-500">{isOperatorHandling ? "La atención del operador se interrumpirá y volverás al inicio del flujo con Huni." : "La conversación volverá al inicio del flujo con Huni."}</p>
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={() => setRestartConfirmOpen(false)} disabled={sending} className="rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 disabled:opacity-50">Cancelar</button>
+              <button type="button" onClick={() => void confirmRestartConversation()} disabled={sending} className="inline-flex items-center gap-2 rounded-xl bg-[#003f73] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#003461] disabled:opacity-60">{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}{sending ? "Reiniciando..." : "Reiniciar conversación"}</button>
             </div>
           </div>
         </WebchatModal>
