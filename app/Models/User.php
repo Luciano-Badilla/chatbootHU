@@ -147,7 +147,7 @@ class User extends Authenticatable
                 'can_assign_chats' => true,
                 'can_toggle_bot' => true,
                 'can_manage_users' => false,
-                'can_manage_campaigns' => false,
+                'can_manage_campaigns' => true,
                 'can_administer_chats' => false,
             ],
         };

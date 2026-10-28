@@ -106,6 +106,69 @@ class CampaignController extends Controller
         ], 201);
     }
 
+    public function update(Request $request, Campaign $campaign)
+    {
+        if ($campaign->status !== 'draft') {
+            throw ValidationException::withMessages([
+                'campaign' => 'Solo se pueden editar campañas en borrador.',
+            ]);
+        }
+
+        $data = $request->validate([
+            'name' => ['required', 'string', 'max:160'],
+            'whatsapp_template_id' => ['required', 'integer', 'exists:whatsapp_templates,id'],
+            'source_filename' => ['required_with:rows', 'nullable', 'string', 'max:255'],
+            'start_mode' => ['required', 'in:now,scheduled'],
+            'scheduled_at' => ['required_if:start_mode,scheduled', 'nullable', 'date', 'after:now'],
+            'rows' => ['sometimes', 'array', 'min:1', 'max:5000'],
+            'rows.*.row_number' => ['nullable', 'integer', 'min:2'],
+            'rows.*.phone' => ['nullable', 'string', 'max:80'],
+            'rows.*.values' => ['nullable', 'array'],
+        ]);
+
+        $template = WhatsAppTemplate::query()->findOrFail($data['whatsapp_template_id']);
+
+        if (strtoupper($template->status) !== 'APPROVED') {
+            throw ValidationException::withMessages([
+                'whatsapp_template_id' => 'Solo se pueden usar plantillas aprobadas por Meta.',
+            ]);
+        }
+
+        if (! $template->is_supported) {
+            throw ValidationException::withMessages([
+                'whatsapp_template_id' => 'La plantilla usa componentes que esta version del modulo todavia no puede enviar.',
+            ]);
+        }
+
+        $updatedCampaign = $this->campaignImportService->updateDraft(
+            $campaign,
+            $data['name'],
+            $template,
+            $data['source_filename'] ?? $campaign->source_filename,
+            array_key_exists('rows', $data) ? $data['rows'] : null,
+            ($data['start_mode'] ?? 'now') === 'scheduled' ? Carbon::parse($data['scheduled_at']) : null,
+        );
+
+        $this->auditService->record(
+            'campaigns',
+            'updated',
+            "Actualizo la campaña {$updatedCampaign->name}",
+            $request->user(),
+            $updatedCampaign,
+            [
+                'template' => $template->name,
+                'total_count' => $updatedCampaign->total_count,
+                'valid_count' => $updatedCampaign->valid_count,
+                'recipients_replaced' => array_key_exists('rows', $data),
+            ],
+        );
+
+        return response()->json([
+            'ok' => true,
+            'campaign' => $this->serializeCampaign($updatedCampaign),
+        ]);
+    }
+
     public function launch(Request $request, Campaign $campaign)
     {
         if (! in_array($campaign->status, ['draft', 'paused', 'scheduled'], true)) {

@@ -9,6 +9,7 @@ import {
   Loader2,
   Megaphone,
   Pause,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
@@ -241,10 +242,11 @@ export default function CampaignsPanel({
 }: CampaignsPanelProps) {
   const [section, setSection] = useState<"campaigns" | "templates">("campaigns")
   const [campaignSearch, setCampaignSearch] = useState("")
-  const [campaignStatusFilter, setCampaignStatusFilter] = useState("all")
+  const [campaignStatusFilters, setCampaignStatusFilters] = useState<string[]>(["all"])
   const [templateSearch, setTemplateSearch] = useState("")
   const [campaigns, setCampaigns] = useState(initialCampaigns)
   const [templates, setTemplates] = useState(initialTemplates)
+  const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null)
   const [campaignDialogOpen, setCampaignDialogOpen] = useState(false)
   const [detailCampaign, setDetailCampaign] = useState<Campaign | null>(null)
   const [campaignToLaunch, setCampaignToLaunch] = useState<Campaign | null>(null)
@@ -320,8 +322,10 @@ export default function CampaignsPanel({
   const filteredCampaigns = useMemo(() => {
     const query = campaignSearch.trim().toLowerCase()
     return campaigns.filter((campaign) => {
-      const matchesStatus = campaignStatusFilter === "all"
-        || (campaignStatusFilter === "with_errors" ? campaign.failed_count > 0 : campaign.status === campaignStatusFilter)
+      const matchesStatus = campaignStatusFilters.includes("all")
+        || campaignStatusFilters.some((status) => status === "with_errors"
+          ? campaign.failed_count > 0
+          : campaign.status === status)
       const searchable = [
         campaign.name,
         campaign.template?.name,
@@ -330,7 +334,7 @@ export default function CampaignsPanel({
       ].filter(Boolean).join(" ").toLowerCase()
       return matchesStatus && (query === "" || searchable.includes(query))
     })
-  }, [campaignSearch, campaignStatusFilter, campaigns])
+  }, [campaignSearch, campaignStatusFilters, campaigns])
   const filteredTemplates = useMemo(() => {
     const query = templateSearch.trim().toLowerCase()
     if (query === "") return templates
@@ -352,6 +356,7 @@ export default function CampaignsPanel({
   }
 
   const resetCampaignForm = () => {
+    setEditingCampaign(null)
     setCampaignName("")
     setStartMode("now")
     setScheduledAt("")
@@ -434,46 +439,68 @@ export default function CampaignsPanel({
     }
   }
 
-  const createCampaign = async () => {
+  const saveCampaign = async () => {
     if (!campaignName.trim()) return toast.error("Ingresá un nombre para la campaña")
     if (!selectedTemplate) return toast.error("Seleccioná una plantilla aprobada")
-    if (!phoneHeader) return toast.error("El archivo debe incluir una columna llamada telefono")
-    if (missingHeaders.length > 0) return toast.error(`Faltan columnas: ${missingHeaders.join(", ")}`)
-    if (importedRows.length === 0) return toast.error("Importá un archivo con destinatarios")
+    if (!editingCampaign && importedRows.length === 0) return toast.error("Importá un archivo con destinatarios")
+    if (importedRows.length > 0 && !phoneHeader) return toast.error("El archivo debe incluir una columna llamada telefono")
+    if (importedRows.length > 0 && missingHeaders.length > 0) return toast.error(`Faltan columnas: ${missingHeaders.join(", ")}`)
     if (startMode === "scheduled" && (!scheduledAt || new Date(scheduledAt).getTime() <= Date.now())) {
       return toast.error("Elegí una fecha y hora futuras para programar la campaña")
     }
-    if (startMode === "scheduled" && importSummary.valid === 0) return toast.error("El archivo no tiene destinatarios válidos para programar")
+    if (startMode === "scheduled" && (importedRows.length > 0 ? importSummary.valid : editingCampaign?.valid_count ?? 0) === 0) {
+      return toast.error("La campaña no tiene destinatarios válidos para programar")
+    }
 
     setCreatingCampaign(true)
     try {
-      const response = await fetch(`${API_BASE}/api/campaigns`, {
-        method: "POST",
+      const requestBody: Record<string, unknown> = {
+        name: campaignName.trim(),
+        whatsapp_template_id: selectedTemplate.id,
+        source_filename: sourceFilename || editingCampaign?.source_filename || null,
+        start_mode: startMode,
+        scheduled_at: startMode === "scheduled" ? scheduledAt : null,
+      }
+      if (importedRows.length > 0) {
+        requestBody.rows = importedRows.map((row) => ({
+          row_number: row.row_number,
+          phone: row.phone,
+          values: row.raw,
+        }))
+      }
+
+      const response = await fetch(
+        editingCampaign ? `${API_BASE}/api/campaigns/${editingCampaign.id}` : `${API_BASE}/api/campaigns`,
+        {
+        method: editingCampaign ? "PUT" : "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({
-          name: campaignName.trim(),
-          whatsapp_template_id: selectedTemplate.id,
-          source_filename: sourceFilename,
-          start_mode: startMode,
-          scheduled_at: startMode === "scheduled" ? scheduledAt : null,
-          rows: importedRows.map((row) => ({
-            row_number: row.row_number,
-            phone: row.phone,
-            values: row.raw,
-          })),
-        }),
-      })
-      if (!response.ok) throw new Error(await responseMessage(response, "No se pudo crear la campaña"))
-      const payload = await response.json()
-      setCampaigns((current) => [payload.campaign, ...current])
+        body: JSON.stringify(requestBody),
+        },
+      )
+      if (!response.ok) throw new Error(await responseMessage(response, editingCampaign ? "No se pudo actualizar la campaña" : "No se pudo crear la campaña"))
+      const result = await response.json()
+      setCampaigns((current) => editingCampaign
+        ? current.map((campaign) => campaign.id === editingCampaign.id ? result.campaign : campaign)
+        : [result.campaign, ...current])
       setCampaignDialogOpen(false)
       resetCampaignForm()
-      toast.success(startMode === "scheduled" ? "Campaña programada" : "Campaña creada en borrador")
+      toast.success(editingCampaign
+        ? startMode === "scheduled" ? "Borrador actualizado y programado" : "Borrador actualizado"
+        : startMode === "scheduled" ? "Campaña programada" : "Campaña creada en borrador")
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo crear la campaña")
+      toast.error(error instanceof Error ? error.message : editingCampaign ? "No se pudo actualizar la campaña" : "No se pudo crear la campaña")
     } finally {
       setCreatingCampaign(false)
     }
+  }
+
+  const editDraftCampaign = (campaign: Campaign) => {
+    resetCampaignForm()
+    setEditingCampaign(campaign)
+    setCampaignName(campaign.name)
+    setTemplateId(campaign.template ? String(campaign.template.id) : "")
+    setSourceFilename(campaign.source_filename ?? "")
+    setCampaignDialogOpen(true)
   }
 
   const changeCampaignStatus = async (campaign: Campaign, action: "launch" | "pause") => {
@@ -506,6 +533,13 @@ export default function CampaignsPanel({
       if (!response.ok) throw new Error(await responseMessage(response, "No se pudieron reintentar los destinatarios fallidos"))
       const payload = await response.json()
       setCampaigns((current) => current.map((item) => (item.id === campaign.id ? payload.campaign : item)))
+      if (detailCampaign?.id === campaign.id) {
+        setDetailCampaign(payload.campaign)
+        setRecipients((current) => current.map((recipient) => recipient.status === "failed"
+          ? { ...recipient, status: "pending", error_message: null }
+          : recipient,
+        ))
+      }
       toast.success(`Se reintentará el envío a ${payload.retried_count} destinatarios fallidos`)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudieron reintentar los destinatarios fallidos")
@@ -617,7 +651,10 @@ export default function CampaignsPanel({
                   <RefreshCw className="mr-2 h-4 w-4" />
                   Actualizar
                 </Button>
-                <Button className="bg-[#013765] text-white hover:bg-[#024a8a]" onClick={() => setCampaignDialogOpen(true)}>
+                <Button className="bg-[#013765] text-white hover:bg-[#024a8a]" onClick={() => {
+                  resetCampaignForm()
+                  setCampaignDialogOpen(true)
+                }}>
                   <Plus className="mr-2 h-4 w-4" />
                   Nueva campaña
                 </Button>
@@ -634,8 +671,8 @@ export default function CampaignsPanel({
             </div>
 
             <div className="surface-nested overflow-hidden rounded-xl border border-[#cbd8e5] bg-white shadow-sm">
-              <div className="grid grid-cols-1 gap-3 border-b border-[#dbe5ef] bg-slate-50 px-4 py-3 md:grid-cols-[minmax(0,1fr)_190px]">
-                <div className="relative">
+              <div className="flex items-center justify-between gap-3 border-b border-[#dbe5ef] bg-slate-50 px-4 py-3">
+                <div className="relative w-44 shrink-0 sm:w-52 md:w-80">
                   <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#013765]/45" />
                   <Input
                     value={campaignSearch}
@@ -644,18 +681,44 @@ export default function CampaignsPanel({
                     className="bg-white pl-9"
                   />
                 </div>
-                <Select value={campaignStatusFilter} onValueChange={setCampaignStatusFilter}>
-                  <SelectTrigger className="bg-white"><SelectValue placeholder="Filtrar por estado" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Todos los estados</SelectItem>
-                    <SelectItem value="draft">Borrador</SelectItem>
-                    <SelectItem value="running">En ejecución</SelectItem>
-                    <SelectItem value="paused">Pausada</SelectItem>
-                    <SelectItem value="scheduled">Programada</SelectItem>
-                    <SelectItem value="completed">Finalizada</SelectItem>
-                    <SelectItem value="with_errors">Con errores</SelectItem>
-                  </SelectContent>
-                </Select>
+                <div className="flex min-w-0 shrink gap-1 overflow-x-auto" aria-label="Filtrar campañas por estado">
+                  {([
+                    ["all", "Todos"],
+                    ["draft", "Borradores"],
+                    ["running", "En curso"],
+                    ["scheduled", "Programadas"],
+                    ["paused", "Pausadas"],
+                    ["completed", "Finalizadas"],
+                    ["with_errors", "Con errores"],
+                  ] as const).map(([value, label]) => (
+                    <Button
+                      key={value}
+                      type="button"
+                      size="sm"
+                      aria-label={`Filtrar por ${label}`}
+                      variant={campaignStatusFilters.includes(value) ? "default" : "outline"}
+                      aria-pressed={campaignStatusFilters.includes(value)}
+                      className={cn("h-7 shrink-0 whitespace-nowrap text-xs", campaignStatusFilters.includes(value) && "bg-[#013765] hover:bg-[#024a8a]")}
+                      onClick={() => {
+                        if (value === "all") {
+                          setCampaignStatusFilters(["all"])
+                          return
+                        }
+
+                        setCampaignStatusFilters((current) => {
+                          const selected = current.filter((status) => status !== "all")
+                          const next = selected.includes(value)
+                            ? selected.filter((status) => status !== value)
+                            : [...selected, value]
+
+                          return next.length > 0 ? next : ["all"]
+                        })
+                      }}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
               </div>
 
               <div className="hidden grid-cols-[minmax(250px,1.5fr)_130px_minmax(270px,1fr)_220px] gap-3 border-b border-[#dbe5ef] bg-[#013765]/[0.03] px-4 py-3 text-xs font-medium text-[#013765]/70 lg:grid">
@@ -707,43 +770,59 @@ export default function CampaignsPanel({
                     <ResultValue label="Fallidos" value={campaign.failed_count} danger={campaign.failed_count > 0} />
                   </div>
                   <div className="flex flex-wrap justify-start gap-2 lg:justify-end">
+                    {campaign.status === "draft" ? (
+                      <Button
+                        variant="outline"
+                        className="w-full max-w-36 justify-center gap-2 border-[#dbe5ef] text-[#013765] hover:bg-[#013765]/[0.04]"
+                        onClick={() => editDraftCampaign(campaign)}
+                      >
+                        <Pencil className="h-4 w-4 shrink-0" />
+                        <span className="w-[84px] text-center">Editar</span>
+                      </Button>
+                    ) : null}
                     <Button
                       variant="outline"
-                      className="border-[#dbe5ef] text-[#013765] hover:bg-[#013765]/[0.04]"
+                      className="w-full max-w-36 justify-center gap-2 border-[#dbe5ef] text-[#013765] hover:bg-[#013765]/[0.04]"
                       onClick={() => void openCampaignDetail(campaign)}
                     >
-                      <Eye className="mr-2 h-4 w-4" />
-                      Detalle
+                      <Eye className="h-4 w-4 shrink-0" />
+                      <span className="w-[84px] text-center">Detalle</span>
                     </Button>
                     {campaign.status === "running" ? (
                       <Button
                         variant="outline"
-                        className="border-[#dbe5ef] text-[#013765] hover:bg-[#013765]/[0.04]"
+                        className="w-full max-w-36 justify-center gap-2 border-[#dbe5ef] text-[#013765] hover:bg-[#013765]/[0.04]"
                         onClick={() => void changeCampaignStatus(campaign, "pause")}
                         disabled={busyCampaignId === campaign.id}
                       >
-                        {busyCampaignId === campaign.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Pause className="mr-2 h-4 w-4" />}
-                        Pausar
+                        {busyCampaignId === campaign.id
+                          ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                          : <Pause className="h-4 w-4 shrink-0" />}
+                        <span className="w-[84px] text-center">Pausar</span>
                       </Button>
                     ) : campaign.status === "draft" || campaign.status === "paused" || campaign.status === "scheduled" ? (
                       <Button
-                        className="bg-[#013765] text-white hover:bg-[#024a8a]"
+                        className="w-full max-w-36 justify-center gap-2 bg-[#013765] text-white hover:bg-[#024a8a]"
                         onClick={() => setCampaignToLaunch(campaign)}
                         disabled={busyCampaignId === campaign.id}
                       >
-                        {busyCampaignId === campaign.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
-                        {campaign.status === "paused" ? "Reanudar" : campaign.status === "scheduled" ? "Iniciar ahora" : "Iniciar"}
+                        {busyCampaignId === campaign.id
+                          ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                          : <Play className="h-4 w-4 shrink-0" />}
+                        <span className="w-[84px] text-center">{campaign.status === "paused" ? "Reanudar" : campaign.status === "scheduled" ? "Iniciar ahora" : "Iniciar"}</span>
                       </Button>
                     ) : null}
                     {campaign.status === "completed" && campaign.failed_count > 0 ? (
                       <Button
                         variant="outline"
-                        className="border-[#dbe5ef] text-[#013765] hover:bg-[#013765]/[0.04]"
+                        className="w-full max-w-36 justify-center gap-2 border-[#dbe5ef] text-[#013765] hover:bg-[#013765]/[0.04]"
                         onClick={() => void retryFailedRecipients(campaign)}
                         disabled={busyCampaignId === campaign.id}
                       >
-                        {busyCampaignId === campaign.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-                        Reintentar fallidos
+                        {busyCampaignId === campaign.id
+                          ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                          : <RefreshCw className="h-4 w-4 shrink-0" />}
+                        <span className="w-[84px] text-center">Reintentar</span>
                       </Button>
                     ) : null}
                   </div>
@@ -836,12 +915,17 @@ export default function CampaignsPanel({
         setCampaignDialogOpen(open)
         if (!open) resetCampaignForm()
       }}>
-        <DialogContent className="max-h-[92vh] max-w-5xl overflow-y-auto border-[#dbe5ef]">
+        <DialogContent className="flex max-h-[92vh] max-w-5xl flex-col overflow-hidden border-[#dbe5ef]">
           <DialogHeader>
-            <DialogTitle className="text-[#013765]">Nueva campaña manual</DialogTitle>
-            <DialogDescription className="text-[#013765]/70">Importá un CSV o Excel, revisá los datos y guardá un borrador o programá el inicio.</DialogDescription>
+            <DialogTitle className="text-[#013765]">{editingCampaign ? "Editar borrador" : "Nueva campaña manual"}</DialogTitle>
+            <DialogDescription className="text-[#013765]/70">
+              {editingCampaign
+                ? "Actualizá los datos del borrador. Si no seleccionás otro archivo, se conservarán los destinatarios actuales."
+                : "Importá un CSV o Excel, revisá los datos y guardá un borrador o programá el inicio."}
+            </DialogDescription>
           </DialogHeader>
-          <div className="grid gap-5 lg:grid-cols-[0.8fr_1.2fr]">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
+            <div className="grid gap-5 lg:grid-cols-[0.8fr_1.2fr]">
             <div className="space-y-4 rounded-xl border border-[#dbe5ef] bg-slate-50/60 p-4">
               <div className="space-y-2">
                 <Label>Nombre de la campaña</Label>
@@ -851,7 +935,7 @@ export default function CampaignsPanel({
                 <Label>Inicio de la campaña</Label>
                 <div className="grid grid-cols-2 gap-2">
                   <Button type="button" variant={startMode === "now" ? "default" : "outline"} className={startMode === "now" ? "bg-[#013765] text-white hover:bg-[#024a8a]" : "border-[#dbe5ef] text-[#013765]"} onClick={() => setStartMode("now")}>
-                    <Play className="mr-2 h-4 w-4" /> Ahora
+                    <Play className="mr-2 h-4 w-4" /> Manual
                   </Button>
                   <Button type="button" variant={startMode === "scheduled" ? "default" : "outline"} className={startMode === "scheduled" ? "bg-[#013765] text-white hover:bg-[#024a8a]" : "border-[#dbe5ef] text-[#013765]"} onClick={() => setStartMode("scheduled")}>
                     <CalendarClock className="mr-2 h-4 w-4" /> Programar
@@ -992,6 +1076,7 @@ export default function CampaignsPanel({
                   {fileLoading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Upload className="mr-2 h-5 w-5" />}
                   {sourceFilename || "Seleccionar CSV o Excel"}
                 </Button>
+                {editingCampaign ? <p className="text-xs text-slate-500">Los destinatarios actuales se conservan si no seleccionás un archivo nuevo.</p> : null}
                 {importedRows.length > 0 ? (
                   <div className="space-y-2 rounded-lg border border-[#dbe5ef] bg-white p-2.5">
                     <div className="grid grid-cols-3 gap-2 text-center">
@@ -1023,7 +1108,11 @@ export default function CampaignsPanel({
                 {previewRows.length === 0 ? (
                   <div className="flex min-h-56 flex-col items-center justify-center p-6 text-center text-slate-500">
                     <FileSpreadsheet className="mb-3 h-10 w-10 text-slate-300" />
-                    <p className="text-sm">Las filas del CSV o Excel aparecerán cuando importes el archivo.</p>
+                    <p className="text-sm">
+                      {editingCampaign
+                        ? `Se conservarán ${editingCampaign.valid_count} destinatarios válidos. Importá otro archivo para reemplazarlos.`
+                        : "Las filas del CSV o Excel aparecerán cuando importes el archivo."}
+                    </p>
                   </div>
                 ) : (
                   <table className="w-full min-w-[520px] text-left text-xs">
@@ -1046,12 +1135,15 @@ export default function CampaignsPanel({
               </div>
               {previewRows.length > 0 ? <p className="mt-2 text-xs text-slate-500">Se muestran hasta 8 filas.</p> : null}
             </div>
+            </div>
           </div>
-          <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
+          <div className="flex shrink-0 justify-end gap-2 border-t border-slate-100 bg-background pt-4">
             <Button variant="outline" className="border-[#dbe5ef] text-[#013765] hover:bg-[#013765]/[0.04]" onClick={() => setCampaignDialogOpen(false)}>Cancelar</Button>
-            <Button className="bg-[#013765] text-white hover:bg-[#024a8a]" onClick={() => void createCampaign()} disabled={creatingCampaign}>
+            <Button className="bg-[#013765] text-white hover:bg-[#024a8a]" onClick={() => void saveCampaign()} disabled={creatingCampaign}>
               {creatingCampaign ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileSpreadsheet className="mr-2 h-4 w-4" />}
-              {startMode === "scheduled" ? "Programar campaña" : "Crear borrador"}
+              {editingCampaign
+                ? startMode === "scheduled" ? "Guardar y programar" : "Guardar cambios"
+                : startMode === "scheduled" ? "Programar campaña" : "Crear borrador"}
             </Button>
           </div>
         </DialogContent>
@@ -1080,6 +1172,22 @@ export default function CampaignsPanel({
                 <SmallMetric label="Fallidos" value={detailCampaign.failed_count} />
                 <SmallMetric label="Inválidos" value={detailCampaign.invalid_count + detailCampaign.duplicate_count} />
               </div>
+
+              {detailCampaign.status === "completed" && detailCampaign.failed_count > 0 ? (
+                <div className="flex justify-start">
+                  <Button
+                    variant="outline"
+                    className="relative w-full max-w-44 justify-center border-[#dbe5ef] text-[#013765] hover:bg-[#013765]/[0.04]"
+                    onClick={() => void retryFailedRecipients(detailCampaign)}
+                    disabled={busyCampaignId === detailCampaign.id}
+                  >
+                    {busyCampaignId === detailCampaign.id
+                      ? <Loader2 className="absolute left-4 h-4 w-4 animate-spin" />
+                      : <RefreshCw className="absolute left-4 h-4 w-4" />}
+                    Reintentar
+                  </Button>
+                </div>
+              ) : null}
 
               {(detailCampaign.import_errors?.length ?? 0) > 0 ? (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">

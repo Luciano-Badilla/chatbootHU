@@ -97,6 +97,7 @@ Route::middleware($sessionAuthenticated)->group(function () {
         Route::get('/campaigns', [CampaignController::class, 'apiIndex']);
         Route::post('/campaigns', [CampaignController::class, 'store']);
         Route::get('/campaigns/{campaign}', [CampaignController::class, 'show']);
+        Route::put('/campaigns/{campaign}', [CampaignController::class, 'update']);
         Route::post('/campaigns/{campaign}/launch', [CampaignController::class, 'launch']);
         Route::post('/campaigns/{campaign}/pause', [CampaignController::class, 'pause']);
         Route::post('/campaigns/{campaign}/retry-failed', [CampaignController::class, 'retryFailed']);
