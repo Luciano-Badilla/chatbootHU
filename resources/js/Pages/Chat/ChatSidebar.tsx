@@ -2,10 +2,12 @@
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
 import { motion } from "framer-motion"
-import { Archive, Bot, Clock3, Headset, MessagesSquare, Search, User } from "lucide-react"
+import { Archive, Bot, Check, Clock3, Headset, MessagesSquare, Search, User, Users } from "lucide-react"
 import { Input } from "shadcn/components/ui/input"
 import { Avatar } from "shadcn/components/ui/avatar"
 import { Badge } from "shadcn/components/ui/badge"
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "shadcn/components/ui/command"
+import { Popover, PopoverContent, PopoverTrigger } from "shadcn/components/ui/popover"
 import { cn } from "shadcn/lib/utils"
 import type { Chat } from "./ChatPanel"
 import { formatDistanceToNow } from "date-fns"
@@ -15,6 +17,25 @@ function WhatsAppIcon({ className }: { className?: string }) {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor" className={className}>
       <path d="M2.004 22l1.352-4.968A9.954 9.954 0 0 1 2 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10a9.954 9.954 0 0 1-5.03-1.355L2.004 22zM8.391 7.308a.961.961 0 0 0-.371.1 1.293 1.293 0 0 0-.294.228c-.12.113-.188.211-.261.306A2.729 2.729 0 0 0 6.9 9.62c.002.49.13.967.33 1.413.409.902 1.082 1.857 1.971 2.742.214.213.423.427.648.626a9.448 9.448 0 0 0 3.84 2.046l.569.087c.185.01.37-.004.556-.013a1.99 1.99 0 0 0 .833-.231c.166-.088.244-.132.383-.22 0 0 .043-.028.125-.09.135-.1.218-.171.33-.288.083-.086.155-.187.21-.302.078-.163.156-.474.188-.733.024-.198.017-.306.014-.373-.004-.107-.093-.218-.19-.265l-.582-.261s-.87-.379-1.401-.621a.498.498 0 0 0-.177-.041.482.482 0 0 0-.378.127v-.002c-.005 0-.072.057-.795.933a.35.35 0 0 1-.368.13 1.416 1.416 0 0 1-.191-.066c-.124-.052-.167-.072-.252-.109l-.005-.002a6.01 6.01 0 0 1-1.57-1c-.126-.11-.243-.23-.363-.346a6.296 6.296 0 0 1-1.02-1.268l-.059-.095a.923.923 0 0 1-.102-.205c-.038-.147.061-.265.061-.265s.243-.266.356-.41a4.38 4.38 0 0 0 .263-.373c.118-.19.155-.385.093-.536-.28-.684-.57-1.365-.868-2.041-.059-.134-.234-.23-.393-.249-.054-.006-.108-.012-.162-.016a3.385 3.385 0 0 0-.403.004z" />
+    </svg>
+  )
+}
+
+function ArchiveArrowDownIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <rect width="20" height="5" x="2" y="3" rx="1" />
+      <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+      <path d="M12 10v6m-3-3 3 3 3-3" />
     </svg>
   )
 }
@@ -36,10 +57,18 @@ interface ChatSidebarProps {
   defaultChannelFilter?: "all" | "whatsapp" | "webchat"
 }
 
+interface ChatFilterOperator {
+  id: number
+  name: string
+  is_active: boolean
+}
+
 export type ChatSidebarFilters = {
   search: string
   statuses: Array<"bot" | "assigned" | "pending_assignment" | "archived">
   channels: Array<"whatsapp" | "webchat">
+  archivedScope: "all" | "mine"
+  operatorId: number | null
 }
 
 export type ChatSidebarCounts = {
@@ -233,6 +262,14 @@ export default function ChatSidebar({
   const [channelFilters, setChannelFilters] = useState<Array<"whatsapp" | "webchat">>(
     () => initialChannelFilters ?? (defaultChannelFilter === "all" ? [] : [defaultChannelFilter]),
   )
+  const [archivedScope, setArchivedScope] = useState<"all" | "mine">("all")
+  const [operatorId, setOperatorId] = useState<number | null>(null)
+  const [operatorFilterOpen, setOperatorFilterOpen] = useState(false)
+  const [operatorSearch, setOperatorSearch] = useState("")
+  const [operators, setOperators] = useState<ChatFilterOperator[]>([])
+  const [loadingOperators, setLoadingOperators] = useState(false)
+  const [operatorsLoaded, setOperatorsLoaded] = useState(false)
+  const [operatorLoadError, setOperatorLoadError] = useState("")
   const [now, setNow] = useState(Date.now())
   const [failedAvatars, setFailedAvatars] = useState<Record<string, boolean>>({})
   const listContainerRef = useRef<HTMLDivElement>(null)
@@ -245,11 +282,42 @@ export default function ChatSidebar({
     }
 
     const timer = window.setTimeout(() => {
-      onFiltersChange?.({ search: search.trim(), statuses: statusFilters, channels: channelFilters })
+      onFiltersChange?.({ search: search.trim(), statuses: statusFilters, channels: channelFilters, archivedScope, operatorId })
     }, search ? 250 : 0)
 
     return () => window.clearTimeout(timer)
-  }, [search, statusFilters, channelFilters, onFiltersChange])
+  }, [search, statusFilters, channelFilters, archivedScope, operatorId, onFiltersChange])
+
+  useEffect(() => {
+    if (!canViewAll || !operatorFilterOpen || operatorsLoaded) return
+
+    let cancelled = false
+    setLoadingOperators(true)
+    setOperatorLoadError("")
+
+    fetch(`${import.meta.env.VITE_APP_URL}/api/chat-panel/operators`, {
+      headers: { Accept: "application/json" },
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("No se pudo cargar la lista de operadores.")
+        return response.json()
+      })
+      .then((payload) => {
+        if (cancelled) return
+        setOperators(Array.isArray(payload?.operators) ? payload.operators : [])
+        setOperatorsLoaded(true)
+      })
+      .catch((error) => {
+        if (!cancelled) setOperatorLoadError(error instanceof Error ? error.message : "No se pudo cargar la lista de operadores.")
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingOperators(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [canViewAll, operatorFilterOpen, operatorsLoaded])
 
   const loadMoreIfNeeded = useCallback(() => {
     const container = listContainerRef.current
@@ -379,18 +447,20 @@ export default function ChatSidebar({
     const filtered = chats.filter((chat) => {
       const chatStatus = chat.attention_status as "bot" | "assigned" | "pending_assignment" | "archived"
       const chatChannel = chat.channel === "webchat" ? "webchat" : "whatsapp"
-      const belongsToCurrentOperator = chatStatus === "archived"
-        ? Number(chat.last_operator_id ?? 0) === Number(currentOperatorId ?? 0)
-        : Number(chat.operator_id ?? 0) === Number(currentOperatorId ?? 0)
+      const belongsToCurrentOperator = Number(chat.operator_id ?? 0) === Number(currentOperatorId ?? 0)
+      const belongsToCurrentOperatorArchived = Number(chat.last_operator_id ?? 0) === Number(currentOperatorId ?? 0)
+      const matchesSelectedOperator = operatorId === null || (chatStatus === "archived"
+        ? Number(chat.last_operator_id ?? 0) === operatorId
+        : chatStatus === "assigned" && Number(chat.operator_id ?? 0) === operatorId)
       const matchesStatus = chatStatus === "archived"
-        ? statusFilters.includes("archived") && (canViewAll || belongsToCurrentOperator)
+        ? statusFilters.includes("archived") && (canViewAll || archivedScope === "all" || belongsToCurrentOperatorArchived)
         : statusFilters.length === 0 || (
           statusFilters.includes(chatStatus) &&
           (canViewAll || chatStatus !== "assigned" || belongsToCurrentOperator)
         )
       const matchesChannel = channelFilters.length === 0 || channelFilters.includes(chatChannel)
 
-      return matchesStatus && matchesChannel && (
+      return matchesStatus && matchesSelectedOperator && matchesChannel && (
         chat.name.toLowerCase().includes(query) ||
         formatLastMessagePreview(chat.lastMessage).toLowerCase().includes(query) ||
         (phoneQuery.length > 0 && normalizePhone(chat.number).includes(phoneQuery))
@@ -403,7 +473,7 @@ export default function ChatSidebar({
 
       return dateB - dateA
     })
-  }, [search, chats, statusFilters, channelFilters, canViewAll, currentOperatorId])
+  }, [search, chats, statusFilters, channelFilters, archivedScope, operatorId, canViewAll, currentOperatorId])
 
   const inboxCounts = useMemo(() => ({
     bot: counts?.bot ?? chats.filter((chat) => chat.attention_status === "bot").length,
@@ -412,14 +482,21 @@ export default function ChatSidebar({
       (canViewAll || Number(chat.operator_id ?? 0) === Number(currentOperatorId ?? 0)),
     ).length,
     pending_assignment: counts?.pending_assignment ?? chats.filter((chat) => chat.attention_status === "pending_assignment").length,
-    archived: counts?.archived ?? chats.filter((chat) =>
-      chat.attention_status === "archived" &&
-      (canViewAll || Number(chat.last_operator_id ?? 0) === Number(currentOperatorId ?? 0)),
-    ).length,
+    archived: counts?.archived ?? chats.filter((chat) => chat.attention_status === "archived").length,
   }), [chats, canViewAll, currentOperatorId, counts])
 
   const toggleStatusFilter = (filter: "bot" | "assigned" | "pending_assignment" | "archived") => {
-    setStatusFilters((current) => current.includes(filter) ? current.filter((item) => item !== filter) : [...current, filter])
+    if (filter === "archived" && statusFilters.includes("archived")) {
+      setArchivedScope("all")
+    }
+    const nextFilters = statusFilters.includes(filter)
+      ? statusFilters.filter((item) => item !== filter)
+      : [...statusFilters, filter]
+    setStatusFilters(nextFilters)
+
+    if (canViewAll && !nextFilters.includes("assigned") && !nextFilters.includes("archived")) {
+      setOperatorId(null)
+    }
   }
 
   const toggleChannelFilter = (filter: "whatsapp" | "webchat") => {
@@ -430,13 +507,103 @@ export default function ChatSidebar({
     ...(canViewAll ? [{ key: "bot" as const, label: "Atendidos por bot", icon: Bot, count: inboxCounts.bot }] : []),
     { key: "assigned" as const, label: canViewAll ? "Asignados" : "Mis asignados", icon: Headset, count: inboxCounts.assigned },
     ...(canViewAll ? [{ key: "pending_assignment" as const, label: "Pendientes de asignación", icon: Clock3, count: inboxCounts.pending_assignment }] : []),
-    { key: "archived" as const, label: canViewAll ? "Archivados" : "Mis archivados", icon: Archive, count: inboxCounts.archived },
+    { key: "archived" as const, label: "Archivados", icon: Archive, count: inboxCounts.archived },
   ]
 
   const channelFilterOptions = [
     { key: "whatsapp" as const, label: "WhatsApp", icon: WhatsAppIcon, count: counts?.whatsapp ?? chats.filter((chat) => chat.channel !== "webchat").length },
     { key: "webchat" as const, label: "Webchat", icon: MessagesSquare, count: counts?.webchat ?? chats.filter((chat) => chat.channel === "webchat").length },
   ]
+  const selectedOperator = operators.find((operator) => operator.id === operatorId) ?? null
+  const selectedOperatorInitials = selectedOperator?.name
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase() ?? ""
+  const operatorScopeActive = canViewAll && (statusFilters.includes("assigned") || statusFilters.includes("archived"))
+  const operatorFilterControl = canViewAll ? (
+    <Popover open={operatorFilterOpen} onOpenChange={setOperatorFilterOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={selectedOperator ? `Operador: ${selectedOperator.name}` : "Filtrar por operador"}
+          aria-pressed={operatorId !== null}
+          aria-haspopup="dialog"
+          aria-expanded={operatorFilterOpen}
+          className={cn(
+            "group relative grid h-8 w-8 shrink-0 place-items-center rounded-full border transition",
+            operatorId !== null
+              ? "border-[#013765] bg-[#013765] text-white shadow-sm"
+              : "border-slate-200 bg-white text-slate-500 hover:border-[#013765]/45 hover:bg-[#e8f0f6] hover:text-[#013765]",
+          )}
+        >
+          {selectedOperator ? (
+            <span className="text-[10px] font-bold">{selectedOperatorInitials}</span>
+          ) : (
+            <Users className="h-4 w-4" />
+          )}
+          <span
+            role="tooltip"
+            className="pointer-events-none absolute top-full left-1/2 z-40 mt-2 -translate-x-1/2 whitespace-nowrap rounded-md bg-[#013765] px-2 py-1 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
+          >
+            {selectedOperator ? `Operador: ${selectedOperator.name}` : "Filtrar por operador"}
+          </span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="center" sideOffset={6} className="z-[10000] w-56 overflow-hidden rounded-xl border-slate-200 p-0 shadow-lg shadow-slate-900/10">
+        <Command className="[&_[cmdk-group]]:p-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-item]]:min-h-7 [&_[cmdk-item]]:rounded-md [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-1 [&_[cmdk-item]]:text-xs [&_[cmdk-item]]:data-[selected=true]:bg-[#e8f0f6] [&_[cmdk-item]]:data-[selected=true]:text-[#013765] [&_[cmdk-input-wrapper]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-3.5 [&_[cmdk-input-wrapper]_svg]:w-3.5">
+          <CommandInput
+            value={operatorSearch}
+            onValueChange={setOperatorSearch}
+            placeholder="Buscar operador..."
+            className="h-9 border-0 py-0 text-xs shadow-none outline-none ring-0 focus:border-0 focus-visible:!outline-none focus-visible:!ring-0 focus-visible:!ring-offset-0"
+          />
+          {loadingOperators ? (
+            <div className="px-3 py-4 text-center text-xs text-slate-500">Cargando operadores...</div>
+          ) : operatorLoadError ? (
+            <div className="px-3 py-4 text-center text-xs text-red-600">{operatorLoadError}</div>
+          ) : (
+            <CommandList className="max-h-52 p-1">
+              <CommandEmpty className="py-4 text-xs">No se encontraron operadores.</CommandEmpty>
+              <CommandGroup>
+                <CommandItem
+                  value="todos los operadores"
+                  onSelect={() => {
+                    setOperatorId(null)
+                    setOperatorSearch("")
+                    setOperatorFilterOpen(false)
+                  }}
+                >
+                  <Check className={cn("mr-2 h-4 w-4", operatorId === null ? "opacity-100" : "opacity-0")} />
+                  Todos los operadores
+                </CommandItem>
+              </CommandGroup>
+              <CommandGroup heading="Operadores">
+                {operators.map((operator) => (
+                  <CommandItem
+                    key={operator.id}
+                    value={`${operator.name} ${operator.id}`}
+                    onSelect={() => {
+                      setOperatorId(operator.id)
+                      setOperatorSearch("")
+                      setOperatorFilterOpen(false)
+                    }}
+                  >
+                    <Check className={cn("mr-2 h-4 w-4", operatorId === operator.id ? "opacity-100" : "opacity-0")} />
+                    <span className="truncate">{operator.name}</span>
+                    {!operator.is_active ? <span className="ml-auto shrink-0 text-[9px] text-slate-400">Inactivo</span> : null}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          )}
+        </Command>
+      </PopoverContent>
+    </Popover>
+  ) : null
 
   function formatTimestamp(timestamp?: string) {
     if (!timestamp) return ""
@@ -496,7 +663,111 @@ export default function ChatSidebar({
 
         <div className="mt-3 flex items-center justify-between gap-3" aria-label="Filtros de conversaciones">
           <div className="flex flex-wrap items-center gap-1.5">
-            {statusFilterOptions.map((option, index) => <CompactFilterButton key={option.key} label={option.label} count={option.count} active={statusFilters.includes(option.key)} onClick={() => toggleStatusFilter(option.key)} Icon={option.icon} tooltipAlign={index === 0 ? "start" : "center"} />)}
+            {canViewAll ? (
+              <>
+                {statusFilterOptions.filter((option) => option.key === "bot" || option.key === "pending_assignment").map((option, index) => (
+                  <CompactFilterButton
+                    key={option.key}
+                    label={option.label}
+                    count={option.count}
+                    active={statusFilters.includes(option.key)}
+                    onClick={() => toggleStatusFilter(option.key)}
+                    Icon={option.icon}
+                    tooltipAlign={index === 0 ? "start" : "center"}
+                  />
+                ))}
+                <div
+                  role="group"
+                  aria-label="Filtros de conversaciones asignadas y archivadas por operador"
+                  className="relative inline-flex items-center"
+                >
+                  {operatorScopeActive ? (
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute -inset-x-1 -inset-y-0.5 rounded-2xl border border-[#013765]/45 bg-[#013765]/10"
+                    />
+                  ) : null}
+                  <div className="relative z-10 inline-flex items-center gap-0.5">
+                    {statusFilterOptions.filter((option) => option.key === "assigned" || option.key === "archived").map((option) => (
+                      <CompactFilterButton
+                        key={option.key}
+                        label={option.label}
+                        count={option.count}
+                        active={statusFilters.includes(option.key)}
+                        onClick={() => toggleStatusFilter(option.key)}
+                        Icon={option.icon}
+                      />
+                    ))}
+                    {operatorScopeActive ? (
+                      <motion.div
+                        initial={{ opacity: 0, scaleX: 0.25 }}
+                        animate={{ opacity: 1, scaleX: 1 }}
+                        transition={{ duration: 0.22, ease: "easeOut" }}
+                        style={{ transformOrigin: "left center" }}
+                      >
+                        {operatorFilterControl}
+                      </motion.div>
+                    ) : null}
+                  </div>
+                </div>
+              </>
+            ) : (
+              statusFilterOptions.map((option, index) => {
+                const showArchivedScope = option.key === "archived" && statusFilters.includes("archived")
+
+                if (showArchivedScope) {
+                  return (
+                    <div
+                      key={option.key}
+                      role="group"
+                      aria-label="Filtros de conversaciones archivadas"
+                      className="relative inline-flex items-center"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute -inset-x-1 -inset-y-0.5 rounded-2xl border border-[#013765]/45 bg-[#013765]/10"
+                      />
+                      <div className="relative z-10 inline-flex items-center gap-0.5">
+                        <CompactFilterButton
+                          label={option.label}
+                          count={option.count}
+                          active={statusFilters.includes(option.key)}
+                          onClick={() => toggleStatusFilter(option.key)}
+                          Icon={option.icon}
+                          tooltipAlign={index === 0 ? "start" : "center"}
+                        />
+                        <motion.div
+                          initial={{ opacity: 0, scaleX: 0.25 }}
+                          animate={{ opacity: 1, scaleX: 1 }}
+                          transition={{ duration: 0.22, ease: "easeOut" }}
+                          style={{ transformOrigin: "left center" }}
+                        >
+                          <CompactFilterButton
+                            label="Mis archivados"
+                            count={0}
+                            active={archivedScope === "mine"}
+                            onClick={() => setArchivedScope((current) => current === "mine" ? "all" : "mine")}
+                            Icon={ArchiveArrowDownIcon}
+                          />
+                        </motion.div>
+                      </div>
+                    </div>
+                  )
+                }
+
+                return (
+                  <CompactFilterButton
+                    key={option.key}
+                    label={option.label}
+                    count={option.count}
+                    active={statusFilters.includes(option.key)}
+                    onClick={() => toggleStatusFilter(option.key)}
+                    Icon={option.icon}
+                    tooltipAlign={index === 0 ? "start" : "center"}
+                  />
+                )
+              })
+            )}
           </div>
           <div className="h-6 w-px shrink-0 bg-slate-200" />
           <div className="flex items-center gap-1.5">

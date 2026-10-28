@@ -7,6 +7,7 @@ use App\Jobs\SendChatEventWebPushNotification;
 use App\Models\Chat;
 use App\Models\Message;
 use App\Models\SystemSetting;
+use App\Models\User;
 use App\Services\AuditService;
 use App\Services\BotInactivityService;
 use App\Services\ChatAssignmentService;
@@ -83,7 +84,14 @@ class ChatController extends Controller
             'search' => ['sometimes', 'nullable', 'string', 'max:200'],
             'offset' => ['sometimes', 'integer', 'min:0'],
             'selected_chat_id' => ['nullable', 'integer', 'min:1'],
+            'archived_scope' => ['sometimes', 'string', 'in:all,mine'],
+            'operator_id' => ['sometimes', 'nullable', 'integer', 'min:1', 'exists:users,id'],
         ]);
+
+        $operatorId = isset($validated['operator_id']) ? (int) $validated['operator_id'] : null;
+        if ($operatorId !== null && ! ($request->user()?->hasPermission('can_view_all_chats') ?? false)) {
+            abort(403);
+        }
 
         $page = $this->chatPanelPage(
             $validated['statuses'] ?? [],
@@ -93,9 +101,29 @@ class ChatController extends Controller
             50,
             $validated['selected_chat_id'] ?? null,
             $request->user(),
+            null,
+            $validated['archived_scope'] ?? 'all',
+            $operatorId,
         );
 
         return response()->json($page);
+    }
+
+    public function operatorsForPanel()
+    {
+        $operators = User::query()
+            ->with('role')
+            ->orderBy('name')
+            ->get(['id', 'name', 'role_id', 'is_active'])
+            ->filter(fn (User $operator) => $operator->canHandleChats())
+            ->map(fn (User $operator) => [
+                'id' => (int) $operator->id,
+                'name' => $operator->name,
+                'is_active' => (bool) $operator->is_active,
+            ])
+            ->values();
+
+        return response()->json(['operators' => $operators]);
     }
 
     public function markAsReadMessages(Request $request, $chatId)
@@ -503,8 +531,10 @@ class ChatController extends Controller
         int|string|null $selectedChatId,
         $user,
         ?string $botName = null,
+        string $archivedScope = 'all',
+        ?int $operatorId = null,
     ): array {
-        $query = $this->chatPanelListQuery($statuses, $channels, $search, $user);
+        $query = $this->chatPanelListQuery($statuses, $channels, $search, $user, $archivedScope, $operatorId);
         $pageRows = (clone $query)
             ->orderByDesc('last_message_at')
             ->orderByDesc('chats.id')
@@ -532,11 +562,18 @@ class ChatController extends Controller
             'data' => $pageRows->map(fn (Chat $chat) => $this->chatPanelSummary($chat, $botName))->values(),
             'has_more' => $hasMore,
             'next_offset' => $nextOffset,
-            'counts' => $this->chatPanelCounts($user),
+            'counts' => $this->chatPanelCounts($user, $operatorId),
         ];
     }
 
-    private function chatPanelListQuery(array $statuses, array $channels, string $search, $user)
+    private function chatPanelListQuery(
+        array $statuses,
+        array $channels,
+        string $search,
+        $user,
+        string $archivedScope = 'all',
+        ?int $operatorId = null,
+    )
     {
         $query = $this->chatPanelSummaryQuery();
 
@@ -545,14 +582,14 @@ class ChatController extends Controller
             $query->where('chats.attention_status', '!=', 'archived');
         } else {
             $canViewAll = $user?->hasPermission('can_view_all_chats') ?? false;
-            $query->where(function ($statusQuery) use ($statuses, $canViewAll, $user) {
+            $query->where(function ($statusQuery) use ($statuses, $canViewAll, $user, $archivedScope) {
                 foreach (array_unique($statuses) as $status) {
                     if ($status === 'assigned' && ! $canViewAll) {
                         $statusQuery->orWhere(function ($assignedQuery) use ($user) {
                             $assignedQuery->where('chats.attention_status', 'assigned')
                                 ->where('chats.operator_id', $user?->id);
                         });
-                    } elseif ($status === 'archived' && ! $canViewAll) {
+                    } elseif ($status === 'archived' && $archivedScope === 'mine' && ! $canViewAll) {
                         $statusQuery->orWhere(function ($archivedQuery) use ($user) {
                             $archivedQuery->where('chats.attention_status', 'archived')
                                 ->where('chats.last_operator_id', $user?->id);
@@ -561,6 +598,18 @@ class ChatController extends Controller
                         $statusQuery->orWhere('chats.attention_status', $status);
                     }
                 }
+            });
+        }
+
+        if ($operatorId !== null) {
+            $query->where(function ($operatorQuery) use ($operatorId) {
+                $operatorQuery->where(function ($assignedQuery) use ($operatorId) {
+                    $assignedQuery->where('chats.attention_status', 'assigned')
+                        ->where('chats.operator_id', $operatorId);
+                })->orWhere(function ($archivedQuery) use ($operatorId) {
+                    $archivedQuery->where('chats.attention_status', 'archived')
+                        ->where('chats.last_operator_id', $operatorId);
+                });
             });
         }
 
@@ -664,25 +713,46 @@ class ChatController extends Controller
         ];
     }
 
-    private function chatPanelCounts($user): array
+    private function chatPanelCounts($user, ?int $operatorId = null): array
     {
-        $statusCounts = Chat::query()
+        $statusQuery = Chat::query();
+        $channelQuery = Chat::query();
+
+        if ($operatorId !== null) {
+            $applyOperatorFilter = function ($query) use ($operatorId) {
+                $query->where(function ($operatorQuery) use ($operatorId) {
+                    $operatorQuery->where(function ($assignedQuery) use ($operatorId) {
+                        $assignedQuery->where('attention_status', 'assigned')
+                            ->where('operator_id', $operatorId);
+                    })->orWhere(function ($archivedQuery) use ($operatorId) {
+                        $archivedQuery->where('attention_status', 'archived')
+                            ->where('last_operator_id', $operatorId);
+                    });
+                });
+            };
+            $applyOperatorFilter($statusQuery);
+            $applyOperatorFilter($channelQuery);
+        }
+
+        $statusCounts = (clone $statusQuery)
             ->selectRaw('attention_status, COUNT(*) as total')
             ->groupBy('attention_status')
             ->pluck('total', 'attention_status');
-        $channelCounts = Chat::query()
+        $channelCounts = $channelQuery
             ->selectRaw("SUM(CASE WHEN channel = 'webchat' THEN 1 ELSE 0 END) as webchat_total")
             ->selectRaw("SUM(CASE WHEN channel IS NULL OR channel != 'webchat' THEN 1 ELSE 0 END) as whatsapp_total")
             ->first();
         $canViewAll = $user?->hasPermission('can_view_all_chats') ?? false;
 
         return [
-            'bot' => (int) ($statusCounts['bot'] ?? 0),
-            'assigned' => $canViewAll
+            'bot' => $operatorId !== null ? 0 : (int) ($statusCounts['bot'] ?? 0),
+            'assigned' => $operatorId !== null
                 ? (int) ($statusCounts['assigned'] ?? 0)
-                : Chat::query()->where('attention_status', 'assigned')->where('operator_id', $user?->id)->count(),
-            'pending_assignment' => (int) ($statusCounts['pending_assignment'] ?? 0),
-            'archived' => $canViewAll
+                : ($canViewAll
+                    ? (int) ($statusCounts['assigned'] ?? 0)
+                    : Chat::query()->where('attention_status', 'assigned')->where('operator_id', $user?->id)->count()),
+            'pending_assignment' => $operatorId !== null ? 0 : (int) ($statusCounts['pending_assignment'] ?? 0),
+            'archived' => $operatorId !== null || $canViewAll
                 ? (int) ($statusCounts['archived'] ?? 0)
                 : Chat::query()->where('attention_status', 'archived')->where('last_operator_id', $user?->id)->count(),
             'whatsapp' => (int) ($channelCounts?->whatsapp_total ?? 0),

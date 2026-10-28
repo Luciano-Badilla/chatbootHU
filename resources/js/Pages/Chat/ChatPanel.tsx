@@ -99,6 +99,8 @@ export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore =
     search: "",
     statuses: initialChatPanel.initialStatusFilters ?? (props?.auth?.permissions?.can_view_all_chats ? [] : ["assigned"]),
     channels: initialChatPanel.initialChannelFilters ?? (initialChatPanel.defaultChannelFilter && initialChatPanel.defaultChannelFilter !== "all" ? [initialChatPanel.defaultChannelFilter] : []),
+    archivedScope: initialChatPanel.initialArchivedScope ?? "all",
+    operatorId: null,
   }
 
   // Estado local con la lista de chats (se inicializa con lo que viene del backend).
@@ -160,7 +162,9 @@ export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore =
 
     const params = new URLSearchParams()
     params.set("search", filters.search)
+    params.set("archived_scope", filters.archivedScope)
     params.set("offset", String(offset))
+    if (filters.operatorId !== null) params.set("operator_id", String(filters.operatorId))
     filters.statuses.forEach((status) => params.append("statuses[]", status))
     filters.channels.forEach((channel) => params.append("channels[]", channel))
     if (selectedChatIdRef.current) params.set("selected_chat_id", selectedChatIdRef.current)

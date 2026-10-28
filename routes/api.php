@@ -66,6 +66,7 @@ Route::middleware($sessionAuthenticated)->group(function () {
     Route::post('/message/markAsRead/{chatId}', [ChatController::class, 'markAsReadMessages']);
     Route::get('/chat/messages/{chatId}', [ChatController::class, 'getMessages']);
     Route::get('/chats/list', [ChatController::class, 'listForPanel']);
+    Route::get('/chat-panel/operators', [ChatController::class, 'operatorsForPanel'])->middleware('permission:can_view_all_chats');
     Route::get('/chats/snapshot', [ChatController::class, 'snapshot']);
     Route::post('/chats/{chat}/open', [ChatController::class, 'open']);
     Route::post('/message/send', [WhatsAppController::class, 'sendMessage']);
