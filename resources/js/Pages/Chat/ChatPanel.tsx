@@ -275,17 +275,24 @@ export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore =
   const canToggleBot = Boolean(
     props?.auth?.permissions?.can_toggle_bot,
   )
+  const canAdministerChats = Boolean(props?.auth?.permissions?.can_administer_chats)
   const canFinishAttention = Boolean(
     selectedChat?.status === "open" &&
     selectedChat?.attention_status === "assigned" &&
     Number(selectedChat?.operator_id ?? 0) === Number(authUser?.id ?? 0),
   )
+  const selectedOperatorId = Number(selectedChat?.operator_id ?? 0)
+  const chatAssignedToAnotherOperator = Boolean(
+    selectedChat?.attention_status === "assigned" &&
+    selectedOperatorId > 0 &&
+    selectedOperatorId !== Number(authUser?.id ?? 0),
+  )
   const canTakeChat = Boolean(
     authUser?.id &&
     selectedChat?.status === "open" &&
-    !selectedChat?.operator_id &&
     selectedChat?.attention_status !== "archived" &&
-    props?.auth?.permissions?.can_assign_chats,
+    props?.auth?.permissions?.can_assign_chats &&
+    (selectedOperatorId === 0 || (canAdministerChats && chatAssignedToAnotherOperator)),
   )
 
   useEffect(() => {
@@ -403,6 +410,9 @@ export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore =
       })
       const payload = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(payload.message || "No se pudo tomar el chat.")
+      waitingForChatReleaseRef.current[String(selectedChatId)] = false
+      setViewerReadOnlyChatId((current) => current === String(selectedChatId) ? null : current)
+      setOperatorConflict((current) => current?.chatId === String(selectedChatId) ? null : current)
       setChats((current) => current.map((chat) => String(chat.id) === String(selectedChatId)
         ? { ...chat, operator_id: payload.operator_id ?? authUser.id, operator_name: payload.operator_name ?? authUser.name ?? null, attention_status: "assigned", status: "open", bot_enabled: false, assigned_at: new Date().toISOString() }
         : chat,
@@ -870,7 +880,7 @@ export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore =
       if (occupiedByAnotherOperator) {
         waitingForChatReleaseRef.current[currentChatId] = true
         setViewerReadOnlyChatId(currentChatId)
-        setOperatorConflict({
+        setOperatorConflict(canAdministerChats ? null : {
           chatId: currentChatId,
           operatorId: currentChat?.operator_id ?? null,
           operatorName: currentChat?.operator_name ?? null,
@@ -887,7 +897,7 @@ export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore =
     }
 
     previousSelectedChatIdRef.current = currentChatId
-  }, [selectedChatId, chats, authUser?.id])
+  }, [selectedChatId, chats, authUser?.id, canAdministerChats])
 
   // No liberamos al cerrar pestaña: la asignacion persiste en DB.
 

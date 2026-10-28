@@ -199,6 +199,12 @@ class ChatController extends Controller
         $chat->loadMissing('operator');
         $beforeOperatorId = $chat->operator_id ? (int) $chat->operator_id : null;
         $beforeOperatorName = $chat->operator?->name ?? null;
+        $isAdminTakeover = (bool) $data['active']
+            && $beforeOperatorId !== null
+            && $beforeOperatorId !== (int) $operatorId
+            && ($authUser?->hasPermission('can_administer_chats') ?? false)
+            && $chat->status === 'open'
+            && $chat->attention_status === 'assigned';
 
         if ($data['active']) {
             if (! $this->webchatAvailabilityService->canAssignOperator($chat)) {
@@ -215,7 +221,7 @@ class ChatController extends Controller
                 ], 422);
             }
 
-            if ($chat->operator_id && (int) $chat->operator_id !== (int) $operatorId) {
+            if ($chat->operator_id && (int) $chat->operator_id !== (int) $operatorId && ! $isAdminTakeover) {
                 $chat->load('operator');
                 $this->auditService->recordChatAction(
                     'operator_assignment_conflict',
@@ -278,7 +284,9 @@ class ChatController extends Controller
 
         $this->auditService->recordChatAction(
             $data['active'] ? 'operator_assigned' : 'operator_released',
-            $data['active'] ? 'Tomo el chat' : 'Libero el chat',
+            $data['active']
+                ? ($isAdminTakeover ? 'El administrador tomo un chat asignado a otro operador' : 'Tomo el chat')
+                : 'Libero el chat',
             $chat,
             $authUser,
             [
