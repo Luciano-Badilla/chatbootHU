@@ -23,6 +23,12 @@ import spanishDicUrl from "../../../../node_modules/dictionary-es/index.dic?url"
 
 interface ChatMainProps {
   chat?: Chat
+  searchNavigationRequest?: {
+    token: number
+    chatId: string
+    query: string
+    messageId: string
+  } | null
   readOnly?: boolean
   readOnlyOperatorName?: string | null
   readOnlyReason?: "operator" | "bot" | null
@@ -329,6 +335,7 @@ function HoverTooltip({
 
 export default function ChatMain({
   chat,
+  searchNavigationRequest = null,
   readOnly = false,
   readOnlyOperatorName = null,
   readOnlyReason = null,
@@ -621,45 +628,73 @@ export default function ChatMain({
     photoswipe.on("destroy", () => { controlsObserver.disconnect(); strip.remove() })
   }
 
-  // 🔹 Cargar mensajes cuando cambia el chat seleccionado
+  // Cargar el historial y abrir la búsqueda interna si el chat viene de un resultado global.
   useEffect(() => {
     setContactAvatarFailed(false)
+    const navigationRequest = searchNavigationRequest?.chatId === String(chat?.id ?? "")
+      ? searchNavigationRequest
+      : null
 
     if (!chat) {
       setMessages([])
       setHasOlderMessages(false)
+      setLoading(false)
       return
     }
 
+    if (navigationRequest) {
+      setSearchOpen(true)
+      setSearchQuery(navigationRequest.query)
+      previousSearchQueryRef.current = ""
+      setSearchResultIds([])
+      setActiveSearchIndex(0)
+    } else {
+      setSearchOpen(false)
+      setSearchQuery("")
+      previousSearchQueryRef.current = ""
+      setSearchResultIds([])
+      setActiveSearchIndex(0)
+    }
+
+    let cancelled = false
     const fetchMessages = async () => {
       try {
         setLoading(true)
+        setMessages([])
+        setHasOlderMessages(false)
+        const params = new URLSearchParams({ limit: "50" })
+        if (navigationRequest) params.set("around_id", navigationRequest.messageId)
 
         const res = await fetch(
-          `${import.meta.env.VITE_APP_URL}/api/chat/messages/${chat.id}?limit=50`,
+          `${import.meta.env.VITE_APP_URL}/api/chat/messages/${chat.id}?${params.toString()}`,
         )
 
         if (!res.ok) {
+          if (cancelled) return
           console.error("Error al cargar mensajes", await res.text())
           return
         }
 
         const data = await res.json()
+        if (cancelled) return
 
         const rows = Array.isArray(data) ? data : data.messages
         const msgs: Message[] = rows.map(mapApiMessage)
 
+        if (navigationRequest) previousSearchQueryRef.current = ""
         setMessages(msgs)
         setHasOlderMessages(Boolean(data?.has_more))
       } catch (err) {
+        if (cancelled) return
         console.error("Error de red al cargar mensajes:", err)
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
 
     fetchMessages()
-  }, [chat?.id])
+    return () => { cancelled = true }
+  }, [chat?.id, searchNavigationRequest])
 
   const loadOlderMessages = async () => {
     if (!chat || loading || loadingOlderMessages || !hasOlderMessages) return
@@ -1051,7 +1086,9 @@ export default function ChatMain({
     setActiveSearchIndex((prev) => {
       if (resultIds.length === 0) return 0
       if (queryChanged) return resultIds.length - 1
-      return Math.min(prev, resultIds.length - 1)
+      const activeMessageId = searchResultIds[prev]
+      const preservedIndex = activeMessageId ? resultIds.indexOf(activeMessageId) : -1
+      return preservedIndex >= 0 ? preservedIndex : Math.min(prev, resultIds.length - 1)
     })
   }, [messages, searchOpen, searchQuery])
 

@@ -46,6 +46,8 @@ export type Chat = {
     handoff?: any
     [k: string]: any
   }
+  search_message_id?: number | string | null
+  search_match?: string | null
 }
 
 export type ChatVariable = {
@@ -126,6 +128,13 @@ export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore =
   })
   const previousSelectedChatIdRef = useRef<string>("")
   const selectedChatIdRef = useRef<string>("")
+  const searchNavigationRequestIdRef = useRef(0)
+  const [searchNavigationRequest, setSearchNavigationRequest] = useState<{
+    token: number
+    chatId: string
+    query: string
+    messageId: string
+  } | null>(null)
   const mqttClientRef = useRef<any>(null)
   const syncChatsInFlightRef = useRef(false)
   const startupCurtainResolvedRef = useRef(false)
@@ -314,9 +323,20 @@ export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore =
     return () => window.clearInterval(heartbeat)
   }, [authUser?.id, authUser?.role_name, selectedChat?.id, selectedChat?.operator_id, selectedChat?.attention_status])
 
-  const requestChatSelection = (nextChatId: string) => {
+  const requestChatSelection = (nextChatId: string, searchQuery?: string, searchMessageId?: string | null) => {
     const currentChatId = String(selectedChatId || "")
     const normalizedNextChatId = String(nextChatId || "")
+
+    if (searchMessageId && searchQuery?.trim()) {
+      setSearchNavigationRequest({
+        token: ++searchNavigationRequestIdRef.current,
+        chatId: normalizedNextChatId,
+        query: searchQuery.trim(),
+        messageId: String(searchMessageId),
+      })
+    } else {
+      setSearchNavigationRequest(null)
+    }
 
     if (currentChatId === normalizedNextChatId) return
 
@@ -940,6 +960,7 @@ export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore =
       <div className="flex-1 flex flex-col min-h-0">
         <ChatMain
           chat={selectedChat}
+          searchNavigationRequest={searchNavigationRequest}
           readOnly={isReadOnly}
           readOnlyOperatorName={
             selectedChat?.operator_name ?? null

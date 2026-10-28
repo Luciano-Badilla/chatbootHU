@@ -492,6 +492,44 @@ class ChatController extends Controller
     {
         $limit = max(10, min((int) $request->query('limit', 50), 100));
         $beforeId = $request->integer('before_id');
+        $aroundId = $request->integer('around_id');
+
+        if ($aroundId > 0) {
+            $messagesBefore = Message::query()
+                ->where('chat_id', $chatId)
+                ->where('id', '<=', $aroundId)
+                ->orderByDesc('id')
+                ->limit(intdiv($limit, 2) + 1)
+                ->get()
+                ->reverse()
+                ->values();
+
+            if (! $messagesBefore->contains(fn (Message $message) => (int) $message->id === $aroundId)) {
+                return response()->json(['message' => 'No se encontró el mensaje en este chat.'], 404);
+            }
+
+            $afterLimit = max(0, $limit - $messagesBefore->count());
+            $messagesAfter = $afterLimit > 0
+                ? Message::query()
+                    ->where('chat_id', $chatId)
+                    ->where('id', '>', $aroundId)
+                    ->orderBy('id')
+                    ->limit($afterLimit)
+                    ->get()
+                : collect();
+            $messages = $messagesBefore->concat($messagesAfter)->values();
+            $oldestId = $messages->first()?->id;
+            $hasMore = $oldestId !== null && Message::query()
+                ->where('chat_id', $chatId)
+                ->where('id', '<', $oldestId)
+                ->exists();
+
+            return response()->json([
+                'messages' => $messages,
+                'has_more' => $hasMore,
+                'total' => Message::query()->where('chat_id', $chatId)->count(),
+            ]);
+        }
 
         $query = Message::query()
             ->where('chat_id', $chatId)
@@ -564,6 +602,9 @@ class ChatController extends Controller
             ->offset($offset)
             ->limit($limit + 1)
             ->get();
+        $matchedSearchChatIds = $search !== ''
+            ? $pageRows->take($limit)->pluck('id')->map(fn ($id) => (string) $id)->flip()
+            : collect();
 
         $hasMore = $pageRows->count() > $limit;
         $pageRows = $pageRows->take($limit)->values();
@@ -574,15 +615,31 @@ class ChatController extends Controller
                 ->where('chats.id', $selectedChatId)
                 ->first();
             if ($selected) {
+                if ($search !== '' && (clone $query)->where('chats.id', $selected->id)->exists()) {
+                    $matchedSearchChatIds->put((string) $selected->id, true);
+                }
                 $pageRows->push($selected);
             }
         }
 
         $botName ??= SystemSetting::query()->where('key', 'webchat.title')->value('value') ?: 'Asistente virtual';
+        $searchMessageIds = $search !== '' && $pageRows->isNotEmpty()
+            ? Message::query()
+                ->whereIn('chat_id', $pageRows->pluck('id')->unique())
+                ->where('body', 'like', '%'.$search.'%')
+                ->selectRaw('chat_id, MAX(id) as message_id')
+                ->groupBy('chat_id')
+                ->pluck('message_id', 'chat_id')
+            : collect();
 
         return [
             'ok' => true,
-            'data' => $pageRows->map(fn (Chat $chat) => $this->chatPanelSummary($chat, $botName))->values(),
+            'data' => $pageRows->map(fn (Chat $chat) => $this->chatPanelSummary(
+                $chat,
+                $botName,
+                $searchMessageIds->get($chat->id),
+                $matchedSearchChatIds->has((string) $chat->id) ? mb_strtolower($search) : null,
+            ))->values(),
             'has_more' => $hasMore,
             'next_offset' => $nextOffset,
             'counts' => $this->chatPanelCounts($user, $operatorId),
@@ -652,16 +709,22 @@ class ChatController extends Controller
         if ($search !== '') {
             $like = '%'.$search.'%';
             $phoneSearch = preg_replace('/\D+/', '', $search);
-            $query->where(function ($searchQuery) use ($like, $phoneSearch) {
+            $variableSearch = '%'.addcslashes($search, '\\%_').'%';
+            $numericVariableSearch = preg_match('/^[\d\s.\-]+$/u', $search) && strlen($phoneSearch) >= 3
+                ? '%'.implode('%', str_split($phoneSearch)).'%'
+                : null;
+            $query->where(function ($searchQuery) use ($like, $phoneSearch, $variableSearch, $numericVariableSearch) {
                 $searchQuery
                     ->whereHas('contact', function ($contactQuery) use ($like) {
                         $contactQuery->where('name', 'like', $like)
                             ->orWhere('whatsapp_id', 'like', $like);
                     })
-                    ->orWhereRaw(
-                        '(SELECT messages.body FROM messages WHERE messages.chat_id = chats.id ORDER BY messages.id DESC LIMIT 1) LIKE ?',
-                        [$like],
-                    );
+                    ->orWhereHas('messages', fn ($messageQuery) => $messageQuery->where('body', 'like', $like))
+                    ->orWhereRaw("JSON_SEARCH(chats.bot_state, 'one', ?, NULL, '$.vars.*') IS NOT NULL", [$variableSearch])
+                    ->orWhereRaw("JSON_SEARCH(chats.bot_state, 'one', ?, NULL, '$.vars_by_date.*.*.value') IS NOT NULL", [$variableSearch]);
+                if ($numericVariableSearch !== null) {
+                    $searchQuery->orWhereRaw("CAST(JSON_EXTRACT(chats.bot_state, '$.vars') AS CHAR) LIKE ?", [$numericVariableSearch]);
+                }
                 if ($phoneSearch !== '') {
                     $searchQuery->orWhereHas('contact', function ($contactQuery) use ($phoneSearch) {
                         $contactQuery->where('whatsapp_id', 'like', '%'.$phoneSearch.'%');
@@ -698,7 +761,12 @@ class ChatController extends Controller
             ]);
     }
 
-    private function chatPanelSummary(Chat $chat, string $botName): array
+    private function chatPanelSummary(
+        Chat $chat,
+        string $botName,
+        int|string|null $searchMessageId = null,
+        ?string $searchMatch = null,
+    ): array
     {
         return [
             'id' => (int) $chat->id,
@@ -723,6 +791,8 @@ class ChatController extends Controller
             'last_operator_id' => $chat->last_operator_id ? (int) $chat->last_operator_id : null,
             'last_operator_name' => $chat->lastOperator?->name,
             'bot_state' => $chat->bot_state ?? [],
+            'search_message_id' => $searchMessageId ? (int) $searchMessageId : null,
+            'search_match' => $searchMatch,
             'status' => $chat->status,
             'attention_status' => $chat->attention_status,
             'assigned_at' => $chat->assigned_at?->toIso8601String(),

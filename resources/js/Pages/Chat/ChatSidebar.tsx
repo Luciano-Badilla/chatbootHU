@@ -43,7 +43,7 @@ function ArchiveArrowDownIcon({ className }: { className?: string }) {
 interface ChatSidebarProps {
   chats: Chat[]
   selectedChatId: string
-  onSelectChat: (chatId: string) => void
+  onSelectChat: (chatId: string, searchQuery?: string, searchMessageId?: string | null) => void
   onFiltersChange?: (filters: ChatSidebarFilters) => void
   onLoadMore?: () => void
   hasMore?: boolean
@@ -90,7 +90,7 @@ function InboxChats({
 }: {
   chats: Chat[]
   selectedChatId: string
-  onSelectChat: (chatId: string | number) => void
+  onSelectChat: (chatId: string | number, searchMessageId?: string | number | null) => void
   formatTimestamp: (timestamp?: string) => string
   formatPreview: (message?: string | null) => string
   showAssignment: boolean
@@ -116,7 +116,7 @@ function InboxChats({
           <motion.button
             key={chat.id}
             type="button"
-            onClick={() => onSelectChat(chat.id)}
+            onClick={() => onSelectChat(chat.id, chat.search_message_id ?? null)}
             layout="position"
             transition={{
               layout: {
@@ -337,6 +337,32 @@ export default function ChatSidebar({
   }, [refreshing])
 
   const normalizePhone = (value?: string | null) => String(value ?? "").replace(/\D/g, "")
+  const chatVariablesMatch = (chat: Chat, query: string, normalizedQuery: string) => {
+    if (!query) return false
+
+    const normalizedNumberSearch = normalizedQuery.length >= 3 && /^[\d\s.\-]+$/.test(query)
+    const values: string[] = []
+    const collectValues = (value: any) => {
+      if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+        values.push(String(value))
+      } else if (Array.isArray(value)) {
+        value.forEach(collectValues)
+      } else if (value && typeof value === "object") {
+        Object.values(value).forEach(collectValues)
+      }
+    }
+
+    Object.values(chat.bot_state?.vars ?? {}).forEach(collectValues)
+    Object.values(chat.bot_state?.vars_by_date ?? {}).forEach((day: any) => {
+      Object.values(day ?? {}).forEach((entry: any) => collectValues(entry?.value ?? entry))
+    })
+
+    return values.some((value) => {
+      const normalizedValue = value.toLowerCase()
+      return normalizedValue.includes(query)
+        || (normalizedNumberSearch && normalizePhone(value).includes(normalizedQuery))
+    })
+  }
 
   const formatLastMessagePreview = (raw?: string | null) => {
     const message = String(raw ?? "").trim()
@@ -441,12 +467,14 @@ export default function ChatSidebar({
   // Filtrar + ordenar por la última actividad: abrir un chat no debe bajarlo
   // solo por haber marcado sus mensajes como leídos.
   const visibleChats = useMemo(() => {
-    const query = search.toLowerCase()
+    const query = search.trim().toLowerCase()
     const phoneQuery = normalizePhone(search)
 
     const filtered = chats.filter((chat) => {
       const chatStatus = chat.attention_status as "bot" | "assigned" | "pending_assignment" | "archived"
       const chatChannel = chat.channel === "webchat" ? "webchat" : "whatsapp"
+      const matchesVariable = chatVariablesMatch(chat, query, phoneQuery)
+      const matchesServerSearch = chat.search_match === query
       const belongsToCurrentOperator = Number(chat.operator_id ?? 0) === Number(currentOperatorId ?? 0)
       const belongsToCurrentOperatorArchived = Number(chat.last_operator_id ?? 0) === Number(currentOperatorId ?? 0)
       const matchesSelectedOperator = operatorId === null || (chatStatus === "archived"
@@ -461,9 +489,11 @@ export default function ChatSidebar({
       const matchesChannel = channelFilters.length === 0 || channelFilters.includes(chatChannel)
 
       return matchesStatus && matchesSelectedOperator && matchesChannel && (
+        matchesServerSearch ||
         chat.name.toLowerCase().includes(query) ||
         formatLastMessagePreview(chat.lastMessage).toLowerCase().includes(query) ||
-        (phoneQuery.length > 0 && normalizePhone(chat.number).includes(phoneQuery))
+        (phoneQuery.length > 0 && normalizePhone(chat.number).includes(phoneQuery)) ||
+        matchesVariable
       )
     })
 
@@ -617,10 +647,17 @@ export default function ChatSidebar({
     }
   }
 
-  const handleSelectChat = async (chatId: string | number) => {
+  const handleSelectChat = async (chatId: string | number, searchMessageId?: string | number | null) => {
     const normalizedChatId = String(chatId)
-    if (normalizedChatId === String(selectedChatId)) return
-    onSelectChat(normalizedChatId)
+    const alreadySelected = normalizedChatId === String(selectedChatId)
+    const selectedRow = chats.find((chat) => String(chat.id) === normalizedChatId)
+    const isCurrentSearchResult = selectedRow?.search_match === search.trim().toLowerCase()
+    const matchedMessageId = !isCurrentSearchResult || searchMessageId === null || searchMessageId === undefined
+      ? null
+      : String(searchMessageId)
+    if (alreadySelected && !matchedMessageId) return
+    onSelectChat(normalizedChatId, search.trim(), matchedMessageId)
+    if (alreadySelected) return
 
     window.dispatchEvent(new CustomEvent("chat:read", { detail: { chatId: normalizedChatId } }))
 
@@ -654,7 +691,7 @@ export default function ChatSidebar({
         <div className="relative">
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Buscar... nombre/numero"
+            placeholder="Buscar chat, mensaje o variable..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-10 border-gray-300 bg-white text-black"
