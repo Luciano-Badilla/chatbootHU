@@ -1,8 +1,8 @@
 "use client"
 
-import { useState, useMemo, useEffect } from "react"
+import { useState, useMemo, useEffect, useRef, useCallback } from "react"
 import { motion } from "framer-motion"
-import { Archive, Bot, Clock3, createLucideIcon, Headset, Search, User } from "lucide-react"
+import { Archive, Bot, Clock3, Headset, MessagesSquare, Search, User } from "lucide-react"
 import { Input } from "shadcn/components/ui/input"
 import { Avatar } from "shadcn/components/ui/avatar"
 import { Badge } from "shadcn/components/ui/badge"
@@ -10,11 +10,6 @@ import { cn } from "shadcn/lib/utils"
 import type { Chat } from "./ChatPanel"
 import { formatDistanceToNow } from "date-fns"
 import { es } from "date-fns/locale"
-
-const MessagesCircle = createLucideIcon("MessagesCircle", [
-  ["path", { d: "M19.95 10.05a7 7 0 011.412 7.872 1 1 0 00-.058.787l.675 2.089a1 1 0 01-1.236 1.168l-2.155-.631a1 1 0 00-.745.06 7 7 0 01-7.793-1.445" }],
-  ["path", { d: "M2.696 12.708a1 1 0 00-.058-.785 7 7 0 113.518 3.473 1 1 0 00-.744-.061l-2.155.63a1 1 0 01-1.236-1.167z" }],
-])
 
 function WhatsAppIcon({ className }: { className?: string }) {
   return (
@@ -28,9 +23,32 @@ interface ChatSidebarProps {
   chats: Chat[]
   selectedChatId: string
   onSelectChat: (chatId: string) => void
+  onFiltersChange?: (filters: ChatSidebarFilters) => void
+  onLoadMore?: () => void
+  hasMore?: boolean
+  loadingMore?: boolean
+  refreshing?: boolean
+  initialStatusFilters?: Array<"bot" | "assigned" | "pending_assignment" | "archived">
+  initialChannelFilters?: Array<"whatsapp" | "webchat">
+  counts?: ChatSidebarCounts
   canViewAll?: boolean
   currentOperatorId?: number | null
   defaultChannelFilter?: "all" | "whatsapp" | "webchat"
+}
+
+export type ChatSidebarFilters = {
+  search: string
+  statuses: Array<"bot" | "assigned" | "pending_assignment" | "archived">
+  channels: Array<"whatsapp" | "webchat">
+}
+
+export type ChatSidebarCounts = {
+  bot: number
+  assigned: number
+  pending_assignment: number
+  archived: number
+  whatsapp: number
+  webchat: number
 }
 
 function InboxChats({
@@ -99,7 +117,7 @@ function InboxChats({
                   chat.channel === "webchat" ? "bg-[#2b5f90] text-white" : "bg-[#25D366] text-white",
                 )}
               >
-                {chat.channel === "webchat" ? <MessagesCircle className="h-3 w-3" /> : <WhatsAppIcon className="h-3 w-3" />}
+                {chat.channel === "webchat" ? <MessagesSquare className="h-3 w-3" /> : <WhatsAppIcon className="h-3 w-3" />}
               </span>
             </span>
             <span className="min-w-0 flex-1">
@@ -132,6 +150,27 @@ function InboxChats({
           </motion.button>
         )
       })}
+    </div>
+  )
+}
+
+function ChatListSkeleton({ rows = 5 }: { rows?: number }) {
+  return (
+    <div role="status" aria-label="Cargando conversaciones" className="divide-y divide-slate-100">
+      {Array.from({ length: rows }, (_, index) => (
+        <div key={`chat-skeleton-${index}`} className="flex animate-pulse items-center gap-3 px-3 py-3">
+          <span className="h-10 w-10 shrink-0 rounded-full bg-slate-200" />
+          <span className="min-w-0 flex-1 space-y-2">
+            <span className="flex items-center justify-between gap-3">
+              <span className="h-3 w-2/5 rounded bg-slate-200" />
+              <span className="h-2.5 w-12 rounded bg-slate-100" />
+            </span>
+            <span className="block h-3 w-3/4 rounded bg-slate-100" />
+            <span className="block h-2.5 w-1/2 rounded bg-slate-100" />
+          </span>
+        </div>
+      ))}
+      <span className="sr-only">Cargando conversaciones…</span>
     </div>
   )
 }
@@ -171,14 +210,63 @@ function CompactFilterButton({
   )
 }
 
-export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canViewAll = false, currentOperatorId = null, defaultChannelFilter = "all" }: ChatSidebarProps) {
+export default function ChatSidebar({
+  chats,
+  selectedChatId,
+  onSelectChat,
+  onFiltersChange,
+  onLoadMore,
+  hasMore = false,
+  loadingMore = false,
+  refreshing = false,
+  initialStatusFilters,
+  initialChannelFilters,
+  counts,
+  canViewAll = false,
+  currentOperatorId = null,
+  defaultChannelFilter = "all",
+}: ChatSidebarProps) {
   const [search, setSearch] = useState("")
   const [statusFilters, setStatusFilters] = useState<Array<"bot" | "assigned" | "pending_assignment" | "archived">>(
-    () => canViewAll ? [] : ["assigned"],
+    () => initialStatusFilters ?? (canViewAll ? [] : ["assigned"]),
   )
-  const [channelFilters, setChannelFilters] = useState<Array<"whatsapp" | "webchat">>(() => defaultChannelFilter === "all" ? [] : [defaultChannelFilter])
+  const [channelFilters, setChannelFilters] = useState<Array<"whatsapp" | "webchat">>(
+    () => initialChannelFilters ?? (defaultChannelFilter === "all" ? [] : [defaultChannelFilter]),
+  )
   const [now, setNow] = useState(Date.now())
   const [failedAvatars, setFailedAvatars] = useState<Record<string, boolean>>({})
+  const listContainerRef = useRef<HTMLDivElement>(null)
+  const skipInitialFilterEffect = useRef(true)
+
+  useEffect(() => {
+    if (skipInitialFilterEffect.current) {
+      skipInitialFilterEffect.current = false
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      onFiltersChange?.({ search: search.trim(), statuses: statusFilters, channels: channelFilters })
+    }, search ? 250 : 0)
+
+    return () => window.clearTimeout(timer)
+  }, [search, statusFilters, channelFilters, onFiltersChange])
+
+  const loadMoreIfNeeded = useCallback(() => {
+    const container = listContainerRef.current
+    if (!container || !hasMore || loadingMore) return
+    if (container.scrollHeight - container.scrollTop - container.clientHeight < 220) {
+      onLoadMore?.()
+    }
+  }, [hasMore, loadingMore, onLoadMore])
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(loadMoreIfNeeded)
+    return () => window.cancelAnimationFrame(frame)
+  }, [chats.length, hasMore, loadingMore, loadMoreIfNeeded])
+
+  useEffect(() => {
+    if (refreshing) listContainerRef.current?.scrollTo({ top: 0 })
+  }, [refreshing])
 
   const normalizePhone = (value?: string | null) => String(value ?? "").replace(/\D/g, "")
 
@@ -318,17 +406,17 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canVi
   }, [search, chats, statusFilters, channelFilters, canViewAll, currentOperatorId])
 
   const inboxCounts = useMemo(() => ({
-    bot: chats.filter((chat) => chat.attention_status === "bot").length,
-    assigned: chats.filter((chat) =>
+    bot: counts?.bot ?? chats.filter((chat) => chat.attention_status === "bot").length,
+    assigned: counts?.assigned ?? chats.filter((chat) =>
       chat.attention_status === "assigned" &&
       (canViewAll || Number(chat.operator_id ?? 0) === Number(currentOperatorId ?? 0)),
     ).length,
-    pending_assignment: chats.filter((chat) => chat.attention_status === "pending_assignment").length,
-    archived: chats.filter((chat) =>
+    pending_assignment: counts?.pending_assignment ?? chats.filter((chat) => chat.attention_status === "pending_assignment").length,
+    archived: counts?.archived ?? chats.filter((chat) =>
       chat.attention_status === "archived" &&
       (canViewAll || Number(chat.last_operator_id ?? 0) === Number(currentOperatorId ?? 0)),
     ).length,
-  }), [chats, canViewAll, currentOperatorId])
+  }), [chats, canViewAll, currentOperatorId, counts])
 
   const toggleStatusFilter = (filter: "bot" | "assigned" | "pending_assignment" | "archived") => {
     setStatusFilters((current) => current.includes(filter) ? current.filter((item) => item !== filter) : [...current, filter])
@@ -346,8 +434,8 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canVi
   ]
 
   const channelFilterOptions = [
-    { key: "whatsapp" as const, label: "WhatsApp", icon: WhatsAppIcon, count: chats.filter((chat) => chat.channel !== "webchat").length },
-    { key: "webchat" as const, label: "Webchat", icon: MessagesCircle, count: chats.filter((chat) => chat.channel === "webchat").length },
+    { key: "whatsapp" as const, label: "WhatsApp", icon: WhatsAppIcon, count: counts?.whatsapp ?? chats.filter((chat) => chat.channel !== "webchat").length },
+    { key: "webchat" as const, label: "Webchat", icon: MessagesSquare, count: counts?.webchat ?? chats.filter((chat) => chat.channel === "webchat").length },
   ]
 
   function formatTimestamp(timestamp?: string) {
@@ -417,8 +505,19 @@ export default function ChatSidebar({ chats, selectedChatId, onSelectChat, canVi
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto custom-scrollbar">
-        <InboxChats chats={visibleChats} selectedChatId={selectedChatId} onSelectChat={handleSelectChat} formatTimestamp={formatTimestamp} formatPreview={formatLastMessagePreview} showAssignment />
+      <div
+        ref={listContainerRef}
+        onScroll={loadMoreIfNeeded}
+        className="flex-1 overflow-y-auto custom-scrollbar"
+      >
+        {refreshing ? (
+          <ChatListSkeleton rows={6} />
+        ) : (
+          <>
+            <InboxChats chats={visibleChats} selectedChatId={selectedChatId} onSelectChat={handleSelectChat} formatTimestamp={formatTimestamp} formatPreview={formatLastMessagePreview} showAssignment />
+            {loadingMore && <ChatListSkeleton rows={2} />}
+          </>
+        )}
       </div>
 
       {false && <div className="flex-1 overflow-y-auto custom-scrollbar">

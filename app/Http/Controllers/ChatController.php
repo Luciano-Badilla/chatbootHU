@@ -25,7 +25,7 @@ class ChatController extends Controller
         private readonly WebchatAvailabilityService $webchatAvailabilityService,
     ) {}
 
-    public function index()
+    public function index(Request $request)
     {
         $botName = SystemSetting::query()->where('key', 'webchat.title')->value('value') ?: 'Asistente virtual';
         $defaultChannelFilter = SystemSetting::query()->where('key', 'chat_panel.default_channel_filter')->value('value') ?: 'all';
@@ -33,52 +33,69 @@ class ChatController extends Controller
             $defaultChannelFilter = 'all';
         }
 
-        $chats = Chat::query()
-            ->with(['contact', 'messages' => fn ($query) => $query->latest(), 'operator', 'lastOperator', 'botFlow', 'botNode'])
-            ->get()
-            ->map(function (Chat $chat) use ($botName) {
-                $lastMessage = $chat->messages->first();
+        $canViewAll = $request->user()?->hasPermission('can_view_all_chats') ?? false;
+        $initialStatusFilters = $canViewAll ? [] : ['assigned'];
+        $initialChannelFilters = $defaultChannelFilter === 'all' ? [] : [$defaultChannelFilter];
+        $preferredChatId = Chat::query()
+            ->where('operator_id', $request->user()?->id)
+            ->where('attention_status', 'assigned')
+            ->orderByDesc(Message::query()
+                ->select('created_at')
+                ->whereColumn('messages.chat_id', 'chats.id')
+                ->latest('id')
+                ->limit(1))
+            ->orderByDesc('id')
+            ->value('id');
 
-                return [
-                    'id' => (int) $chat->id,
-                    'name' => $chat->contact?->name ?? $chat->contact?->whatsapp_id,
-                    'number' => ($chat->channel ?? 'whatsapp') === 'webchat'
-                        ? 'Webchat'
-                        : '+'.$chat->contact?->whatsapp_id,
-                    'channel' => $chat->channel ?? 'whatsapp',
-                    'lastMessage' => $lastMessage?->body ?? '',
-                    // La hora de la lista debe corresponder al ultimo mensaje.
-                    // `updated_at` tambien cambia al actualizar estados operativos.
-                    'timestamp' => $lastMessage?->created_at?->toIso8601String(),
-                    'unread' => $chat->messages()->where('status', 'received')->count(),
-                    'online' => false,
-                    'avatar' => $chat->contact?->profile_pic,
-                    'bot_enabled' => (bool) $chat->bot_enabled,
-                    'bot_name' => $botName,
-                    'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null,
-                    'operator_name' => $chat->operator?->name,
-                    'last_operator_id' => $chat->last_operator_id ? (int) $chat->last_operator_id : null,
-                    'last_operator_name' => $chat->lastOperator?->name,
-                    'bot_state' => $chat->bot_state ?? [],
-                    'status' => $chat->status,
-                    'attention_status' => $chat->attention_status,
-                    'assigned_at' => $chat->assigned_at?->toIso8601String(),
-                    'closed_at' => $chat->closed_at?->toIso8601String(),
-                    'closed_by' => $chat->closed_by,
-                    'bot_flow_id' => $chat->bot_flow_id ? (int) $chat->bot_flow_id : null,
-                    'bot_flow_name' => $chat->botFlow?->name,
-                    'bot_node_id' => $chat->bot_node_id ? (int) $chat->bot_node_id : null,
-                    'bot_node_name' => $chat->botNode?->key,
-                    'bot_step' => $chat->bot_step,
-                ];
-            });
+        $selectedChatId = $request->query('chat') ?: $preferredChatId;
+        $page = $this->chatPanelPage(
+            $initialStatusFilters,
+            $initialChannelFilters,
+            '',
+            0,
+            50,
+            $selectedChatId,
+            $request->user(),
+            $botName,
+        );
 
         return Inertia::render('MessagePanel', [
-            'chats' => $chats,
+            'chats' => $page['data'],
             'chatPanel' => [
                 'defaultChannelFilter' => $defaultChannelFilter,
+                'initialStatusFilters' => $initialStatusFilters,
+                'initialChannelFilters' => $initialChannelFilters,
+                'counts' => $page['counts'],
+                'hasMore' => $page['has_more'],
+                'nextOffset' => $page['next_offset'],
+                'preferredChatId' => $preferredChatId ? (string) $preferredChatId : null,
             ],
         ]);
+    }
+
+    public function listForPanel(Request $request)
+    {
+        $validated = $request->validate([
+            'statuses' => ['sometimes', 'array'],
+            'statuses.*' => ['string', 'in:bot,assigned,pending_assignment,archived'],
+            'channels' => ['sometimes', 'array'],
+            'channels.*' => ['string', 'in:whatsapp,webchat'],
+            'search' => ['sometimes', 'nullable', 'string', 'max:200'],
+            'offset' => ['sometimes', 'integer', 'min:0'],
+            'selected_chat_id' => ['nullable', 'integer', 'min:1'],
+        ]);
+
+        $page = $this->chatPanelPage(
+            $validated['statuses'] ?? [],
+            $validated['channels'] ?? [],
+            trim($validated['search'] ?? ''),
+            (int) ($validated['offset'] ?? 0),
+            50,
+            $validated['selected_chat_id'] ?? null,
+            $request->user(),
+        );
+
+        return response()->json($page);
     }
 
     public function markAsReadMessages(Request $request, $chatId)
@@ -444,11 +461,157 @@ class ChatController extends Controller
         ]);
     }
 
-    public function snapshot()
+    public function snapshot(Request $request)
     {
         $botName = SystemSetting::query()->where('key', 'webchat.title')->value('value') ?: 'Asistente virtual';
-        $rows = Chat::query()
-            ->with(['contact', 'operator:id,name', 'lastOperator:id,name', 'botFlow', 'botNode'])
+        $validated = $request->validate([
+            'ids' => ['sometimes', 'array', 'max:100'],
+            'ids.*' => ['integer', 'min:1', 'distinct'],
+        ]);
+        $ids = $validated['ids'] ?? [];
+
+        $query = $this->chatPanelSummaryQuery();
+        if ($ids !== []) {
+            $query->whereIn('chats.id', $ids);
+        } else {
+            // Compatibilidad con clientes antiguos: nunca devolver el historial completo.
+            $query->orderByDesc('last_message_at')->orderByDesc('chats.id')->limit(50);
+        }
+
+        $rows = $query->get()->map(fn (Chat $chat) => $this->chatPanelSummary($chat, $botName));
+
+        return response()->json([
+            'ok' => true,
+            'data' => $rows,
+            'counts' => $this->chatPanelCounts($request->user()),
+        ]);
+    }
+
+    /**
+     * Return one bounded page of chat summaries while keeping the sidebar counts global.
+     *
+     * @param  array<int, string>  $statuses
+     * @param  array<int, string>  $channels
+     * @return array<string, mixed>
+     */
+    private function chatPanelPage(
+        array $statuses,
+        array $channels,
+        string $search,
+        int $offset,
+        int $limit,
+        int|string|null $selectedChatId,
+        $user,
+        ?string $botName = null,
+    ): array {
+        $query = $this->chatPanelListQuery($statuses, $channels, $search, $user);
+        $pageRows = (clone $query)
+            ->orderByDesc('last_message_at')
+            ->orderByDesc('chats.id')
+            ->offset($offset)
+            ->limit($limit + 1)
+            ->get();
+
+        $hasMore = $pageRows->count() > $limit;
+        $pageRows = $pageRows->take($limit)->values();
+        $nextOffset = $offset + $pageRows->count();
+
+        if ($selectedChatId && ! $pageRows->contains(fn (Chat $chat) => (string) $chat->id === (string) $selectedChatId)) {
+            $selected = $this->chatPanelSummaryQuery()
+                ->where('chats.id', $selectedChatId)
+                ->first();
+            if ($selected) {
+                $pageRows->push($selected);
+            }
+        }
+
+        $botName ??= SystemSetting::query()->where('key', 'webchat.title')->value('value') ?: 'Asistente virtual';
+
+        return [
+            'ok' => true,
+            'data' => $pageRows->map(fn (Chat $chat) => $this->chatPanelSummary($chat, $botName))->values(),
+            'has_more' => $hasMore,
+            'next_offset' => $nextOffset,
+            'counts' => $this->chatPanelCounts($user),
+        ];
+    }
+
+    private function chatPanelListQuery(array $statuses, array $channels, string $search, $user)
+    {
+        $query = $this->chatPanelSummaryQuery();
+
+        if ($statuses === []) {
+            // El filtro vacío de la interfaz muestra las bandejas activas, sin Archivados.
+            $query->where('chats.attention_status', '!=', 'archived');
+        } else {
+            $canViewAll = $user?->hasPermission('can_view_all_chats') ?? false;
+            $query->where(function ($statusQuery) use ($statuses, $canViewAll, $user) {
+                foreach (array_unique($statuses) as $status) {
+                    if ($status === 'assigned' && ! $canViewAll) {
+                        $statusQuery->orWhere(function ($assignedQuery) use ($user) {
+                            $assignedQuery->where('chats.attention_status', 'assigned')
+                                ->where('chats.operator_id', $user?->id);
+                        });
+                    } elseif ($status === 'archived' && ! $canViewAll) {
+                        $statusQuery->orWhere(function ($archivedQuery) use ($user) {
+                            $archivedQuery->where('chats.attention_status', 'archived')
+                                ->where('chats.last_operator_id', $user?->id);
+                        });
+                    } else {
+                        $statusQuery->orWhere('chats.attention_status', $status);
+                    }
+                }
+            });
+        }
+
+        if ($channels !== []) {
+            $query->where(function ($channelQuery) use ($channels) {
+                foreach (array_unique($channels) as $channel) {
+                    if ($channel === 'whatsapp') {
+                        $channelQuery->orWhere('chats.channel', 'whatsapp')
+                            ->orWhereNull('chats.channel');
+                    } else {
+                        $channelQuery->orWhere('chats.channel', $channel);
+                    }
+                }
+            });
+        }
+
+        if ($search !== '') {
+            $like = '%'.$search.'%';
+            $phoneSearch = preg_replace('/\D+/', '', $search);
+            $query->where(function ($searchQuery) use ($like, $phoneSearch) {
+                $searchQuery
+                    ->whereHas('contact', function ($contactQuery) use ($like) {
+                        $contactQuery->where('name', 'like', $like)
+                            ->orWhere('whatsapp_id', 'like', $like);
+                    })
+                    ->orWhereRaw(
+                        '(SELECT messages.body FROM messages WHERE messages.chat_id = chats.id ORDER BY messages.id DESC LIMIT 1) LIKE ?',
+                        [$like],
+                    );
+                if ($phoneSearch !== '') {
+                    $searchQuery->orWhereHas('contact', function ($contactQuery) use ($phoneSearch) {
+                        $contactQuery->where('whatsapp_id', 'like', '%'.$phoneSearch.'%');
+                    });
+                }
+            });
+        }
+
+        return $query;
+    }
+
+    private function chatPanelSummaryQuery()
+    {
+        return Chat::query()
+            ->with([
+                'contact:id,name,whatsapp_id,profile_pic',
+                'operator:id,name',
+                'lastOperator:id,name',
+                'botFlow:id,name',
+                'botNode:id,key',
+            ])
+            ->withCount(['messages as unread_count' => fn ($query) => $query->where('status', 'received')])
             ->addSelect([
                 'last_message_body' => Message::query()
                     ->select('body')
@@ -460,46 +623,71 @@ class ChatController extends Controller
                     ->whereColumn('messages.chat_id', 'chats.id')
                     ->latest('id')
                     ->limit(1),
-            ])
-            ->get()
-            ->map(function (Chat $chat) use ($botName) {
-                return [
-                    'chat_id' => (int) $chat->id,
-                    'name' => $chat->contact?->name ?? $chat->contact?->whatsapp_id,
-                    'number' => ($chat->channel ?? 'whatsapp') === 'webchat'
-                        ? 'Webchat'
-                        : '+'.$chat->contact?->whatsapp_id,
-                    'channel' => $chat->channel ?? 'whatsapp',
-                    'lastMessage' => $chat->last_message_body ?? '',
-                    'timestamp' => $chat->last_message_at
-                        ? Carbon::parse($chat->last_message_at)->toIso8601String()
-                        : null,
-                    'avatar' => $chat->contact?->profile_pic,
-                    'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null,
-                    'operator_name' => $chat->operator?->name,
-                    'last_operator_id' => $chat->last_operator_id ? (int) $chat->last_operator_id : null,
-                    'last_operator_name' => $chat->lastOperator?->name,
-                    'bot_enabled' => (bool) $chat->bot_enabled,
-                    'bot_name' => $botName,
-                    'status' => $chat->status,
-                    'attention_status' => $chat->attention_status,
-                    'assigned_at' => $chat->assigned_at?->toIso8601String(),
-                    'closed_at' => $chat->closed_at?->toIso8601String(),
-                    'closed_by' => $chat->closed_by,
-                    'bot_flow_id' => $chat->bot_flow_id ? (int) $chat->bot_flow_id : null,
-                    'bot_flow_name' => $chat->botFlow?->name,
-                    'bot_node_id' => $chat->bot_node_id ? (int) $chat->bot_node_id : null,
-                    'bot_node_name' => $chat->botNode?->key,
-                    'bot_step' => $chat->bot_step,
-                    'bot_state' => $chat->bot_state ?? [],
-                ];
-            })
-            ->values();
+            ]);
+    }
 
-        return response()->json([
-            'ok' => true,
-            'data' => $rows,
-        ]);
+    private function chatPanelSummary(Chat $chat, string $botName): array
+    {
+        return [
+            'id' => (int) $chat->id,
+            'chat_id' => (int) $chat->id,
+            'name' => $chat->contact?->name ?? $chat->contact?->whatsapp_id ?? 'Sin nombre',
+            'number' => ($chat->channel ?? 'whatsapp') === 'webchat'
+                ? 'Webchat'
+                : '+'.$chat->contact?->whatsapp_id,
+            'channel' => $chat->channel ?? 'whatsapp',
+            'lastMessage' => $chat->last_message_body ?? '',
+            // La hora de la lista corresponde al último mensaje, no a cambios operativos.
+            'timestamp' => $chat->last_message_at
+                ? Carbon::parse($chat->last_message_at)->toIso8601String()
+                : null,
+            'unread' => (int) ($chat->unread_count ?? 0),
+            'online' => false,
+            'avatar' => $chat->contact?->profile_pic,
+            'bot_enabled' => (bool) $chat->bot_enabled,
+            'bot_name' => $botName,
+            'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null,
+            'operator_name' => $chat->operator?->name,
+            'last_operator_id' => $chat->last_operator_id ? (int) $chat->last_operator_id : null,
+            'last_operator_name' => $chat->lastOperator?->name,
+            'bot_state' => $chat->bot_state ?? [],
+            'status' => $chat->status,
+            'attention_status' => $chat->attention_status,
+            'assigned_at' => $chat->assigned_at?->toIso8601String(),
+            'closed_at' => $chat->closed_at?->toIso8601String(),
+            'closed_by' => $chat->closed_by,
+            'bot_flow_id' => $chat->bot_flow_id ? (int) $chat->bot_flow_id : null,
+            'bot_flow_name' => $chat->botFlow?->name,
+            'bot_node_id' => $chat->bot_node_id ? (int) $chat->bot_node_id : null,
+            'bot_node_name' => $chat->botNode?->key,
+            'bot_step' => $chat->bot_step,
+        ];
+    }
+
+    private function chatPanelCounts($user): array
+    {
+        $statusCounts = Chat::query()
+            ->selectRaw('attention_status, COUNT(*) as total')
+            ->groupBy('attention_status')
+            ->pluck('total', 'attention_status');
+        $channelCounts = Chat::query()
+            ->selectRaw("SUM(CASE WHEN channel = 'webchat' THEN 1 ELSE 0 END) as webchat_total")
+            ->selectRaw("SUM(CASE WHEN channel IS NULL OR channel != 'webchat' THEN 1 ELSE 0 END) as whatsapp_total")
+            ->first();
+        $canViewAll = $user?->hasPermission('can_view_all_chats') ?? false;
+
+        return [
+            'bot' => (int) ($statusCounts['bot'] ?? 0),
+            'assigned' => $canViewAll
+                ? (int) ($statusCounts['assigned'] ?? 0)
+                : Chat::query()->where('attention_status', 'assigned')->where('operator_id', $user?->id)->count(),
+            'pending_assignment' => (int) ($statusCounts['pending_assignment'] ?? 0),
+            'archived' => $canViewAll
+                ? (int) ($statusCounts['archived'] ?? 0)
+                : Chat::query()->where('attention_status', 'archived')->where('last_operator_id', $user?->id)->count(),
+            'whatsapp' => (int) ($channelCounts?->whatsapp_total ?? 0),
+            'webchat' => (int) ($channelCounts?->webchat_total ?? 0),
+        ];
     }
 
     private function publishOperatorStatus(int $chatId, array $payload): void

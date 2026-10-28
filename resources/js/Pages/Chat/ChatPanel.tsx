@@ -10,6 +10,7 @@ import { usePage } from "@inertiajs/react"
 import { AlertTriangle, Eye, X } from "lucide-react"
 import { toast } from "sonner"
 import StartupCurtain from "../../Components/StartupCurtain"
+import type { ChatSidebarCounts, ChatSidebarFilters } from "./ChatSidebar"
 
 export type Chat = {
   id: number | string
@@ -80,6 +81,9 @@ export type Message = {
 interface ChatPanelProps {
   // Lista inicial de chats enviada desde Laravel vía Inertia.
   chats: Chat[]
+  initialCounts?: Partial<ChatSidebarCounts>
+  initialHasMore?: boolean
+  initialNextOffset?: number
 }
 
 // Componente principal del panel de chat.
@@ -87,12 +91,27 @@ interface ChatPanelProps {
 // - Mantener el estado global de los chats.
 // - Conectarse a MQTT para recibir mensajes en tiempo real.
 // - Coordinar Sidebar, Main y Info.
-export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
+export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore = false, initialNextOffset = 0 }: ChatPanelProps) {
   const { props } = usePage() as any
   const authUser = props?.auth?.user as { id?: number; name?: string; role_name?: string; operator_availability?: "available" | "paused" | "unavailable" } | undefined
+  const initialChatPanel = props?.chatPanel ?? {}
+  const initialFilters: ChatSidebarFilters = {
+    search: "",
+    statuses: initialChatPanel.initialStatusFilters ?? (props?.auth?.permissions?.can_view_all_chats ? [] : ["assigned"]),
+    channels: initialChatPanel.initialChannelFilters ?? (initialChatPanel.defaultChannelFilter && initialChatPanel.defaultChannelFilter !== "all" ? [initialChatPanel.defaultChannelFilter] : []),
+  }
 
   // Estado local con la lista de chats (se inicializa con lo que viene del backend).
   const [chats, setChats] = useState<Chat[]>(initialChats)
+  const chatsRef = useRef<Chat[]>(initialChats)
+  const [chatCounts, setChatCounts] = useState<Partial<ChatSidebarCounts>>(initialCounts ?? initialChatPanel.counts ?? {})
+  const [hasMoreChats, setHasMoreChats] = useState(initialHasMore)
+  const [loadingChatPage, setLoadingChatPage] = useState(false)
+  const [refreshingChatList, setRefreshingChatList] = useState(false)
+  const filtersRef = useRef<ChatSidebarFilters>(initialFilters)
+  const nextOffsetRef = useRef(initialNextOffset)
+  const listRequestIdRef = useRef(0)
+  const loadingChatPageRef = useRef(false)
   const [dbHydrated, setDbHydrated] = useState(false)
   const [panelMqttConnected, setPanelMqttConnected] = useState(false)
   const [showStartupCurtain, setShowStartupCurtain] = useState(true)
@@ -101,7 +120,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   // ID del chat seleccionado actualmente en la UI.
   const [selectedChatId, setSelectedChatId] = useState<string>(() => {
     if (typeof window === "undefined") return ""
-    return new URLSearchParams(window.location.search).get("chat") || ""
+    return new URLSearchParams(window.location.search).get("chat") || String(initialChatPanel.preferredChatId ?? "")
   })
   const previousSelectedChatIdRef = useRef<string>("")
   const selectedChatIdRef = useRef<string>("")
@@ -127,6 +146,74 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   } | null>(null)
   const [finishingAttention, setFinishingAttention] = useState(false)
   const [takingChat, setTakingChat] = useState(false)
+
+  useEffect(() => {
+    chatsRef.current = chats
+  }, [chats])
+
+  const requestChatPage = useCallback(async (filters: ChatSidebarFilters, offset: number, append: boolean) => {
+    const requestId = append ? listRequestIdRef.current : ++listRequestIdRef.current
+    if (append && loadingChatPageRef.current) return
+    loadingChatPageRef.current = true
+    setLoadingChatPage(true)
+    setRefreshingChatList(!append)
+
+    const params = new URLSearchParams()
+    params.set("search", filters.search)
+    params.set("offset", String(offset))
+    filters.statuses.forEach((status) => params.append("statuses[]", status))
+    filters.channels.forEach((channel) => params.append("channels[]", channel))
+    if (selectedChatIdRef.current) params.set("selected_chat_id", selectedChatIdRef.current)
+
+    try {
+      const res = await fetch(`${import.meta.env.VITE_APP_URL}/api/chats/list?${params.toString()}`, {
+        headers: { Accept: "application/json" },
+      })
+      const contentType = res.headers.get("content-type") ?? ""
+      if (!contentType.includes("application/json")) {
+        throw new Error(`La lista respondió HTTP ${res.status} (${contentType || "sin Content-Type"}) desde ${res.url}`)
+      }
+      const payload = await res.json()
+      if (!res.ok) throw new Error(payload?.message || `HTTP ${res.status}`)
+      if (requestId !== listRequestIdRef.current) return
+
+      const rows: Chat[] = Array.isArray(payload?.data) ? payload.data : []
+      setChats((current) => {
+        if (!append) return rows
+        const merged = new Map<string, Chat>(current.map((chat): [string, Chat] => [String(chat.id), chat]))
+        rows.forEach((chat) => {
+          const existing = merged.get(String(chat.id))
+          merged.set(String(chat.id), existing ? { ...existing, ...chat } : chat)
+        })
+        return [...merged.values()]
+      })
+      setChatCounts(payload?.counts ?? {})
+      setHasMoreChats(Boolean(payload?.has_more))
+      if (!append || offset >= nextOffsetRef.current) {
+        nextOffsetRef.current = Number(payload?.next_offset ?? (offset + rows.length))
+      }
+    } catch (error) {
+      console.error("Error cargando conversaciones:", error)
+    } finally {
+      if (requestId === listRequestIdRef.current) {
+        loadingChatPageRef.current = false
+        setLoadingChatPage(false)
+        setRefreshingChatList(false)
+      }
+    }
+  }, [])
+
+  const handleListFiltersChange = useCallback((filters: ChatSidebarFilters) => {
+    filtersRef.current = filters
+    nextOffsetRef.current = 0
+    setHasMoreChats(false)
+    void requestChatPage(filters, 0, false)
+  }, [requestChatPage])
+
+  const loadMoreChats = useCallback(() => {
+    if (!hasMoreChats || loadingChatPageRef.current) return
+    void requestChatPage(filtersRef.current, nextOffsetRef.current, true)
+  }, [hasMoreChats, requestChatPage])
 
   const dismissStartupCurtain = useCallback(() => {
     if (startupCurtainResolvedRef.current) return
@@ -346,21 +433,30 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
     syncChatsInFlightRef.current = true
 
     try {
-      const res = await fetch(`${import.meta.env.VITE_APP_URL}/api/chats/snapshot`)
+      const params = new URLSearchParams()
+      const refreshIds = new Set(chatsRef.current.slice(0, 50).map((chat) => String(chat.id)))
+      if (selectedChatIdRef.current) refreshIds.add(selectedChatIdRef.current)
+      if (refreshIds.size === 0) {
+        setDbHydrated(true)
+        return
+      }
+      Array.from(refreshIds).slice(0, 100).forEach((id) => params.append("ids[]", id))
+      const res = await fetch(`${import.meta.env.VITE_APP_URL}/api/chats/snapshot?${params.toString()}`, {
+        headers: { Accept: "application/json" },
+      })
       if (!res.ok) {
         console.error("Error cargando snapshot de chats:", await res.text())
         return
       }
 
       const payload = await res.json()
+      if (payload?.counts) setChatCounts(payload.counts)
       const rows = Array.isArray(payload?.data) ? payload.data : []
       const byChatId = new Map<string, any>(
         rows.map((row: any) => [String(row.chat_id), row]),
       )
 
-      setChats((prevChats) => {
-          const currentIds = new Set(prevChats.map((chat) => String(chat.id)))
-          const merged = prevChats.map((chat) => {
+      setChats((prevChats) => prevChats.map((chat) => {
             const row = byChatId.get(String(chat.id))
             if (!row) return chat
             return {
@@ -370,6 +466,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
               channel: row.channel ?? chat.channel,
               lastMessage: row.lastMessage ?? chat.lastMessage,
               timestamp: row.timestamp ?? chat.timestamp,
+              unread: String(chat.id) === selectedChatIdRef.current ? 0 : Number(row.unread ?? chat.unread ?? 0),
               avatar: row.avatar ?? chat.avatar,
               operator_id: row.operator_id ?? null,
               operator_name: row.operator_name ?? null,
@@ -389,41 +486,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
               bot_step: row.bot_step ?? null,
               bot_state: row.bot_state ?? {},
             }
-          })
-
-          const missing = rows
-            .filter((row: any) => !currentIds.has(String(row.chat_id)))
-            .map((row: any) => ({
-              id: row.chat_id,
-              name: row.name ?? "Sin nombre",
-              number: row.number ?? "",
-              channel: row.channel ?? "whatsapp",
-              lastMessage: row.lastMessage ?? "",
-              timestamp: row.timestamp ?? new Date().toISOString(),
-              unread: 0,
-              online: false,
-              avatar: row.avatar ?? null,
-              bot_enabled: typeof row.bot_enabled === "boolean" ? row.bot_enabled : true,
-              bot_name: row.bot_name ?? "Asistente virtual",
-              operator_id: row.operator_id ?? null,
-              operator_name: row.operator_name ?? null,
-              last_operator_id: row.last_operator_id ?? null,
-              last_operator_name: row.last_operator_name ?? null,
-              status: row.status ?? "open",
-              attention_status: row.attention_status ?? "bot",
-              assigned_at: row.assigned_at ?? null,
-              closed_at: row.closed_at ?? null,
-              closed_by: row.closed_by ?? null,
-              bot_flow_id: row.bot_flow_id ?? null,
-              bot_flow_name: row.bot_flow_name ?? null,
-              bot_node_id: row.bot_node_id ?? null,
-              bot_node_name: row.bot_node_name ?? null,
-              bot_step: row.bot_step ?? null,
-              bot_state: row.bot_state ?? {},
-            }))
-
-          return [...missing, ...merged]
-      })
+          }))
     } catch (error) {
       console.error("Error de red cargando snapshot de chats:", error)
     } finally {
@@ -439,7 +502,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
   useEffect(() => {
     const interval = window.setInterval(() => {
       syncChatsFromDb()
-    }, 3000)
+    }, 15000)
 
     return () => window.clearInterval(interval)
   }, [syncChatsFromDb])
@@ -534,6 +597,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
           if (!chatId) return
 
           const active = Boolean(data.active)
+          const chatIsLoaded = chatsRef.current.some((chat) => String(chat.id) === chatId)
           setChats((prevChats) =>
             prevChats.map((c) =>
               String(c.id) === chatId
@@ -558,6 +622,9 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
                 : c,
             ),
           )
+          if (!chatIsLoaded) {
+            void requestChatPage(filtersRef.current, 0, true)
+          }
 
           const currentChatId = selectedChatIdRef.current
           const isCurrentChat = currentChatId && String(currentChatId) === chatId
@@ -668,7 +735,7 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
         mqttClientRef.current = null
       }
     }
-  }, [dismissStartupCurtain, syncChatsFromDb])
+  }, [dismissStartupCurtain, requestChatPage, syncChatsFromDb])
 
   const updateOperatorPresence = async (chatId: string, active: boolean, keepalive = false) => {
     // La asignación ya la resuelve el backend al entrar al handoff. Abrir o salir no la modifica.
@@ -841,6 +908,14 @@ export function ChatPanel({ chats: initialChats }: ChatPanelProps) {
           chats={chats}
           selectedChatId={selectedChatId}
           onSelectChat={requestChatSelection}
+          onFiltersChange={handleListFiltersChange}
+          onLoadMore={loadMoreChats}
+          hasMore={hasMoreChats}
+          loadingMore={loadingChatPage}
+          refreshing={refreshingChatList}
+          initialStatusFilters={initialFilters.statuses}
+          initialChannelFilters={initialFilters.channels}
+          counts={chatCounts as ChatSidebarCounts}
           canViewAll={Boolean(props?.auth?.permissions?.can_view_all_chats)}
           currentOperatorId={authUser?.id ?? null}
           defaultChannelFilter={props?.chatPanel?.defaultChannelFilter ?? "all"}

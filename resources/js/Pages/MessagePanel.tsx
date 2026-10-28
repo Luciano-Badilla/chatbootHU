@@ -35,7 +35,14 @@ function OperatorStatusSelect() {
 }
 
 export default function MessagePanel() {
-  const { props } = usePage<{ chats?: any[] }>()
+  const { props } = usePage<{
+    chats?: any[]
+    chatPanel?: {
+      counts?: Record<string, number>
+      hasMore?: boolean
+      nextOffset?: number
+    }
+  }>()
   const chats = props.chats || []
 
   return (
@@ -48,7 +55,12 @@ export default function MessagePanel() {
       contentClassName="flex-1 min-h-0 p-0"
       fullHeight
     >
-      <ChatPanel chats={chats} />
+      <ChatPanel
+        chats={chats}
+        initialCounts={props.chatPanel?.counts}
+        initialHasMore={props.chatPanel?.hasMore}
+        initialNextOffset={props.chatPanel?.nextOffset}
+      />
     </AppShell>
   )
 }
