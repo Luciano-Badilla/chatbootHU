@@ -36,6 +36,7 @@ import { AppShell } from "../Components/AppShell"
 import { Badge } from "shadcn/components/ui/badge"
 import { Button } from "shadcn/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "shadcn/components/ui/card"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "shadcn/components/ui/dialog"
 
 const APP_URL = import.meta.env.VITE_APP_URL || ""
 
@@ -60,6 +61,18 @@ type ActivityPoint = {
   bot_webchat: number
   operator_webchat: number
   campaign_webchat: number
+}
+
+type AlephooError = {
+  id: number
+  operation: string
+  status: string
+  description: string
+  created_at?: string | null
+  chat_id?: number | null
+  chat_name?: string | null
+  chat_number?: string | null
+  node_key?: string | null
 }
 
 type ActivityKey =
@@ -161,6 +174,8 @@ type DashboardProps = {
     appointments_cancelled: number
     patients_created: number
     errors: number
+    error_details?: AlephooError[]
+    errors_truncated?: boolean
   } | null
   alerts: Array<{
     severity: "warning" | "info"
@@ -343,6 +358,7 @@ function MessageActivityChart({ points }: { points: ActivityPoint[] }) {
 
 export default function Dashboard() {
   const { props } = usePage<DashboardProps>()
+  const [alephooErrorsOpen, setAlephooErrorsOpen] = useState(false)
   const userName = props.auth?.user?.name?.trim() || "usuario"
   const permissions = props.auth?.permissions ?? {}
 
@@ -639,7 +655,7 @@ export default function Dashboard() {
           <Card className="border-slate-200 bg-white shadow-sm">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-[#013765]"><Activity className="h-5 w-5" /> Gestiones en Alephoo</CardTitle>
-              <CardDescription>Operaciones registradas durante el período seleccionado.</CardDescription>
+              <CardDescription>Operaciones realizadas por Huni en Alephoo durante el período seleccionado.</CardDescription>
             </CardHeader>
             <CardContent className="grid grid-cols-2 gap-3">
               {[
@@ -647,15 +663,77 @@ export default function Dashboard() {
                 ["Turnos cancelados", props.operations.appointments_cancelled],
                 ["Pacientes creados", props.operations.patients_created],
                 ["Errores", props.operations.errors],
-              ].map(([label, value]) => (
-                <div key={String(label)} className="surface-nested rounded-xl p-3">
-                  <p className={`text-2xl font-bold ${label === "Errores" && Number(value) > 0 ? "text-rose-700" : "text-[#013765]"}`}>{formatNumber(Number(value))}</p>
-                  <p className="text-xs text-slate-500">{label}</p>
-                </div>
-              ))}
+              ].map(([label, value]) => {
+                const content = (
+                  <>
+                    <p className={`text-2xl font-bold ${label === "Errores" && Number(value) > 0 ? "text-rose-700" : "text-[#013765]"}`}>{formatNumber(Number(value))}</p>
+                    <p className="flex items-center justify-between gap-2 text-xs text-slate-500">
+                      <span>{label}</span>
+                      {label === "Errores" ? <span className="text-[10px] font-medium text-rose-700">Ver detalle</span> : null}
+                    </p>
+                  </>
+                )
+
+                return label === "Errores" ? (
+                  <button
+                    key={String(label)}
+                    type="button"
+                    aria-haspopup="dialog"
+                    onClick={() => setAlephooErrorsOpen(true)}
+                    className="surface-nested rounded-xl p-3 text-left transition hover:border-rose-200 hover:bg-rose-50/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300"
+                  >
+                    {content}
+                  </button>
+                ) : (
+                  <div key={String(label)} className="surface-nested rounded-xl p-3">
+                    {content}
+                  </div>
+                )
+              })}
             </CardContent>
           </Card>
         ) : null}
+
+        <Dialog open={alephooErrorsOpen} onOpenChange={setAlephooErrorsOpen}>
+          <DialogContent className="max-h-[85vh] max-w-2xl overflow-hidden">
+            <DialogHeader>
+              <DialogTitle>Errores de Alephoo</DialogTitle>
+              <DialogDescription>
+                {formatNumber(props.operations?.errors ?? 0)} eventos no completados durante {props.period.label.toLowerCase()}.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="max-h-[62vh] space-y-2 overflow-y-auto pr-1">
+              {props.operations?.error_details?.length ? props.operations.error_details.map((error) => (
+                <article key={error.id} className="rounded-lg border border-slate-200 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-[#013765]">{error.operation}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">{error.description}</p>
+                    </div>
+                    <Badge className="shrink-0 bg-rose-50 text-rose-700 hover:bg-rose-50">{error.status}</Badge>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-slate-500">
+                    <span>{error.created_at ? new Intl.DateTimeFormat("es-AR", { dateStyle: "short", timeStyle: "short" }).format(new Date(error.created_at)) : "Fecha no disponible"}</span>
+                    {error.node_key ? <span>Nodo: {error.node_key}</span> : null}
+                  </div>
+                  {error.chat_id ? (
+                    <a href={`${APP_URL}/chat-panel?chat=${error.chat_id}`} className="mt-2 inline-flex max-w-full items-center gap-1 truncate text-xs font-medium text-[#185e9c] hover:underline">
+                      <span className="truncate">{error.chat_name ?? `Chat #${error.chat_id}`}{error.chat_number ? ` · ${error.chat_number}` : ""}</span>
+                      <span aria-hidden="true">↗</span>
+                    </a>
+                  ) : null}
+                </article>
+              )) : (
+                <div className="rounded-lg bg-slate-50 p-6 text-center text-sm text-slate-500">
+                  No se registraron errores de Alephoo en este período.
+                </div>
+              )}
+              {props.operations?.errors_truncated ? (
+                <p className="px-1 py-1 text-xs text-slate-500">Se muestran los 100 errores más recientes del período.</p>
+              ) : null}
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {props.system_health ? (
           <Card className="border-slate-200 bg-white shadow-sm">

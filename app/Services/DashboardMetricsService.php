@@ -462,12 +462,58 @@ class DashboardMetricsService
     {
         $events = Activity::query()->whereBetween('created_at', [$start, $end])
             ->where('event', 'like', 'alephoo_%')->selectRaw('event, COUNT(*) total')->groupBy('event')->pluck('total', 'event');
+        $errorCount = (int) $events->filter(fn ($total, $event) => str_contains($event, 'failed'))->sum();
+        $errors = Activity::query()
+            ->whereBetween('created_at', [$start, $end])
+            ->where('event', 'like', 'alephoo_%_failed')
+            ->latest('id')
+            ->limit(100)
+            ->get(['id', 'event', 'description', 'created_at', 'properties'])
+            ->map(function (Activity $activity) {
+                $properties = $activity->properties?->toArray() ?? [];
+                $meta = data_get($properties, 'meta', []);
+                $operation = (string) data_get($meta, 'operation', '');
+                $status = (string) data_get($meta, 'status', '');
+                $chatId = data_get($properties, 'chat_id') ?? data_get($properties, 'chat.id');
+                $chatName = data_get($properties, 'chat.contact_name') ?: data_get($properties, 'chat.contact_number');
+                $operationLabels = [
+                    'patient_create' => 'Crear paciente',
+                    'appointment_create' => 'Crear turno',
+                    'appointment_cancel' => 'Cancelar turno',
+                ];
+                $statusLabels = [
+                    'error' => 'Error de Alephoo o de conexión',
+                    'invalid_data' => 'Datos rechazados por Alephoo',
+                    'already_exists' => 'El paciente ya existía',
+                    'missing_data' => 'Faltan datos requeridos',
+                    'misconfigured' => 'Integración mal configurada',
+                    'endpoint_disabled' => 'Endpoint deshabilitado',
+                    'unavailable' => 'Turno no disponible',
+                    'invalid_appointment' => 'Turno inválido',
+                    'not_available' => 'Turno ya cancelado o no disponible',
+                ];
+
+                return [
+                    'id' => (int) $activity->id,
+                    'operation' => $operationLabels[$operation] ?? 'Operación de Alephoo',
+                    'status' => $statusLabels[$status] ?? ($status !== '' ? $status : 'No completado'),
+                    'description' => $activity->description,
+                    'created_at' => $activity->created_at?->toIso8601String(),
+                    'chat_id' => $chatId ? (int) $chatId : null,
+                    'chat_name' => $chatName ?: ($chatId ? "Chat #{$chatId}" : null),
+                    'chat_number' => data_get($properties, 'chat.contact_number'),
+                    'node_key' => data_get($meta, 'node_key'),
+                ];
+            })
+            ->values();
 
         return [
             'appointments_created' => (int) ($events['alephoo_appointment_create_succeeded'] ?? 0),
             'appointments_cancelled' => (int) ($events['alephoo_appointment_cancel_succeeded'] ?? 0),
             'patients_created' => (int) ($events['alephoo_patient_create_succeeded'] ?? 0),
-            'errors' => (int) $events->filter(fn ($total, $event) => str_contains($event, 'failed'))->sum(),
+            'errors' => $errorCount,
+            'error_details' => $errors->all(),
+            'errors_truncated' => $errorCount > $errors->count(),
         ];
     }
 
