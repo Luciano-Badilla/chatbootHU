@@ -958,6 +958,7 @@ export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore =
           canViewAudit={Boolean(props?.auth?.permissions?.can_view_chat_audit)}
           canFinishAttention={canFinishAttention}
           canTakeChat={canTakeChat}
+          currentUserId={authUser?.id ?? null}
           takingChat={takingChat}
           finishingAttention={finishingAttention}
           onFinishAttention={finishSelectedAttention}

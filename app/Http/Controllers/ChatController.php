@@ -399,7 +399,12 @@ class ChatController extends Controller
 
     public function archiveByAdmin(Request $request, Chat $chat)
     {
-        $data = $request->validate(['reason' => ['required', 'string', 'max:500']]);
+        $reasonIsRequired = (int) ($chat->operator_id ?? 0) !== (int) ($request->user()?->id ?? 0);
+        $data = $request->validate([
+            'reason' => $reasonIsRequired
+                ? ['required', 'string', 'max:500']
+                : ['nullable', 'string', 'max:500'],
+        ]);
 
         if ($chat->status === 'closed') {
             return response()->json(['ok' => false, 'message' => 'El chat ya esta archivado.'], 422);
@@ -426,7 +431,7 @@ class ChatController extends Controller
         $chat->load('operator');
 
         $this->auditService->recordChatAction('admin_archived_chat', 'Archivo el chat y reactivo el bot', $chat, $request->user(), [
-            'before' => $before, 'after' => $this->adminChatState($chat), 'meta' => ['reason' => $data['reason']],
+            'before' => $before, 'after' => $this->adminChatState($chat), 'meta' => ['reason' => $data['reason'] ?? null],
         ]);
         $this->publishChatLifecycle($chat);
 

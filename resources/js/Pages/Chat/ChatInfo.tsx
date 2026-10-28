@@ -25,6 +25,7 @@ interface ChatInfoProps {
   canViewAudit?: boolean
   canFinishAttention?: boolean
   canTakeChat?: boolean
+  currentUserId?: number | null
   takingChat?: boolean
   finishingAttention?: boolean
   onFinishAttention?: () => void
@@ -77,6 +78,7 @@ type PendingAdminAction = {
   description: string
   url: string
   body: Record<string, unknown>
+  requiresReason: boolean
   onSuccess: (payload: any) => void
 }
 
@@ -204,6 +206,7 @@ export default function ChatInfo({
   canViewAudit = false,
   canFinishAttention = false,
   canTakeChat = false,
+  currentUserId = null,
   takingChat = false,
   finishingAttention = false,
   onFinishAttention,
@@ -1075,7 +1078,7 @@ export default function ChatInfo({
   const executePendingAdminAction = async () => {
     if (!pendingAdminAction) return
     const reason = adminActionReason.trim()
-    if (!reason) {
+    if (pendingAdminAction.requiresReason && !reason) {
       setAdminModalError("Ingresá un motivo para realizar esta acción.")
       return
     }
@@ -1083,7 +1086,7 @@ export default function ChatInfo({
     setAdminMessage(null)
     setAdminModalError(null)
     try {
-      const response = await fetch(pendingAdminAction.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...pendingAdminAction.body, reason }) })
+      const response = await fetch(pendingAdminAction.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...pendingAdminAction.body, ...(reason ? { reason } : {}) }) })
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.message || "No se pudo completar la acción.")
       pendingAdminAction.onSuccess(payload)
@@ -1154,6 +1157,7 @@ export default function ChatInfo({
       description: "Se liberará al operador, se archivará el chat y se reactivará el bot.",
       url: `${API_BASE}/api/chats/${chat.id}/archive`,
       body: {},
+      requiresReason: Number(chat.operator_id ?? 0) !== Number(currentUserId ?? -1),
       onSuccess: (result) => {
         if (!result?.chat) return
         onChatUpdated?.({
@@ -1330,19 +1334,21 @@ export default function ChatInfo({
             <DialogTitle>{pendingAdminAction?.title}</DialogTitle>
             <DialogDescription>{pendingAdminAction?.description}</DialogDescription>
           </DialogHeader>
-          <div className="space-y-1.5 py-2">
-            <label htmlFor="admin-action-reason" className="text-sm font-medium text-slate-700">Motivo</label>
-            <textarea
-              id="admin-action-reason"
-              value={adminActionReason}
-              onChange={(event) => setAdminActionReason(event.target.value)}
-              placeholder="Indica el motivo de esta acción"
-              rows={3}
-              maxLength={500}
-              className="w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-[#2b5f90] focus:ring-2 focus:ring-[#2b5f90]/20"
-            />
-            {adminModalError ? <p className="text-xs font-medium text-red-600">{adminModalError}</p> : null}
-          </div>
+          {pendingAdminAction?.requiresReason ? (
+            <div className="space-y-1.5 py-2">
+              <label htmlFor="admin-action-reason" className="text-sm font-medium text-slate-700">Motivo</label>
+              <textarea
+                id="admin-action-reason"
+                value={adminActionReason}
+                onChange={(event) => setAdminActionReason(event.target.value)}
+                placeholder="Indica el motivo de esta acción"
+                rows={3}
+                maxLength={500}
+                className="w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-[#2b5f90] focus:ring-2 focus:ring-[#2b5f90]/20"
+              />
+              {adminModalError ? <p className="text-xs font-medium text-red-600">{adminModalError}</p> : null}
+            </div>
+          ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" disabled={adminBusy} onClick={() => { setPendingAdminAction(null); setAdminActionReason(""); setAdminModalError(null) }}>Cancelar</Button>
             <Button type="button" className="bg-[#013765] hover:bg-[#012e54]" disabled={adminBusy} onClick={executePendingAdminAction}>
