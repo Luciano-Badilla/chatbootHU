@@ -350,6 +350,9 @@ class ChatController extends Controller
             ], 422);
         }
 
+        $attentionSeconds = $chat->assigned_at
+            ? max(0, (int) $chat->assigned_at->diffInSeconds(now()))
+            : null;
         $this->botInactivityService->resetChatToStartFromFlow($chat, $flow, 'operator_finished_attention');
         $chat->last_operator_id = $actorId;
         $chat->operator_id = null;
@@ -381,6 +384,7 @@ class ChatController extends Controller
             [
                 'before' => $before,
                 'after' => $after,
+                'meta' => ['attention_seconds' => $attentionSeconds],
             ],
         );
 
@@ -426,6 +430,9 @@ class ChatController extends Controller
         $chat->loadMissing('operator');
         $before = $this->adminChatState($chat);
         $previousOperatorId = $chat->operator_id;
+        $attentionSeconds = $chat->assigned_at
+            ? max(0, (int) $chat->assigned_at->diffInSeconds(now()))
+            : null;
         $this->botInactivityService->resetChatToStartFromFlow($chat, $flow, 'admin_archived');
         $chat->last_operator_id = $previousOperatorId ?? $chat->last_operator_id;
         $chat->operator_id = null;
@@ -439,7 +446,10 @@ class ChatController extends Controller
         $chat->load('operator');
 
         $this->auditService->recordChatAction('admin_archived_chat', 'Archivo el chat y reactivo el bot', $chat, $request->user(), [
-            'before' => $before, 'after' => $this->adminChatState($chat), 'meta' => ['reason' => $data['reason'] ?? null],
+            'before' => $before, 'after' => $this->adminChatState($chat), 'meta' => [
+                'reason' => $data['reason'] ?? null,
+                'attention_seconds' => $attentionSeconds,
+            ],
         ]);
         $this->publishChatLifecycle($chat);
 

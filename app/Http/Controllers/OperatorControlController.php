@@ -12,6 +12,7 @@ use App\Services\ChatAssignmentService;
 use App\Services\OperatorAvailabilityService;
 use App\Services\WebchatAvailabilityService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
 use PhpMqtt\Client\MqttClient;
@@ -45,26 +46,63 @@ class OperatorControlController extends Controller
             return response()->json(['events' => []], 422);
         }
 
+        $activities = Activity::query()
+            ->where(function ($query) use ($user) {
+                $query->where('causer_id', $user->id)
+                    ->orWhere(function ($subjectQuery) use ($user) {
+                        $subjectQuery->where('subject_type', User::class)->where('subject_id', $user->id);
+                    });
+            })
+            ->whereIn('log_name', ['chat', 'messages', 'operator_control'])
+            ->latest('id')
+            ->limit(30)
+            ->get();
+
+        $messageSubjectIds = $activities
+            ->where('subject_type', Message::class)
+            ->pluck('subject_id')
+            ->filter()
+            ->unique()
+            ->values();
+        $messageChatIds = $messageSubjectIds->isEmpty()
+            ? collect()
+            : Message::query()->whereIn('id', $messageSubjectIds)->pluck('chat_id', 'id');
+
+        $chatIds = $activities->map(function (Activity $activity) use ($messageChatIds) {
+            $properties = $activity->properties?->toArray() ?? [];
+
+            return data_get($properties, 'chat_id')
+                ?? ($activity->subject_type === Chat::class ? $activity->subject_id : null)
+                ?? $messageChatIds->get($activity->subject_id);
+        })->filter()->unique()->values();
+
+        $chatRecords = $chatIds->isEmpty()
+            ? collect()
+            : Chat::query()->with('contact:id,name,whatsapp_id')->whereIn('id', $chatIds)->get()->keyBy('id');
+
         return response()->json([
-            'events' => Activity::query()
-                ->with('causer')
-                ->where(function ($query) use ($user) {
-                    $query->where('causer_id', $user->id)
-                        ->orWhere(function ($subjectQuery) use ($user) {
-                            $subjectQuery->where('subject_type', User::class)->where('subject_id', $user->id);
-                        });
-                })
-                ->whereIn('log_name', ['chat', 'messages', 'operator_control'])
-                ->latest('id')
-                ->limit(30)
-                ->get()
-                ->map(fn (Activity $activity) => [
+            'events' => $activities->map(function (Activity $activity) use ($messageChatIds, $chatRecords) {
+                $properties = $activity->properties?->toArray() ?? [];
+                $chatContext = data_get($properties, 'chat', []);
+                $chatId = data_get($properties, 'chat_id')
+                    ?? ($activity->subject_type === Chat::class ? $activity->subject_id : null)
+                    ?? $messageChatIds->get($activity->subject_id);
+                $chat = $chatId ? $chatRecords->get($chatId) : null;
+                $chatName = data_get($chatContext, 'contact_name')
+                    ?: $chat?->contact?->name
+                    ?: data_get($chatContext, 'contact_number')
+                    ?: $chat?->contact?->whatsapp_id;
+
+                return [
                     'id' => $activity->id,
                     'event' => $activity->event,
                     'description' => $activity->description,
                     'created_at' => optional($activity->created_at)?->toIso8601String(),
-                ])
-                ->values(),
+                    'chat_id' => $chatId ? (int) $chatId : null,
+                    'chat_name' => $chatName ?: ($chatId ? "Chat #{$chatId}" : null),
+                    'chat_number' => data_get($chatContext, 'contact_number') ?? $chat?->contact?->whatsapp_id,
+                ];
+            })->values(),
         ]);
     }
 
@@ -192,33 +230,152 @@ class OperatorControlController extends Controller
             'week' => now()->startOfWeek(),
             'month' => now()->startOfMonth(),
         ];
+        $earliestPeriod = collect($periods)->reduce(
+            fn ($earliest, $from) => $earliest === null || $from->lt($earliest) ? $from : $earliest,
+            null,
+        );
+        $chats = $this->closedChatsForMetrics($operator, $earliestPeriod);
+        $chatActivities = $this->chatMetricActivities($chats);
 
-        return collect($periods)->map(function ($from) use ($operator) {
-            $chats = Chat::query()
-                ->with(['messages' => fn ($query) => $query->select('id', 'chat_id', 'sender', 'created_at')->oldest('id')])
-                ->where('last_operator_id', $operator->id)
-                ->where('closed_at', '>=', $from)
-                ->where('attention_status', 'archived')
-                ->get();
+        return collect($periods)->map(fn ($from) => $this->summarizeOperatorChats(
+            $operator,
+            $chats->filter(fn (Chat $chat) => $chat->closed_at?->gte($from))->values(),
+            $chatActivities,
+        ))->all();
+    }
 
-            $attentionMinutes = $chats
-                ->filter(fn (Chat $chat) => $chat->assigned_at && $chat->closed_at)
-                ->map(fn (Chat $chat) => $chat->assigned_at->diffInMinutes($chat->closed_at));
-            $firstResponseMinutes = $chats->map(function (Chat $chat) {
-                $firstContact = $chat->messages->firstWhere('sender', 'contact');
-                $firstReply = $firstContact
-                    ? $chat->messages->first(fn (Message $message) => $message->sender !== 'contact' && $message->created_at->gte($firstContact->created_at))
-                    : null;
+    private function closedChatsForMetrics(User $operator, $from): Collection
+    {
+        return Chat::query()
+            ->with([
+                'contact:id,name,whatsapp_id',
+                'messages' => fn ($query) => $query
+                    ->select('id', 'chat_id', 'sender', 'sender_subtype', 'operator_name', 'created_at')
+                    ->orderBy('created_at')
+                    ->orderBy('id'),
+            ])
+            ->where('last_operator_id', $operator->id)
+            ->where('closed_at', '>=', $from)
+            ->where('closed_at', '<=', now())
+            ->where('attention_status', 'archived')
+            ->orderByDesc('closed_at')
+            ->get();
+    }
 
-                return $firstContact && $firstReply ? $firstContact->created_at->diffInMinutes($firstReply->created_at) : null;
-            })->filter();
+    private function chatMetricActivities(Collection $chats): Collection
+    {
+        if ($chats->isEmpty()) {
+            return collect();
+        }
+
+        return Activity::query()
+            ->where('log_name', 'chat')
+            ->where('subject_type', Chat::class)
+            ->whereIn('subject_id', $chats->pluck('id'))
+            ->whereIn('event', [
+                'operator_assigned',
+                'operator_auto_assigned',
+                'operator_reassigned',
+                'operator_auto_reassigned',
+                'operator_finished_attention',
+                'admin_archived_chat',
+            ])
+            ->get(['subject_id', 'event', 'created_at', 'properties'])
+            ->groupBy('subject_id');
+    }
+
+    private function summarizeOperatorChats(User $operator, Collection $chats, Collection $chatActivities): array
+    {
+        $chatMetrics = $chats->map(function (Chat $chat) use ($operator, $chatActivities) {
+            $events = $chatActivities->get($chat->id, collect());
+            $assignedAt = $chat->assigned_at;
+            $closingEvents = $events->filter(function (Activity $activity) use ($operator, $chat) {
+                if (! in_array($activity->event, ['operator_finished_attention', 'admin_archived_chat'], true)) {
+                    return false;
+                }
+
+                $properties = $activity->properties?->toArray() ?? [];
+                $beforeOperatorId = data_get($properties, 'before.operator_id');
+
+                return (int) ($beforeOperatorId ?? 0) === (int) $operator->id
+                    && $activity->created_at?->lte($chat->closed_at?->copy()->addMinutes(2));
+            })->sortByDesc('created_at');
+            $closingEvent = $closingEvents->first();
+            $closingProperties = $closingEvent?->properties?->toArray() ?? [];
+            $attentionSeconds = data_get($closingProperties, 'meta.attention_seconds');
+
+            if (! is_numeric($attentionSeconds) && ! $assignedAt) {
+                $assignmentEvent = $events->filter(function (Activity $activity) use ($operator, $chat) {
+                    if (! in_array($activity->event, [
+                        'operator_assigned',
+                        'operator_auto_assigned',
+                        'operator_reassigned',
+                        'operator_auto_reassigned',
+                    ], true) || ! $activity->created_at?->lte($chat->closed_at)) {
+                        return false;
+                    }
+
+                    $properties = $activity->properties?->toArray() ?? [];
+                    $assignedOperatorId = data_get($properties, 'after.operator_id')
+                        ?? data_get($properties, 'meta.operator_id')
+                        ?? data_get($properties, 'meta.reassigned_operator_id');
+
+                    return (int) ($assignedOperatorId ?? 0) === (int) $operator->id;
+                })->sortByDesc('created_at')->first();
+
+                $assignedAt = $assignmentEvent?->created_at;
+            }
+
+            if (! is_numeric($attentionSeconds) && $assignedAt && $chat->closed_at) {
+                $attentionSeconds = max(0, $assignedAt->diffInSeconds($chat->closed_at));
+            }
+
+            $messages = $chat->messages->sortBy(fn (Message $message) => [
+                $message->created_at?->getTimestamp() ?? 0,
+                (int) $message->id,
+            ])->values();
+            $firstContact = $messages->first(fn (Message $message) =>
+                $message->sender === 'contact' || $message->sender_subtype === 'contact'
+            );
+            $firstOperatorReply = $firstContact
+                ? $messages->first(function (Message $message) use ($firstContact, $operator) {
+                    $isOperatorReply = $message->sender_subtype === 'operator'
+                        || ($message->sender === 'user' && filled($message->operator_name));
+                    $isThisOperator = ! filled($message->operator_name)
+                        || mb_strtolower(trim($message->operator_name)) === mb_strtolower(trim($operator->name));
+
+                    return $isOperatorReply
+                        && $isThisOperator
+                        && $message->created_at?->gte($firstContact->created_at);
+                })
+                : null;
+            $firstResponseSeconds = $firstContact && $firstOperatorReply
+                ? max(0, $firstContact->created_at->diffInSeconds($firstOperatorReply->created_at))
+                : null;
+            $attentionMinutes = is_numeric($attentionSeconds) ? (int) round(((int) $attentionSeconds) / 60) : null;
+            $firstResponseMinutes = $firstResponseSeconds !== null ? (int) round($firstResponseSeconds / 60) : null;
 
             return [
-                'closed' => $chats->count(),
-                'avg_attention_minutes' => (int) round($attentionMinutes->avg() ?? 0),
-                'avg_first_response_minutes' => (int) round($firstResponseMinutes->avg() ?? 0),
+                'id' => (int) $chat->id,
+                'name' => $chat->contact?->name ?? $chat->contact?->whatsapp_id ?? "Chat #{$chat->id}",
+                'number' => $chat->contact?->whatsapp_id,
+                'channel' => $chat->channel ?? 'whatsapp',
+                'closed_at' => $chat->closed_at?->toIso8601String(),
+                'attention_minutes' => $attentionMinutes,
+                'first_response_minutes' => $firstResponseMinutes,
             ];
-        })->all();
+        });
+        $attentionMetrics = $chatMetrics->pluck('attention_minutes')->filter(fn ($value) => $value !== null);
+        $firstResponseMetrics = $chatMetrics->pluck('first_response_minutes')->filter(fn ($value) => $value !== null);
+
+        return [
+            'closed' => $chatMetrics->count(),
+            'avg_attention_minutes' => $attentionMetrics->isNotEmpty() ? (int) round($attentionMetrics->avg()) : null,
+            'attention_samples' => $attentionMetrics->count(),
+            'avg_first_response_minutes' => $firstResponseMetrics->isNotEmpty() ? (int) round($firstResponseMetrics->avg()) : null,
+            'first_response_samples' => $firstResponseMetrics->count(),
+            'chat_samples' => $chatMetrics->take(5)->values(),
+        ];
     }
 
     public function updateAvailability(Request $request, User $user)
