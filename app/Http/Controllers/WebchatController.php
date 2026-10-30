@@ -195,6 +195,7 @@ class WebchatController extends Controller
                 'closed_by_user_id' => null,
                 'webchat_last_seen_at' => now(),
                 'last_user_message_at' => now(),
+                'last_operator_message_at' => null,
             ]);
             // No esperes a que termine todo el flujo inicial para responderle
             // al navegador: puede incluir consultas a Alephoo y demoras de nodos.

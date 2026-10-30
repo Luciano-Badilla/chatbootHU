@@ -357,6 +357,7 @@ class ChatController extends Controller
         $chat->last_operator_id = $actorId;
         $chat->operator_id = null;
         $chat->assigned_at = null;
+        $chat->last_operator_message_at = null;
         $chat->status = 'closed';
         $chat->attention_status = 'archived';
         $chat->closed_at = now();
@@ -434,6 +435,7 @@ class ChatController extends Controller
         $chat->last_operator_id = $previousOperatorId ?? $chat->last_operator_id;
         $chat->operator_id = null;
         $chat->assigned_at = null;
+        $chat->last_operator_message_at = null;
         $chat->status = 'closed';
         $chat->attention_status = 'archived';
         $chat->closed_at = now();
@@ -467,6 +469,7 @@ class ChatController extends Controller
         $chat->status = 'open';
         $chat->attention_status = 'pending_assignment';
         $chat->bot_enabled = false;
+        $chat->last_operator_message_at = null;
         $chat->closed_at = null;
         $chat->closed_by = null;
         $chat->closed_by_user_id = null;

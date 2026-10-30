@@ -364,7 +364,7 @@ class DashboardMetricsService
             'paused_chats' => max(0, $total - $enabled),
             'active_flows' => BotFlow::query()->where('is_active', true)->count(),
             'handoffs' => (clone $chatEvents)->where('event', 'bot_disabled')->count(),
-            'inactivity_resets' => (clone $chatEvents)->whereIn('event', ['bot_inactivity_reset', 'bot_inactivity_archived'])->count(),
+            'inactivity_resets' => (clone $chatEvents)->whereIn('event', ['bot_inactivity_reset', 'bot_inactivity_archived', 'operator_inactivity_archived'])->count(),
         ];
     }
 

@@ -126,6 +126,107 @@ class BotInactivityService
         return true;
     }
 
+    public function processExpiredOperatorChat(Chat $chat): bool
+    {
+        $chat->refresh();
+
+        if ($chat->status !== 'open'
+            || $chat->attention_status !== 'assigned'
+            || $chat->operator_id === null
+            || ! $chat->last_operator_message_at
+            || $chat->last_operator_message_at->gt(now()->subMinutes($this->inactivityTimeoutMinutes()))) {
+            return false;
+        }
+
+        $flow = $this->getDefaultFlow($chat->channel ?? 'whatsapp');
+        if (! $flow?->start_node_id) {
+            $flow = null;
+        }
+
+        $chat->loadMissing('contact', 'operator');
+        $previousOperatorId = $chat->operator_id;
+        $operatorName = $chat->operator?->name;
+        $botWasEnabled = (bool) $chat->bot_enabled;
+        $attentionSeconds = $chat->assigned_at
+            ? max(0, (int) $chat->assigned_at->diffInSeconds(now()))
+            : null;
+        $message = trim($this->inactivityTimeoutMessage());
+        $sentMessage = null;
+
+        if ($message !== '') {
+            try {
+                if ($chat->channel === 'webchat') {
+                    $sentMessage = app(\App\Http\Controllers\WhatsAppController::class)->sendWebchatSystemMessage($chat, $message);
+                } else {
+                    $sentMessage = $this->sendWhatsAppText($chat, $message, 'user', 'bot', 'text');
+                }
+            } catch (\Throwable $e) {
+                Log::warning('No se pudo enviar el mensaje de inactividad al cerrar una atencion.', [
+                    'chat_id' => $chat->id,
+                    'channel' => $chat->channel,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        if ($flow) {
+            $this->resetChatToStartFromFlow($chat, $flow, 'operator_inactivity_timeout');
+        } else {
+            $chat->bot_enabled = false;
+        }
+        $chat->last_operator_id = $previousOperatorId;
+        $chat->last_operator_message_at = null;
+        $chat->operator_id = null;
+        $chat->assigned_at = null;
+        $chat->status = 'closed';
+        $chat->attention_status = 'archived';
+        $chat->closed_at = now();
+        $chat->closed_by = 'system';
+        $chat->closed_by_user_id = null;
+        $chat->save();
+        $chat->loadMissing('contact', 'operator', 'lastOperator');
+
+        $this->chatAssignmentService->assignAllPending();
+
+        $this->auditService->recordChatAction(
+            'operator_inactivity_archived',
+            'Finalizo la atencion y archivo el chat por falta de respuesta del paciente',
+            $chat,
+            null,
+            [
+                'before' => [
+                    'operator_id' => (int) $previousOperatorId,
+                    'operator_name' => $operatorName,
+                    'status' => 'open',
+                    'attention_status' => 'assigned',
+                    'bot_enabled' => $botWasEnabled,
+                ],
+                'after' => [
+                    'operator_id' => null,
+                    'last_operator_id' => (int) $previousOperatorId,
+                    'status' => 'closed',
+                    'attention_status' => 'archived',
+                    'bot_enabled' => (bool) $chat->bot_enabled,
+                    'bot_node_id' => $chat->bot_node_id,
+                ],
+                'meta' => [
+                    'reason' => 'operator_inactivity_timeout',
+                    'flow_id' => $flow?->id,
+                    'start_node_id' => $flow?->start_node_id,
+                    'closed_by' => 'system',
+                    'closed_by_user_id' => null,
+                    'last_operator_id' => (int) $previousOperatorId,
+                    'timeout_message_id' => $sentMessage?->id,
+                    'timeout_minutes' => $this->inactivityTimeoutMinutes(),
+                    'attention_seconds' => $attentionSeconds,
+                ],
+            ],
+        );
+        $this->publishArchivedChatStatus($chat);
+
+        return true;
+    }
+
     private function publishArchivedChatStatus(Chat $chat): void
     {
         $host = env('MQTT_HOST') ?: env('VITE_MOSQUITTO_HOST');
@@ -147,7 +248,7 @@ class BotInactivityService
                 'operator_name' => null,
                 'status' => 'closed',
                 'attention_status' => 'archived',
-                'bot_enabled' => true,
+                'bot_enabled' => (bool) $chat->bot_enabled,
                 'assigned_at' => null,
                 'closed_at' => $chat->closed_at?->toIso8601String(),
                 'closed_by' => 'system',
@@ -156,8 +257,8 @@ class BotInactivityService
             ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE), 0);
             $mqtt->publish('status_bot/chat/'.$chatId, json_encode([
                 'chat_id' => $chatId,
-                'status' => 'enabled',
-                'reset' => true,
+                'status' => $chat->bot_enabled ? 'enabled' : 'disabled',
+                'reset' => (bool) $chat->bot_enabled,
             ]), 0);
             $mqtt->disconnect();
         } catch (\Throwable $e) {

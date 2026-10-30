@@ -279,6 +279,7 @@ class OperatorControlController extends Controller
                 'operator_auto_reassigned',
                 'operator_finished_attention',
                 'admin_archived_chat',
+                'operator_inactivity_archived',
             ])
             ->get(['subject_id', 'event', 'created_at', 'properties'])
             ->groupBy('subject_id');
@@ -290,7 +291,7 @@ class OperatorControlController extends Controller
             $events = $chatActivities->get($chat->id, collect());
             $assignedAt = $chat->assigned_at;
             $closingEvents = $events->filter(function (Activity $activity) use ($operator, $chat) {
-                if (! in_array($activity->event, ['operator_finished_attention', 'admin_archived_chat'], true)) {
+                if (! in_array($activity->event, ['operator_finished_attention', 'admin_archived_chat', 'operator_inactivity_archived'], true)) {
                     return false;
                 }
 
