@@ -6009,7 +6009,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         update_insurance_variable: "actualizar_obra_social",
         insurance_variable: "persona_obra_social_id",
         plan_variable: "persona_plan_id",
-        unavailable_message: "El turno seleccionado ya no esta disponible. Por favor, elegi otro.",
+        unavailable_message: "Es posible que alguno de los datos, como la edad, la obra social u otros requisitos de la especialidad, no coincida con los parámetros necesarios para otorgar el turno.",
         unavailable_next_node_id: null,
         error_message: "No pudimos confirmar el turno en este momento.",
         error_next_node_id: null,

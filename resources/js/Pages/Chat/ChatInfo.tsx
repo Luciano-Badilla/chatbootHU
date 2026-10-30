@@ -1173,6 +1173,39 @@ export default function ChatInfo({
     setAdminActionReason("")
   }
 
+  const reopenLifecycle = () => {
+    if (!chat?.id) return
+    setAdminModalError(null)
+    setPendingAdminAction({
+      title: "Reabrir chat",
+      description: "El chat se reabrirá y el bot comenzará nuevamente desde el inicio del flujo activo.",
+      url: `${API_BASE}/api/chats/${chat.id}/reopen`,
+      body: {},
+      requiresReason: true,
+      onSuccess: (result) => {
+        if (!result?.chat) return
+        onChatUpdated?.({
+          operator_id: result.chat.operator_id ?? null,
+          operator_name: result.chat.operator_name ?? null,
+          bot_enabled: result.chat.bot_enabled,
+          status: result.chat.status,
+          attention_status: result.chat.attention_status,
+          assigned_at: result.chat.assigned_at,
+          closed_at: result.chat.closed_at,
+          closed_by: result.chat.closed_by,
+          bot_flow_id: result.chat.bot_flow_id,
+          bot_flow_name: result.chat.bot_flow_name,
+          bot_node_id: result.chat.bot_node_id,
+          bot_node_name: result.chat.bot_node_name,
+          bot_step: result.chat.bot_step,
+          bot_state: result.chat.bot_state,
+        })
+        setAdminMessage("Chat reabierto y bot reactivado.")
+      },
+    })
+    setAdminActionReason("")
+  }
+
   const loadAudit = async () => {
     if (!chat?.id) return
     setAuditOpen(true)
@@ -1486,7 +1519,7 @@ export default function ChatInfo({
           )}
 
           {/* Acciones */}
-          {(canUseBotControls || canFinishAttention || canTakeChat || (canReassign && chat.status === "open") || (canAdminister && chat.status === "open")) && (
+          {(canUseBotControls || canFinishAttention || canTakeChat || (canReassign && chat.status === "open") || (canAdminister && (chat.status === "open" || chat.status === "closed"))) && (
             <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3">
               <h4 className="mb-3 flex items-center gap-2 font-medium text-slate-800">
                 <Zap className="h-4 w-4 text-[#013765]" />
@@ -1546,6 +1579,11 @@ export default function ChatInfo({
                         <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" /> Finalizar atención
                       </Button>
                     </>
+                  ) : null}
+                  {canAdminister && chat.status === "closed" ? (
+                    <Button type="button" size="sm" variant="outline" className="w-full border-[#013765] bg-[#013765] text-white hover:bg-[#024a8a] hover:text-white" disabled={adminBusy} onClick={reopenLifecycle}>
+                      <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Reabrir chat
+                    </Button>
                   ) : null}
                   {adminMessage ? <p className="text-[11px] text-slate-600">{adminMessage}</p> : null}
                 </div>

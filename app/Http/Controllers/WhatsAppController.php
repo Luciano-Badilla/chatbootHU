@@ -4024,8 +4024,8 @@ class WhatsAppController extends Controller
             }
 
             $message = $failed
-                ? (string) ($settings['error_message'] ?? 'No pudimos consultar Alephoo en este momento.')
-                : (string) ($settings['empty_message'] ?? 'No encontramos opciones disponibles.');
+                ? (string) ($settings['error_message'] ?? 'No pudimos consultar el sistema en este momento.')
+                : (string) ($settings['empty_message'] ?? 'No encontramos turnos disponibles.');
             $this->sendWhatsAppText($chat, $this->renderTemplate($message, $chat, $node), 'user', 'bot', $node->type);
             $targetNextNodeId = $failed
                 ? ($settings['error_next_node_id'] ?? null)
