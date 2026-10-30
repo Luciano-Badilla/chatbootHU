@@ -25,6 +25,8 @@ class BotInactivityService
 
     public function processExpiredChat(Chat $chat, ?BotFlow $flow = null): bool
     {
+        $chat->refresh();
+
         if ($this->isWhatsAppFlowDisabled($chat)) {
             return false;
         }
@@ -43,6 +45,7 @@ class BotInactivityService
             return false;
         }
 
+        $chat->loadMissing('operator');
         $reason = 'inactivity_timeout';
         $before = [
             'bot_enabled' => (bool) $chat->bot_enabled,
@@ -52,17 +55,51 @@ class BotInactivityService
             'attention_status' => $chat->attention_status,
             'bot_node_id' => $chat->bot_node_id,
         ];
-        $chat->loadMissing('operator');
         $before['operator_name'] = $chat->operator?->name;
+        $previousOperatorId = $chat->operator_id;
+        $claimed = Chat::query()
+            ->whereKey($chat->id)
+            ->where('status', 'open')
+            ->whereNull('operator_id')
+            ->where('bot_enabled', true)
+            ->where(function ($query) {
+                $query->whereNull('attention_status')->orWhere('attention_status', 'bot');
+            })
+            ->where('last_user_message_at', '<=', now()->subMinutes($this->inactivityTimeoutMinutes()))
+            ->update([
+                'status' => 'closed',
+                'attention_status' => 'archived',
+                'closed_at' => now(),
+                'closed_by' => 'system',
+                'closed_by_user_id' => null,
+                'updated_at' => now(),
+            ]);
+
+        if ($claimed !== 1) {
+            return false;
+        }
+
+        $chat->refresh();
+        $this->resetChatToStartFromFlow($chat, $flow, $reason);
+        $chat->last_operator_id = $previousOperatorId ?? $chat->last_operator_id;
+        $chat->last_operator_message_at = null;
+        $chat->operator_id = null;
+        $chat->assigned_at = null;
+        $chat->status = 'closed';
+        $chat->attention_status = 'archived';
+        $chat->closed_at = now();
+        $chat->closed_by = 'system';
+        $chat->closed_by_user_id = null;
+        $chat->save();
+        $chat->loadMissing('contact', 'operator', 'lastOperator');
+
         $message = trim($this->inactivityTimeoutMessage());
         $sentMessage = null;
-
         if ($message !== '') {
             try {
                 if ($chat->channel === 'webchat') {
                     $sentMessage = app(\App\Http\Controllers\WhatsAppController::class)->sendWebchatSystemMessage($chat, $message);
                 } else {
-                    $chat->loadMissing('contact');
                     $sentMessage = $this->sendWhatsAppText($chat, $message, 'user', 'bot', 'text');
                 }
             } catch (\Throwable $e) {
@@ -74,17 +111,6 @@ class BotInactivityService
             }
         }
 
-        $previousOperatorId = $chat->operator_id;
-        $this->resetChatToStartFromFlow($chat, $flow, $reason);
-        $chat->last_operator_id = $previousOperatorId ?? $chat->last_operator_id;
-        $chat->operator_id = null;
-        $chat->assigned_at = null;
-        $chat->status = 'closed';
-        $chat->attention_status = 'archived';
-        $chat->closed_at = now();
-        $chat->closed_by = 'system';
-        $chat->closed_by_user_id = null;
-        $chat->save();
         $chat->loadMissing('contact', 'operator', 'lastOperator');
 
         $this->chatAssignmentService->assignAllPending();
@@ -150,25 +176,30 @@ class BotInactivityService
         $attentionSeconds = $chat->assigned_at
             ? max(0, (int) $chat->assigned_at->diffInSeconds(now()))
             : null;
-        $message = trim($this->inactivityTimeoutMessage());
-        $sentMessage = null;
+        $claimed = Chat::query()
+            ->whereKey($chat->id)
+            ->where('status', 'open')
+            ->where('attention_status', 'assigned')
+            ->where('operator_id', $previousOperatorId)
+            ->where('last_operator_message_at', '<=', now()->subMinutes($this->inactivityTimeoutMinutes()))
+            ->update([
+                'last_operator_id' => $previousOperatorId,
+                'last_operator_message_at' => null,
+                'operator_id' => null,
+                'assigned_at' => null,
+                'status' => 'closed',
+                'attention_status' => 'archived',
+                'closed_at' => now(),
+                'closed_by' => 'system',
+                'closed_by_user_id' => null,
+                'updated_at' => now(),
+            ]);
 
-        if ($message !== '') {
-            try {
-                if ($chat->channel === 'webchat') {
-                    $sentMessage = app(\App\Http\Controllers\WhatsAppController::class)->sendWebchatSystemMessage($chat, $message);
-                } else {
-                    $sentMessage = $this->sendWhatsAppText($chat, $message, 'user', 'bot', 'text');
-                }
-            } catch (\Throwable $e) {
-                Log::warning('No se pudo enviar el mensaje de inactividad al cerrar una atencion.', [
-                    'chat_id' => $chat->id,
-                    'channel' => $chat->channel,
-                    'error' => $e->getMessage(),
-                ]);
-            }
+        if ($claimed !== 1) {
+            return false;
         }
 
+        $chat->refresh();
         if ($flow) {
             $this->resetChatToStartFromFlow($chat, $flow, 'operator_inactivity_timeout');
         } else {
@@ -185,6 +216,24 @@ class BotInactivityService
         $chat->closed_by_user_id = null;
         $chat->save();
         $chat->loadMissing('contact', 'operator', 'lastOperator');
+
+        $message = trim($this->inactivityTimeoutMessage());
+        $sentMessage = null;
+        if ($message !== '') {
+            try {
+                if ($chat->channel === 'webchat') {
+                    $sentMessage = app(\App\Http\Controllers\WhatsAppController::class)->sendWebchatSystemMessage($chat, $message);
+                } else {
+                    $sentMessage = $this->sendWhatsAppText($chat, $message, 'user', 'bot', 'text');
+                }
+            } catch (\Throwable $e) {
+                Log::warning('No se pudo enviar el mensaje de inactividad al cerrar una atencion.', [
+                    'chat_id' => $chat->id,
+                    'channel' => $chat->channel,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
 
         $this->chatAssignmentService->assignAllPending();
 
