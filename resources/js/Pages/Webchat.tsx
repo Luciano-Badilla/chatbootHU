@@ -1472,21 +1472,14 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
               </div>
               <div className="relative mt-7">
                 <div className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-white/85"><Bell className="h-3.5 w-3.5" />Avisos importantes</div>
-                <h2 id="notification-prompt-title" className="mt-3 max-w-xs text-[25px] font-bold leading-[1.14] tracking-tight sm:text-[28px]">Seguimos en contacto, aunque salgas del chat</h2>
-                <p className="mt-2.5 max-w-sm text-sm leading-6 text-white/80">Activá las notificaciones para enterarte a tiempo cuando haya novedades sobre tu consulta.</p>
+                <h2 id="notification-prompt-title" className="mt-3 max-w-xs text-[25px] font-bold leading-[1.14] tracking-tight sm:text-[28px]">Recibí avisos sobre tu consulta</h2>
+                <p className="mt-2.5 max-w-sm text-sm leading-6 text-white/80">Activá las notificaciones para enterarte cuando haya novedades, incluso si no estás mirando el webchat.</p>
               </div>
             </div>
             <div className="px-6 pb-6 pt-5 sm:px-7 sm:pb-7">
-              <p className="text-xs font-bold uppercase tracking-[0.13em] text-slate-400">Te avisaremos cuando</p>
-              <div className="mt-3 space-y-2.5">
-                <div className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-[#f7fafd] p-3.5">
-                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e7f1f8] text-[#07558b]"><MessageCircle className="h-[18px] w-[18px]" /></span>
-                  <span className="min-w-0"><span className="block text-sm font-bold text-slate-800">Tengas una respuesta</span><span className="mt-0.5 block text-xs leading-5 text-slate-500">Del asistente o del equipo que te atiende.</span></span>
-                </div>
-                <div className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-[#f7fafd] p-3.5">
-                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e7f1f8] text-[#07558b]"><Headset className="h-[18px] w-[18px]" /></span>
-                  <span className="min-w-0"><span className="block text-sm font-bold text-slate-800">Un operador se sume</span><span className="mt-0.5 block text-xs leading-5 text-slate-500">Vas a saber cuándo empieza a atenderte.</span></span>
-                </div>
+              <div role="note" className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-3.5 text-amber-950">
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-amber-100 text-amber-700"><Info className="h-[18px] w-[18px]" /></span>
+                <span className="min-w-0 text-xs leading-5"><span className="block font-bold">Durante la atención con un operador</span>Cuando un operador te atienda, mantené el webchat abierto hasta finalizar la conversación y recibir la confirmación de tu turno. Si salís antes, podrías perder la comunicación.</span>
               </div>
               <button type="button" onClick={async () => { if (await enableNotifications()) dismissNotificationPrompt() }} className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#064d7d] px-4 py-3.5 text-sm font-bold text-white shadow-lg shadow-[#064d7d]/20 transition hover:-translate-y-0.5 hover:bg-[#003f73] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#064d7d] focus-visible:ring-offset-2"><Bell className="h-4 w-4" />Activar notificaciones</button>
               <button type="button" onClick={dismissNotificationPrompt} className="mt-2 w-full rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-500 transition hover:bg-slate-50 hover:text-slate-700">Ahora no</button>
