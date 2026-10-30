@@ -84,7 +84,7 @@ class WebchatAvailabilityService
         });
     }
 
-    private function isWithinSchedule(array $settings): bool
+    public function isWithinSchedule(array $settings): bool
     {
         $now = now(SystemSetting::query()
             ->where('key', 'general.timezone')

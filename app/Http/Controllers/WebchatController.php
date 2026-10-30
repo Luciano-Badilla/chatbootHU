@@ -456,6 +456,7 @@ class WebchatController extends Controller
             'enabled' => ($stored['webchat.enabled'] ?? '1') === '1', 'availability_mode' => $stored['webchat.availability_mode'] ?? 'always',
             'schedule_start' => $stored['webchat.schedule_start'] ?? '08:00', 'schedule_end' => $stored['webchat.schedule_end'] ?? '20:00',
             'bot_available_outside_schedule' => ($stored['webchat.bot_available_outside_schedule'] ?? '0') === '1',
+            'outside_schedule_flow_id' => filled($stored['webchat.outside_schedule_flow_id'] ?? null) ? (int) $stored['webchat.outside_schedule_flow_id'] : null,
             'offline_message' => $stored['webchat.offline_message'] ?? 'En este momento no estamos disponibles. Volvé a intentarlo dentro del horario de atención.',
             'title' => $stored['webchat.title'] ?? 'Asistente virtual', 'subtitle' => $stored['webchat.subtitle'] ?? 'Hospital Universitario',
             'logo_url' => $stored['webchat.logo_url'] ?? '',
@@ -473,7 +474,11 @@ class WebchatController extends Controller
 
         $timezone = SystemSetting::query()->where('key', 'general.timezone')->value('value') ?: config('app.timezone');
         $day = strtolower(now($timezone)->format('l'));
-        $flowId = $settings['flow_schedule'][$day] ?? null;
+        $outsideScheduleFlowId = ($settings['availability_mode'] ?? 'always') === 'schedule'
+            && ! $this->availabilityService->isWithinSchedule($settings)
+                ? ($settings['outside_schedule_flow_id'] ?? null)
+                : null;
+        $flowId = $outsideScheduleFlowId ?: ($settings['flow_schedule'][$day] ?? null);
 
         return $flowId
             ? (clone $flows)->whereKey($flowId)->first() ?? $flows->first()

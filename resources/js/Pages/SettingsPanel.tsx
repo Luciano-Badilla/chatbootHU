@@ -124,7 +124,7 @@ interface SettingsPanelProps {
 }
 
 type FlowSchedule = Record<"monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday", number | null>
-type WebchatSettings = { enabled: boolean; availability_mode: "always" | "schedule"; schedule_start: string; schedule_end: string; bot_available_outside_schedule: boolean; offline_message: string; title: string; subtitle: string; logo_url: string; flow_schedule: FlowSchedule }
+type WebchatSettings = { enabled: boolean; availability_mode: "always" | "schedule"; schedule_start: string; schedule_end: string; bot_available_outside_schedule: boolean; offline_message: string; title: string; subtitle: string; logo_url: string; flow_schedule: FlowSchedule; outside_schedule_flow_id: number | null }
 type SettingsSection = "general" | "integrations" | "bot" | "whatsapp" | "webchat" | "users"
 
 const WEEKDAYS: Array<{ key: keyof FlowSchedule; label: string }> = [
@@ -233,6 +233,7 @@ export default function SettingsPanel({
       title: "Asistente virtual",
       subtitle: "Hospital Universitario",
       logo_url: "",
+      outside_schedule_flow_id: null,
       ...current,
       flow_schedule: { ...EMPTY_FLOW_SCHEDULE, ...(current?.flow_schedule ?? {}) },
     }
@@ -1246,7 +1247,7 @@ export default function SettingsPanel({
                   <div className="space-y-1.5 md:col-span-2"><label className="text-sm font-medium text-[#013765]">Mensaje fuera de horario o deshabilitado</label><Textarea className="w-1/2" rows={2} value={webchat.offline_message} onChange={(e) => setWebchat((v) => ({ ...v, offline_message: e.target.value }))} /></div>
                 </div>
               </section>
-              <SettingsGroup title="Flujos por día" description="Asigná un flujo para los días hábiles y otro para el fin de semana.">
+              <SettingsGroup title="Flujos por día" description="Asigná flujos para días hábiles, fines de semana y, opcionalmente, fuera del horario de operadores.">
                 <div className="grid gap-4 lg:grid-cols-2">
                   {FLOW_DAY_GROUPS.map(({ key, label, daysLabel, days }) => {
                     const selectedIds = new Set(days.map((day) => webchat.flow_schedule[day]))
@@ -1291,6 +1292,37 @@ export default function SettingsPanel({
                     )
                   })}
                 </div>
+                {webchat.availability_mode === "schedule" ? (
+                  <div className="mt-4 rounded-2xl border border-[#dbe5ef] bg-[#f8fafc] p-4 sm:p-5">
+                    <div className="mb-3">
+                      <h3 className="text-sm font-semibold text-[#013765]">Fuera del horario de operadores</h3>
+                      <p className="mt-0.5 text-xs text-[#013765]/60">Si el bot atiende fuera de horario, este flujo reemplazará al asignado al día mientras los operadores no estén disponibles. Si no seleccionás uno, se usará el flujo del día.</p>
+                    </div>
+                    <Select
+                      value={webchat.outside_schedule_flow_id ? String(webchat.outside_schedule_flow_id) : "day-schedule"}
+                      onValueChange={(value) => setWebchat((current) => ({
+                        ...current,
+                        outside_schedule_flow_id: value === "day-schedule" ? null : Number(value),
+                      }))}
+                    >
+                      <SelectTrigger className="h-[72px] border-dashed border-[#013765]/25 bg-[#013765]/[0.03] px-3 hover:border-[#013765]/45 hover:bg-[#013765]/[0.06]">
+                        <div className="flex min-w-0 items-center gap-3 text-left">
+                          <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-white text-[#013765] shadow-sm"><Waypoints className="h-5 w-5" /></span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium text-[#013765]">{webchat.outside_schedule_flow_id ? botFlows.find((flow) => flow.id === webchat.outside_schedule_flow_id)?.name ?? "Flujo fuera de horario" : "Usar flujo asignado al día"}</span>
+                            <span className="mt-0.5 block truncate text-xs text-[#013765]/65">Hacé clic para cambiarlo</span>
+                          </span>
+                        </div>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="day-schedule">Usar flujo asignado al día</SelectItem>
+                        {botFlows.filter((flow) => flow.channels?.includes("webchat")).map((flow) => (
+                          <SelectItem key={flow.id} value={String(flow.id)}>{flow.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
                 <button type="button" onClick={() => setShowDailyWebchatFlows((value) => !value)} className="mt-4 text-sm font-medium text-[#013765] underline decoration-[#013765]/30 underline-offset-4 transition hover:decoration-[#013765]">
                   {showDailyWebchatFlows ? "Ocultar configuración por día" : hasCustomWebchatFlowSchedule ? "Ver configuración personalizada por día" : "Personalizar por día"}
                 </button>
