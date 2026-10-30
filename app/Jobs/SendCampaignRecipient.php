@@ -14,7 +14,10 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use PhpMqtt\Client\ConnectionSettings;
+use PhpMqtt\Client\MqttClient;
 use Throwable;
 
 class SendCampaignRecipient implements ShouldQueue
@@ -123,7 +126,8 @@ class SendCampaignRecipient implements ShouldQueue
             throw new \RuntimeException('Meta acepto la solicitud sin devolver un identificador de mensaje.');
         }
 
-        DB::transaction(function () use ($recipient, $whatsappMessageId) {
+        $archivedChatId = null;
+        DB::transaction(function () use ($recipient, $whatsappMessageId, &$archivedChatId) {
             $contact = Contact::query()->firstOrCreate(
                 ['whatsapp_id' => $recipient->phone],
                 ['name' => $recipient->name ?: $recipient->phone],
@@ -135,8 +139,16 @@ class SendCampaignRecipient implements ShouldQueue
 
             $chat = Chat::query()->firstOrCreate(
                 ['contact_id' => $contact->id, 'status' => 'open'],
-                ['title' => $contact->name ?: $recipient->phone],
+                [
+                    'title' => $contact->name ?: $recipient->phone,
+                    'attention_status' => 'bot',
+                    'bot_enabled' => true,
+                ],
             );
+
+            $shouldArchiveChat = $chat->attention_status === 'bot'
+                && $chat->operator_id === null
+                && $chat->bot_enabled;
 
             Message::query()->firstOrCreate(
                 ['whatsapp_message_id' => $whatsappMessageId],
@@ -159,7 +171,22 @@ class SendCampaignRecipient implements ShouldQueue
                 'error_code' => null,
                 'error_message' => null,
             ]);
+
+            if ($shouldArchiveChat) {
+                $chat->status = 'closed';
+                $chat->attention_status = 'archived';
+                $chat->closed_at = now();
+                $chat->closed_by = 'campaign';
+                $chat->closed_by_user_id = null;
+                $chat->assigned_at = null;
+                $chat->save();
+                $archivedChatId = (int) $chat->id;
+            }
         });
+
+        if ($archivedChatId !== null) {
+            $this->publishArchivedChatStatus(Chat::query()->find($archivedChatId));
+        }
 
         $metricsService->refresh($recipient->campaign_id);
     }
@@ -178,5 +205,43 @@ class SendCampaignRecipient implements ShouldQueue
         ]);
 
         app(CampaignMetricsService::class)->refresh($recipient->campaign_id);
+    }
+
+    private function publishArchivedChatStatus(?Chat $chat): void
+    {
+        if (! $chat) {
+            return;
+        }
+
+        $host = env('MQTT_HOST') ?: env('VITE_MOSQUITTO_HOST');
+        if (! $host) {
+            return;
+        }
+
+        try {
+            $mqtt = new MqttClient((string) $host, 1883, 'laravel_campaign_archive_'.uniqid());
+            $settings = (new ConnectionSettings())
+                ->setConnectTimeout(2)
+                ->setSocketTimeout(2);
+            $mqtt->connect($settings);
+            $mqtt->publish('operator/chat/'.$chat->id, json_encode([
+                'chat_id' => (int) $chat->id,
+                'active' => false,
+                'operator_id' => null,
+                'operator_name' => null,
+                'status' => 'closed',
+                'attention_status' => 'archived',
+                'bot_enabled' => (bool) $chat->bot_enabled,
+                'assigned_at' => null,
+                'closed_at' => $chat->closed_at?->toIso8601String(),
+                'closed_by' => 'campaign',
+            ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE), 0);
+            $mqtt->disconnect();
+        } catch (Throwable $exception) {
+            Log::warning('No se pudo publicar el archivado automático del chat de campaña.', [
+                'chat_id' => $chat->id,
+                'error' => $exception->getMessage(),
+            ]);
+        }
     }
 }

@@ -167,7 +167,7 @@ function InboxChats({
                 <span className={cn("mt-1 inline-flex max-w-full items-center gap-1 text-xs group-hover:text-slate-200", selected ? "text-[#013765]/80" : "text-slate-500")}>
                   <Headset className="h-3.5 w-3.5 shrink-0" />
                   <span className="truncate">{chat.attention_status === "archived"
-                    ? `Archivado por: ${chat.closed_by === "system" ? "Sistema" : chat.last_operator_name ?? (chat.last_operator_id ? `Operador #${chat.last_operator_id}` : "Sistema")}`
+                    ? `Archivado por: ${chat.closed_by === "campaign" ? "Campaña" : chat.closed_by === "system" ? "Sistema" : chat.last_operator_name ?? (chat.last_operator_id ? `Operador #${chat.last_operator_id}` : "Sistema")}`
                     : chat.operator_id
                       ? `Asignado a: ${chat.operator_name ?? `Operador #${chat.operator_id}`}`
                       : chat.bot_enabled
