@@ -411,11 +411,8 @@ class ChatController extends Controller
 
     public function archiveByAdmin(Request $request, Chat $chat)
     {
-        $reasonIsRequired = (int) ($chat->operator_id ?? 0) !== (int) ($request->user()?->id ?? 0);
         $data = $request->validate([
-            'reason' => $reasonIsRequired
-                ? ['required', 'string', 'max:500']
-                : ['nullable', 'string', 'max:500'],
+            'reason' => ['nullable', 'string', 'max:500'],
         ]);
 
         if ($chat->status === 'closed') {
@@ -458,31 +455,27 @@ class ChatController extends Controller
 
     public function reopenByAdmin(Request $request, Chat $chat)
     {
-        $data = $request->validate(['reason' => ['required', 'string', 'max:500']]);
+        $data = $request->validate(['reason' => ['nullable', 'string', 'max:500']]);
 
         if ($chat->status !== 'closed') {
             return response()->json(['ok' => false, 'message' => 'Solo se pueden reabrir chats archivados.'], 422);
         }
 
-        $flow = $this->botInactivityService->getDefaultFlow($chat->channel ?? 'whatsapp');
-        if (! $flow || ! $flow->start_node_id) {
-            return response()->json(['ok' => false, 'message' => 'No hay un flujo activo para reabrir el chat.'], 422);
-        }
-
         $before = $this->adminChatState($chat);
-        $this->botInactivityService->resetChatToStartFromFlow($chat, $flow, 'admin_reopened');
         $chat->operator_id = null;
         $chat->assigned_at = null;
         $chat->status = 'open';
-        $chat->attention_status = 'bot';
+        $chat->attention_status = 'pending_assignment';
+        $chat->bot_enabled = false;
         $chat->closed_at = null;
         $chat->closed_by = null;
         $chat->closed_by_user_id = null;
         $chat->save();
 
-        $this->auditService->recordChatAction('admin_reopened_chat', 'Reabrio el chat con el bot activo', $chat, $request->user(), [
-            'before' => $before, 'after' => $this->adminChatState($chat), 'meta' => ['reason' => $data['reason']],
+        $this->auditService->recordChatAction('admin_reopened_chat', 'Reabrió el chat para atención manual con el bot desactivado', $chat, $request->user(), [
+            'before' => $before, 'after' => $this->adminChatState($chat), 'meta' => ['reason' => $data['reason'] ?? null],
         ]);
+        $chat = $this->chatAssignmentService->assignPending($chat);
         $this->publishChatLifecycle($chat);
 
         return response()->json(['ok' => true, 'chat' => $this->adminChatPayload($chat)]);
@@ -887,7 +880,7 @@ class ChatController extends Controller
     private function publishChatLifecycle(Chat $chat): void
     {
         $payload = $this->adminChatPayload($chat);
-        $payload['active'] = false;
+        $payload['active'] = $chat->operator_id !== null;
         $this->publishOperatorStatus((int) $chat->id, $payload);
         $this->publishBotStatus((int) $chat->id, (bool) $chat->bot_enabled);
     }

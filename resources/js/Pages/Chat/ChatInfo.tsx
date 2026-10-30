@@ -1157,7 +1157,7 @@ export default function ChatInfo({
       description: "Se liberará al operador, se archivará el chat y se reactivará el bot.",
       url: `${API_BASE}/api/chats/${chat.id}/archive`,
       body: {},
-      requiresReason: Number(chat.operator_id ?? 0) !== Number(currentUserId ?? -1),
+      requiresReason: false,
       onSuccess: (result) => {
         if (!result?.chat) return
         onChatUpdated?.({
@@ -1178,10 +1178,10 @@ export default function ChatInfo({
     setAdminModalError(null)
     setPendingAdminAction({
       title: "Reabrir chat",
-      description: "El chat se reabrirá y el bot comenzará nuevamente desde el inicio del flujo activo.",
+      description: "El chat se reabrirá para atención manual y el bot permanecerá apagado.",
       url: `${API_BASE}/api/chats/${chat.id}/reopen`,
       body: {},
-      requiresReason: true,
+      requiresReason: false,
       onSuccess: (result) => {
         if (!result?.chat) return
         onChatUpdated?.({
@@ -1200,7 +1200,7 @@ export default function ChatInfo({
           bot_step: result.chat.bot_step,
           bot_state: result.chat.bot_state,
         })
-        setAdminMessage("Chat reabierto y bot reactivado.")
+        setAdminMessage("Chat reabierto para atención manual.")
       },
     })
     setAdminActionReason("")
