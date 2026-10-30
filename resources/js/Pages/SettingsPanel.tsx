@@ -1362,7 +1362,7 @@ export default function SettingsPanel({
             <div className="grid gap-3 md:grid-cols-[minmax(220px,1fr)_180px_180px]">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <Input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} placeholder="Buscar por nombre o correo" className="pl-9" />
+                <Input type="search" name="settings-user-search" autoComplete="off" value={userSearch} onChange={(event) => setUserSearch(event.target.value)} placeholder="Buscar por nombre o correo" className="pl-9" />
               </div>
               <Select value={userStatusFilter} onValueChange={setUserStatusFilter}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -1477,7 +1477,7 @@ export default function SettingsPanel({
                   </PopoverTrigger>
                   <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
                     <Command>
-                      <CommandInput placeholder="Buscar zona horaria..." className="h-9" />
+                      <CommandInput name="timezone-search" autoComplete="off" placeholder="Buscar zona horaria..." className="h-9" />
                       <CommandList>
                         <CommandEmpty>No se encontraron zonas horarias.</CommandEmpty>
                         <CommandGroup>

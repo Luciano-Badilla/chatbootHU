@@ -284,7 +284,7 @@ export default function AgendaPanel() {
           <CardContent className="space-y-3">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-              <Input value={query} onChange={(e) => setQuery(e.target.value)} className="pl-9" placeholder="Buscar contacto..." />
+              <Input type="search" name="agenda-contact-search" autoComplete="off" value={query} onChange={(e) => setQuery(e.target.value)} className="pl-9" placeholder="Buscar contacto..." />
             </div>
             <div className="max-h-[68vh] space-y-2 overflow-y-auto pr-1">
               {loading ? (
@@ -375,6 +375,9 @@ export default function AgendaPanel() {
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
               <Input
+                type="search"
+                name="agenda-trash-search"
+                autoComplete="off"
                 value={trashQuery}
                 onChange={(e) => setTrashQuery(e.target.value)}
                 className="pl-9"

@@ -1406,6 +1406,8 @@ export default function ChatInfo({
           <div className="max-h-[calc(85vh-124px)] overflow-y-auto px-6 py-5">
             <input
               type="search"
+              name="chat-audit-search"
+              autoComplete="off"
               value={auditSearch}
               onChange={(event) => setAuditSearch(event.target.value)}
               placeholder="Buscar por usuario, acción o contenido..."

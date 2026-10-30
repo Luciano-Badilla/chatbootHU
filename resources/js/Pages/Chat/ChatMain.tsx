@@ -2672,6 +2672,9 @@ export default function ChatMain({
             <div className="flex items-center gap-2">
               <Input
                 ref={searchInputRef}
+                type="search"
+                name="chat-message-search"
+                autoComplete="off"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={handleSearchKeyDown}
@@ -3085,6 +3088,8 @@ export default function ChatMain({
                     <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                     <input
                       type="search"
+                      name="quick-replies-search"
+                      autoComplete="off"
                       value={quickRepliesQuery}
                       onChange={(event) => setQuickRepliesQuery(event.target.value)}
                       placeholder="Buscar respuestas..."
@@ -3479,7 +3484,7 @@ export default function ChatMain({
               </div>
               <div className="relative mb-3">
                 <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-                <Input value={agendaSearch} onChange={(e) => setAgendaSearch(e.target.value)} placeholder="Buscar en agenda..." className="pl-9" />
+                <Input type="search" name="chat-agenda-search" autoComplete="off" value={agendaSearch} onChange={(e) => setAgendaSearch(e.target.value)} placeholder="Buscar en agenda..." className="pl-9" />
               </div>
               <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
                 {agendaContacts.length === 0 ? (

@@ -6182,7 +6182,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               </PopoverTrigger>
               <PopoverContent className="z-[10000] w-[var(--radix-popover-trigger-width)] p-0" align="start">
                 <Command>
-                  <CommandInput placeholder="Buscar contacto..." className="h-9" />
+                  <CommandInput name="flow-contact-search" autoComplete="off" placeholder="Buscar contacto..." className="h-9" />
                   <CommandList className="max-h-64">
                     <CommandEmpty>No se encontraron contactos.</CommandEmpty>
                     <CommandGroup>
@@ -8248,6 +8248,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
             <div className="border-b border-slate-200 bg-white px-5 py-3">
               <Input
+                type="search"
+                name="flow-trash-search"
+                autoComplete="off"
                 value={trashSearch}
                 onChange={(e) => setTrashSearch(e.target.value)}
                 placeholder="Buscar flujo, nodo o ID..."

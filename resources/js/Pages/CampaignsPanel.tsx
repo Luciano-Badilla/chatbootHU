@@ -675,6 +675,9 @@ export default function CampaignsPanel({
                 <div className="relative w-44 shrink-0 sm:w-52 md:w-80">
                   <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#013765]/45" />
                   <Input
+                    type="search"
+                    name="campaigns-search"
+                    autoComplete="off"
                     value={campaignSearch}
                     onChange={(event) => setCampaignSearch(event.target.value)}
                     placeholder="Buscar por campaña, plantilla o archivo..."
@@ -860,6 +863,9 @@ export default function CampaignsPanel({
                 <div className="relative max-w-xl">
                   <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#013765]/45" />
                   <Input
+                    type="search"
+                    name="templates-search"
+                    autoComplete="off"
                     value={templateSearch}
                     onChange={(event) => setTemplateSearch(event.target.value)}
                     placeholder="Buscar por nombre, idioma, categoría o contenido..."

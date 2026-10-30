@@ -123,7 +123,7 @@ export default function QuickRepliesPanel() {
           <CardContent className="space-y-3">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-              <Input value={query} onChange={(event) => setQuery(event.target.value)} className="pl-9" placeholder="Buscar respuesta..." />
+              <Input type="search" name="quick-replies-panel-search" autoComplete="off" value={query} onChange={(event) => setQuery(event.target.value)} className="pl-9" placeholder="Buscar respuesta..." />
             </div>
             <div className="space-y-2">
               {loading ? (

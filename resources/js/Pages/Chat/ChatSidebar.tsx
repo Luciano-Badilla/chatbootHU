@@ -586,6 +586,8 @@ export default function ChatSidebar({
       <PopoverContent align="center" sideOffset={6} className="z-[10000] w-56 overflow-hidden rounded-xl border-slate-200 p-0 shadow-lg shadow-slate-900/10">
         <Command className="[&_[cmdk-group]]:p-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-item]]:min-h-7 [&_[cmdk-item]]:rounded-md [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-1 [&_[cmdk-item]]:text-xs [&_[cmdk-item]]:data-[selected=true]:bg-[#e8f0f6] [&_[cmdk-item]]:data-[selected=true]:text-[#013765] [&_[cmdk-input-wrapper]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-3.5 [&_[cmdk-input-wrapper]_svg]:w-3.5">
           <CommandInput
+            name="operator-filter-search"
+            autoComplete="off"
             value={operatorSearch}
             onValueChange={setOperatorSearch}
             placeholder="Buscar operador..."
@@ -691,6 +693,9 @@ export default function ChatSidebar({
         <div className="relative">
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
+            type="search"
+            name="chat-panel-search"
+            autoComplete="off"
             placeholder="Buscar chat, mensaje o variable..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
