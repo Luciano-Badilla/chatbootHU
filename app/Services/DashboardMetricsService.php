@@ -21,12 +21,18 @@ class DashboardMetricsService
 {
     private const WEBCHAT_REFERRAL_TRACKING_START = '2026-10-24 00:00:00';
 
-    public function build(User $user, int $days): array
+    public function build(User $user, int $days, ?string $from = null, ?string $to = null): array
     {
-        $end = now()->endOfDay();
-        $start = now()->subDays($days - 1)->startOfDay();
+        $isCustomRange = $from !== null && $to !== null;
+        $start = $isCustomRange
+            ? Carbon::parse($from)->startOfDay()
+            : now()->subDays($days - 1)->startOfDay();
+        $end = $isCustomRange
+            ? Carbon::parse($to)->endOfDay()
+            : now()->endOfDay();
+        $rangeDays = (int) $start->copy()->startOfDay()->diffInDays($end->copy()->startOfDay()) + 1;
         $previousEnd = $start->copy()->subSecond();
-        $previousStart = $previousEnd->copy()->subDays($days - 1)->startOfDay();
+        $previousStart = $previousEnd->copy()->subDays($rangeDays - 1)->startOfDay();
 
         $current = $this->summaryForRange($user, $start, $end);
         $previous = $this->summaryForRange($user, $previousStart, $previousEnd);
@@ -34,8 +40,9 @@ class DashboardMetricsService
 
         return [
             'period' => [
-                'days' => $days,
-                'label' => $days === 1 ? 'Hoy' : "Últimos {$days} días",
+                'days' => $rangeDays,
+                'is_custom' => $isCustomRange,
+                'label' => $isCustomRange ? 'Rango personalizado' : ($days === 1 ? 'Hoy' : "Últimos {$days} días"),
                 'start' => $start->toDateString(),
                 'end' => $end->toDateString(),
             ],

@@ -1,5 +1,5 @@
 import { router, usePage } from "@inertiajs/react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import {
   Activity,
   ArrowDownRight,
@@ -7,6 +7,7 @@ import {
   ArrowRight,
   ArrowUpRight,
   Bot,
+  CalendarDays,
   CheckCircle2,
   CircleAlert,
   Clock3,
@@ -31,11 +32,15 @@ import {
   YAxis,
 } from "recharts"
 import type { TooltipContentProps } from "recharts"
+import type { DateRange } from "react-day-picker"
+import { es } from "date-fns/locale"
 
 import { AppShell } from "../Components/AppShell"
 import { Badge } from "shadcn/components/ui/badge"
 import { Button } from "shadcn/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "shadcn/components/ui/card"
+import { Calendar } from "shadcn/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "shadcn/components/ui/popover"
 
 const APP_URL = import.meta.env.VITE_APP_URL || ""
 
@@ -80,7 +85,7 @@ type DashboardProps = {
     user?: { name?: string | null; role_name?: string | null } | null
     permissions?: Record<string, boolean>
   }
-  period: { days: number; label: string; start: string; end: string }
+  period: { days: number; is_custom: boolean; label: string; start: string; end: string }
   webchat_conversion: {
     received_contacts: number
     entered_contacts: number
@@ -166,6 +171,8 @@ type DashboardProps = {
   }>
 }
 
+type DashboardPeriod = DashboardProps["period"]
+
 const summaryIcons = {
   active_chats: Users,
   incoming_messages: MessageSquare,
@@ -220,6 +227,143 @@ function formatNumber(value: number) {
 function formatDate(value: string) {
   const [year, month, day] = value.split("-").map(Number)
   return new Intl.DateTimeFormat("es-AR", { day: "numeric", month: "short", year: "numeric" }).format(new Date(year, month - 1, day))
+}
+
+function dateFromIso(value: string) {
+  const [year, month, day] = value.split("-").map(Number)
+  return new Date(year, month - 1, day)
+}
+
+function isoFromDate(value: Date) {
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, "0")
+  const day = String(value.getDate()).padStart(2, "0")
+
+  return `${year}-${month}-${day}`
+}
+
+function formatCompactDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number)
+  return new Intl.DateTimeFormat("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" }).format(new Date(year, month - 1, day))
+}
+
+function rangeFromPeriod(period: DashboardPeriod): DateRange | undefined {
+  return period.is_custom
+    ? { from: dateFromIso(period.start), to: dateFromIso(period.end) }
+    : undefined
+}
+
+function DashboardRangePicker({ period, mobile = false }: { period: DashboardPeriod; mobile?: boolean }) {
+  const [open, setOpen] = useState(false)
+  const [range, setRange] = useState<DateRange | undefined>(() => rangeFromPeriod(period))
+
+  useEffect(() => {
+    setRange(rangeFromPeriod(period))
+  }, [period.is_custom, period.start, period.end])
+
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const selectionLabel = range?.from
+    ? `${formatDate(isoFromDate(range.from))}${range.to ? ` – ${formatDate(isoFromDate(range.to))}` : " – Elegí el fin"}`
+    : "Elegí inicio y fin"
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen) {
+          setRange(rangeFromPeriod(period))
+        }
+        setOpen(nextOpen)
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          title={period.is_custom ? `${formatDate(period.start)} – ${formatDate(period.end)}` : "Elegir un rango personalizado"}
+          aria-label={period.is_custom ? `Rango personalizado: ${formatDate(period.start)} a ${formatDate(period.end)}` : "Elegir rango personalizado"}
+          className={mobile
+            ? `inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition ${period.is_custom ? "border-[#013765] bg-[#013765] text-white" : "border-slate-200 bg-white text-[#013765] hover:bg-[#f4f8fb]"}`
+            : `inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${period.is_custom ? "bg-white text-[#013765] shadow-sm" : "text-white/80 hover:bg-white/10 hover:text-white"}`}
+        >
+          <CalendarDays className="h-3.5 w-3.5" />
+          <span>Rango</span>
+          {period.is_custom ? <span className="hidden xl:inline">{formatCompactDate(period.start)}–{formatCompactDate(period.end)}</span> : null}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align={mobile ? "start" : "end"} sideOffset={6} className="z-[10000] w-[min(92vw,300px)] rounded-xl border-slate-200 bg-white p-2 text-slate-900 shadow-lg">
+        <div className="px-2 pt-1 text-xs text-slate-500">{selectionLabel}</div>
+        <Calendar
+          mode="range"
+          selected={range}
+          onSelect={setRange}
+          locale={es}
+          defaultMonth={range?.from ?? today}
+          disabled={{ after: today }}
+          min={0}
+          numberOfMonths={1}
+          showOutsideDays={false}
+          initialFocus
+          className="p-1"
+          classNames={{
+            month: "space-y-2",
+            caption: "relative flex h-8 items-center justify-center",
+            caption_label: "text-xs font-semibold capitalize text-[#013765]",
+            nav: "flex items-center gap-1",
+            nav_button: "inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white p-0 text-slate-500 transition hover:bg-[#f4f8fb] hover:text-[#013765]",
+            nav_button_previous: "absolute left-0",
+            nav_button_next: "absolute right-0",
+            head_cell: "w-8 rounded-md text-[10px] font-medium capitalize text-slate-400",
+            row: "mt-1 flex w-full",
+            day: "h-7 w-8 rounded-md bg-transparent p-0 text-xs font-normal text-slate-700 transition hover:bg-[#eaf2f8]",
+            day_selected: "!bg-[#013765] hover:!bg-[#024a8a] focus:!bg-[#024a8a]",
+            day_range_start: "day-range-start !text-white",
+            day_range_end: "day-range-end !text-white",
+            day_range_middle: "!bg-[#eaf2f8] !text-[#013765] aria-selected:opacity-100",
+            day_outside: "text-slate-300 opacity-50",
+            day_disabled: "!bg-transparent text-slate-300 opacity-50",
+          }}
+        />
+        <div className="flex items-center justify-between gap-2 border-t border-slate-100 px-1 pt-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="mr-auto h-8 rounded-lg px-2 text-xs text-slate-500 shadow-none hover:bg-[#f4f8fb] hover:text-[#013765]"
+            disabled={!range?.from && !period.is_custom}
+            onClick={() => setRange(undefined)}
+          >
+            Limpiar
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 rounded-lg border-slate-200 bg-white text-xs text-[#013765] shadow-none hover:bg-[#f4f8fb] hover:text-[#013765]"
+            onClick={() => setOpen(false)}
+          >
+            Cancelar
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            className="h-8 rounded-lg bg-[#185e9c] text-xs text-white shadow-none hover:bg-[#013765] disabled:bg-slate-100 disabled:text-slate-400"
+            disabled={Boolean(range?.from && !range.to) || (!range?.from && !period.is_custom)}
+            onClick={() => {
+              if (range?.from && range.to) {
+                router.get(`${APP_URL}/dashboard`, { from: isoFromDate(range.from), to: isoFromDate(range.to) }, { preserveScroll: true })
+              } else {
+                router.get(`${APP_URL}/dashboard`, { period: 7 }, { preserveScroll: true })
+              }
+              setOpen(false)
+            }}
+          >
+            {range?.from && range.to ? "Aplicar" : "Restablecer"}
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
 }
 
 function Trend({ card }: { card: SummaryCard }) {
@@ -363,11 +507,12 @@ export default function Dashboard() {
               key={days}
               type="button"
               onClick={() => router.get(`${APP_URL}/dashboard`, { period: days }, { preserveScroll: true })}
-              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${props.period.days === days ? "bg-white text-[#013765] shadow-sm" : "text-white/80 hover:bg-white/10 hover:text-white"}`}
+              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${!props.period.is_custom && props.period.days === days ? "bg-white text-[#013765] shadow-sm" : "text-white/80 hover:bg-white/10 hover:text-white"}`}
             >
               {days === 1 ? "Hoy" : `${days} días`}
             </button>
           ))}
+          <DashboardRangePicker period={props.period} />
         </div>
       }
     >
@@ -379,10 +524,11 @@ export default function Dashboard() {
         </div>
         <div className="flex flex-wrap gap-2 md:hidden">
           {[1, 7, 30].map((days) => (
-            <Button key={days} size="sm" variant={props.period.days === days ? "default" : "outline"} onClick={() => router.get(`${APP_URL}/dashboard`, { period: days })}>
+            <Button key={days} size="sm" variant={!props.period.is_custom && props.period.days === days ? "default" : "outline"} onClick={() => router.get(`${APP_URL}/dashboard`, { period: days })}>
               {days === 1 ? "Hoy" : `${days} días`}
             </Button>
           ))}
+          <DashboardRangePicker period={props.period} mobile />
         </div>
       </div>
 
