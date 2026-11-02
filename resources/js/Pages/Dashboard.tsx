@@ -91,7 +91,6 @@ type DashboardProps = {
     entered_contacts: number
     unentered_contacts: number
     rate: number | null
-    tracking_start_label: string
   }
   summary: SummaryCard[]
   message_activity: ActivityPoint[]
@@ -561,7 +560,7 @@ export default function Dashboard() {
             <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#eaf2f8] text-[#185e9c]"><ArrowRight className="h-5 w-5" /></span>
             <div>
               <p className="font-semibold text-[#013765]">Conversi&oacute;n de WhatsApp a Webchat</p>
-              <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-500">Seguimiento acumulado desde el {props.webchat_conversion.tracking_start_label}. Las conversaciones anteriores a esa fecha no se incluyen en esta estad&iacute;stica.</p>
+              <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-500">Referidos cuyo enlace de WhatsApp se envi&oacute; dentro del rango seleccionado.</p>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">

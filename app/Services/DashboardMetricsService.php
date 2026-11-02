@@ -19,8 +19,6 @@ use Spatie\Activitylog\Models\Activity;
 
 class DashboardMetricsService
 {
-    private const WEBCHAT_REFERRAL_TRACKING_START = '2026-10-24 00:00:00';
-
     public function build(User $user, int $days, ?string $from = null, ?string $to = null): array
     {
         $isCustomRange = $from !== null && $to !== null;
@@ -36,7 +34,7 @@ class DashboardMetricsService
 
         $current = $this->summaryForRange($user, $start, $end);
         $previous = $this->summaryForRange($user, $previousStart, $previousEnd);
-        $webchatConversion = $this->webchatConversion($user);
+        $webchatConversion = $this->webchatConversion($user, $start, $end);
 
         return [
             'period' => [
@@ -90,15 +88,14 @@ class DashboardMetricsService
         ];
     }
 
-    private function webchatConversion(User $user): array
+    private function webchatConversion(User $user, CarbonInterface $start, CarbonInterface $end): array
     {
-        $trackingStart = Carbon::parse(self::WEBCHAT_REFERRAL_TRACKING_START, config('app.timezone'));
         $referrals = WebchatReferral::query()
             ->join('chats as source_chats', 'source_chats.id', '=', 'webchat_referrals.source_chat_id')
             ->join('messages as source_messages', 'source_messages.id', '=', 'webchat_referrals.source_message_id')
             ->where('source_chats.channel', 'whatsapp')
             ->whereNotNull('webchat_referrals.sent_at')
-            ->where('webchat_referrals.sent_at', '>=', $trackingStart);
+            ->whereBetween('webchat_referrals.sent_at', [$start, $end]);
 
         if (! $user->hasPermission('can_view_all_chats')) {
             $referrals->where(fn (Builder $scope) => $scope->whereNull('source_chats.operator_id')->orWhere('source_chats.operator_id', $user->id));
@@ -124,7 +121,6 @@ class DashboardMetricsService
             'entered_contacts' => $enteredChats,
             'unentered_contacts' => max(0, $receivedChats - $enteredChats),
             'rate' => $receivedChats > 0 ? round(($enteredChats / $receivedChats) * 100, 1) : null,
-            'tracking_start_label' => $trackingStart->format('d/m/Y'),
         ];
     }
     private function summaryCard(string $key, string $label, int $value, int $previous, string $description, bool $lowerIsBetter = false): array
