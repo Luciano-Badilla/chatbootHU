@@ -92,8 +92,6 @@ type DashboardProps = {
   message_activity: ActivityPoint[]
   work_queue: {
     total: number
-    unread_chats: number
-    unread_messages: number
     items: Array<{
       id: number
       name: string
@@ -104,7 +102,6 @@ type DashboardProps = {
       channel: "whatsapp" | "webchat" | string
       operator_name?: string | null
       bot_enabled: boolean
-      unread_count: number
     }>
   }
   bot: {
@@ -478,10 +475,6 @@ export default function Dashboard() {
             <Badge className="shrink-0 bg-amber-100 text-amber-800 hover:bg-amber-100">{formatNumber(props.work_queue.total)} chats</Badge>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="grid grid-cols-2 gap-2">
-              <div className="rounded-lg bg-[#f4f8fb] px-3 py-2"><p className="text-lg font-bold text-[#013765]">{formatNumber(props.work_queue.unread_chats)}</p><p className="text-[11px] text-slate-500">Chats sin leer</p></div>
-              <div className="rounded-lg bg-[#f4f8fb] px-3 py-2"><p className="text-lg font-bold text-[#013765]">{formatNumber(props.work_queue.unread_messages)}</p><p className="text-[11px] text-slate-500">Mensajes sin leer</p></div>
-            </div>
             {props.work_queue.items.length === 0 ? (
               <div className="flex min-h-56 flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 px-6 text-center">
                 <CheckCircle2 className="h-9 w-9 text-emerald-500" />
@@ -499,7 +492,6 @@ export default function Dashboard() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <p className="truncate text-sm font-semibold text-[#013765]">{item.name}</p>
-                    {item.unread_count > 0 ? <Badge className="h-5 min-w-5 justify-center rounded-full bg-[#185e9c] px-1.5 text-[10px]">{item.unread_count}</Badge> : null}
                   </div>
                   <p className="mt-0.5 truncate text-xs text-slate-600">{item.message}</p>
                   <p className="mt-1 truncate text-[11px] text-slate-500"><span className={item.channel === "webchat" ? "text-[#185e9c]" : "text-emerald-700"}>{item.channel === "webchat" ? "Webchat" : "WhatsApp"}</span><span className="text-slate-400"> · {item.operator_name ? `Asignado a ${item.operator_name}` : "Sin asignar"} · {item.message_at_human}</span></p>

@@ -176,16 +176,77 @@ class DashboardMetricsService
 
     private function averageResponseSeconds(User $user, CarbonInterface $start, CarbonInterface $end): ?int
     {
-        $messages = $this->messagesQuery($user)
-            ->where('messages.created_at', '<=', $end)
-            ->where('messages.created_at', '>=', $start->copy()->subDay())
-            ->orderBy('messages.chat_id')
-            ->orderBy('messages.created_at')
-            ->orderBy('messages.id')
-            ->get(['messages.chat_id', 'messages.sender', 'messages.created_at'])
-            ->groupBy('chat_id');
+        $batchSize = 1000;
+        $lastChatId = null;
+        $lastCreatedAt = null;
+        $lastMessageId = null;
+        $currentChatId = null;
+        $waitingSince = null;
+        $totalSeconds = 0;
+        $responseCount = 0;
 
-        return $this->responseSecondsFromMessages($messages, $start, $end);
+        while (true) {
+            $query = $this->messagesQuery($user)
+                ->whereBetween('messages.created_at', [$start, $end]);
+
+            if ($lastMessageId !== null) {
+                $query->where(function (Builder $after) use ($lastChatId, $lastCreatedAt, $lastMessageId) {
+                    $after->where('messages.chat_id', '>', $lastChatId)
+                        ->orWhere(function (Builder $sameChat) use ($lastChatId, $lastCreatedAt, $lastMessageId) {
+                            $sameChat->where('messages.chat_id', $lastChatId)
+                                ->where(function (Builder $afterCreatedAt) use ($lastCreatedAt, $lastMessageId) {
+                                    $afterCreatedAt->where('messages.created_at', '>', $lastCreatedAt)
+                                        ->orWhere(function (Builder $sameCreatedAt) use ($lastCreatedAt, $lastMessageId) {
+                                            $sameCreatedAt->where('messages.created_at', $lastCreatedAt)
+                                                ->where('messages.id', '>', $lastMessageId);
+                                        });
+                                });
+                        });
+                });
+            }
+
+            $batch = $query
+                ->orderBy('messages.chat_id')
+                ->orderBy('messages.created_at')
+                ->orderBy('messages.id')
+                ->limit($batchSize)
+                ->get(['messages.id', 'messages.chat_id', 'messages.sender', 'messages.created_at']);
+
+            if ($batch->isEmpty()) {
+                break;
+            }
+
+            foreach ($batch as $message) {
+                if ($currentChatId !== $message->chat_id) {
+                    $currentChatId = $message->chat_id;
+                    $waitingSince = null;
+                }
+
+                $lastChatId = $message->chat_id;
+                $lastCreatedAt = $message->created_at;
+                $lastMessageId = $message->id;
+
+                if ($message->sender === 'contact') {
+                    if ($waitingSince === null) {
+                        $waitingSince = $message->created_at;
+                    }
+
+                    continue;
+                }
+
+                if ($waitingSince !== null) {
+                    $totalSeconds += $waitingSince->diffInSeconds($message->created_at);
+                    $responseCount++;
+                    $waitingSince = null;
+                }
+            }
+
+            if ($batch->count() < $batchSize) {
+                break;
+            }
+        }
+
+        return $responseCount === 0 ? null : (int) round($totalSeconds / $responseCount);
     }
 
     public function responseSecondsFromMessages(Collection $messages, CarbonInterface $start, CarbonInterface $end): ?int
@@ -292,18 +353,12 @@ class DashboardMetricsService
                 'channel' => $chat->channel ?: 'whatsapp',
                 'operator_name' => $chat->operator?->name,
                 'bot_enabled' => (bool) $chat->bot_enabled,
-                'unread_count' => (int) $chat->unread_count,
             ])
             ->values()
             ->all();
 
         return [
             'total' => $this->pendingChatsQuery($user)->count(),
-            'unread_chats' => (int) $this->chatQuery($user)->whereHas('messages', fn (Builder $query) => $query->where('status', 'received'))->count(),
-            'unread_messages' => (int) $this->chatQuery($user)
-                ->withCount(['messages as unread_count' => fn (Builder $query) => $query->where('status', 'received')])
-                ->get()
-                ->sum('unread_count'),
             'items' => $items,
         ];
     }
@@ -313,11 +368,9 @@ class DashboardMetricsService
         return $this->chatQuery($user)
             ->where('status', 'open')
             ->addSelect([
-                'latest_message_sender' => Message::query()->select('sender')->whereColumn('chat_id', 'chats.id')->latest('created_at')->latest('id')->limit(1),
                 'latest_message_body' => Message::query()->select('body')->whereColumn('chat_id', 'chats.id')->latest('created_at')->latest('id')->limit(1),
                 'latest_message_at' => Message::query()->select('created_at')->whereColumn('chat_id', 'chats.id')->latest('created_at')->latest('id')->limit(1),
             ])
-            ->withCount(['messages as unread_count' => fn (Builder $query) => $query->where('status', 'received')])
             ->whereRaw("(SELECT sender FROM messages WHERE messages.chat_id = chats.id ORDER BY created_at DESC, id DESC LIMIT 1) = 'contact'");
     }
 
