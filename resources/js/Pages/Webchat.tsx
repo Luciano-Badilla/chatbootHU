@@ -2,7 +2,7 @@ import { Fragment, FormEvent, type ReactNode, useCallback, useEffect, useRef, us
 import mqtt from "mqtt"
 import { Gallery, Item } from "react-photoswipe-gallery"
 import "photoswipe/dist/photoswipe.css"
-import { ArrowUp, ArrowUpRight, AudioLines, Bell, BellOff, Camera, Check, ChevronDown, Clock3, Contact, FileText, Headset, ImageIcon, Info, Loader2, MapPin, Menu, MessageCircle, Mic, Play, Plus, RefreshCw, Search, Send, Share, Square, User, Wrench, X } from "lucide-react"
+import { ArrowUp, ArrowUpRight, AudioLines, Bell, BellOff, Camera, Check, ChevronDown, Clock3, Contact, FileText, Headset, ImageIcon, Info, Loader2, MapPin, Menu, MessageCircle, Mic, Phone, Play, Plus, RefreshCw, Search, Send, Share, Square, User, Wrench, X } from "lucide-react"
 import { toast } from "sonner"
 import { getWebPushSubscription, isWebPushSubscriptionEnabled, subscribeToWebPush, unsubscribeFromWebPush } from "../lib/webPush"
 import { webchatRateLimitHeaders } from "../lib/webchatRateLimit"
@@ -39,6 +39,7 @@ const getAttachmentKind = (file: File): "image" | "video" | "audio" | "document"
 }
 
 const SESSION_KEY = "hu.webchat.resume_token"
+const WEBCHAT_WELCOME_SEEN_KEY = "hu.webchat.welcome_seen"
 const publicAssetUrl = (path: string) => path.startsWith("http") ? path : `${import.meta.env.VITE_APP_URL}${path}`
 
 function WebchatMessagesLoader() {
@@ -317,7 +318,7 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported">(() => typeof window === "undefined" || !("Notification" in window) ? "unsupported" : Notification.permission)
   const [pushNotificationsEnabled, setPushNotificationsEnabled] = useState(false)
   const [notificationStatusLoaded, setNotificationStatusLoaded] = useState(false)
-  const [notificationPromptOpen, setNotificationPromptOpen] = useState(false)
+  const [welcomeModalOpen, setWelcomeModalOpen] = useState(false)
   const [isIos, setIsIos] = useState(false)
   const [showIosInstallHelp, setShowIosInstallHelp] = useState(false)
   const [isClosingIosInstallHelp, setIsClosingIosInstallHelp] = useState(false)
@@ -528,16 +529,25 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   }, [token])
 
   useEffect(() => {
-    if (!token || loading || profileRequired || !notificationStatusLoaded || pushNotificationsEnabled) {
-      setNotificationPromptOpen(false)
-      return
+    if (!token || loading || profileRequired || !notificationStatusLoaded) return
+
+    try {
+      if (window.localStorage.getItem(WEBCHAT_WELCOME_SEEN_KEY) === token) return
+      window.localStorage.setItem(WEBCHAT_WELCOME_SEEN_KEY, token)
+    } catch {
+      // Keep the welcome available if browser storage is disabled.
     }
 
-    setNotificationPromptOpen(true)
-  }, [token, loading, profileRequired, notificationStatusLoaded, pushNotificationsEnabled])
+    setWelcomeModalOpen(true)
+  }, [token, loading, profileRequired, notificationStatusLoaded])
 
-  const dismissNotificationPrompt = () => {
-    setNotificationPromptOpen(false)
+  const dismissWelcomeModal = () => {
+    setWelcomeModalOpen(false)
+    try {
+      window.localStorage.setItem(WEBCHAT_WELCOME_SEEN_KEY, token)
+    } catch {
+      // The in-memory state still dismisses the welcome for this page view.
+    }
   }
 
   useEffect(() => {
@@ -1449,13 +1459,15 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
           <div className="relative flex items-center gap-3">
             <div className={`grid h-11 w-11 shrink-0 place-items-center rounded-full shadow-sm ${isOperatorHandling ? "bg-[#e8f0f6] text-[#003f73]" : "bg-white p-1.5"}`}>{isWaitingForOperator && !waitingWithoutOperator ? <Loader2 className="h-5 w-5 animate-spin" aria-label="Buscando un operador" /> : isOperatorHandling ? waitingWithoutOperator ? <Clock3 className="h-5 w-5" aria-label="En espera" /> : <Headset className="h-5 w-5" aria-label="Operador" /> : <img src={webchat.logo_url ? publicAssetUrl(webchat.logo_url) : `${import.meta.env.VITE_APP_URL}/images/hu_icon_new.png`} alt="Hospital Universitario" className="h-full w-full object-contain" />}</div>
             <div className="min-w-0"><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/70">{webchat.subtitle}</p><h1 className="mt-0.5 text-base font-bold tracking-tight sm:text-lg">{headerName}</h1><p className="mt-0.5 flex items-center gap-1.5 text-xs text-white/80"><span className={`h-1.5 w-1.5 rounded-full ${channelStatus.dot}`} />{channelStatus.label}</p></div>
-            <div className="ml-auto flex shrink-0 items-center gap-2">{token ? <button type="button" onClick={() => { setError(""); setRestartConfirmOpen(true) }} disabled={sending} title="Reiniciar la conversación con Huni" aria-label="Reiniciar la conversación con Huni" className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-amber-300 bg-amber-300 px-2.5 text-xs font-semibold text-[#003f73] transition hover:bg-amber-200 disabled:opacity-50 sm:px-3">{sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}<span>Reiniciar</span></button> : null}<button type="button" onClick={() => setInfoSheetOpen(true)} title="Información de la conversación" aria-label="Información de la conversación" className="grid h-9 w-9 place-items-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20"><Info className="h-4 w-4" /></button>{notificationStatusLoaded && token && !pushNotificationsEnabled && <button type="button" onClick={() => void enableNotifications()} title={notificationPermission === "denied" ? "Notificaciones bloqueadas. Habilitalas desde la configuración del navegador." : "Activar notificaciones"} aria-label="Activar notificaciones" className="grid h-9 w-9 place-items-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20"><BellOff className="h-4 w-4" /></button>}</div>
+            <div className="ml-auto flex shrink-0 items-center gap-2">{token ? <button type="button" onClick={() => { setError(""); setRestartConfirmOpen(true) }} disabled={sending} title="Volver al inicio de HUni" aria-label="Volver al inicio de HUni" className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/20 bg-white/10 px-2.5 text-[11px] font-semibold text-white transition hover:bg-white/20 disabled:opacity-50 sm:px-3">{sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}<span>Volver al inicio</span></button> : null}<button type="button" onClick={() => setInfoSheetOpen(true)} title="Información de la conversación" aria-label="Información de la conversación" className="grid h-9 w-9 place-items-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20"><Info className="h-4 w-4" /></button>{notificationStatusLoaded && token && !pushNotificationsEnabled && <button type="button" onClick={() => void enableNotifications()} title={notificationPermission === "denied" ? "Notificaciones bloqueadas. Habilitalas desde la configuración del navegador." : "Activar notificaciones"} aria-label="Activar notificaciones" className="grid h-9 w-9 place-items-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20"><BellOff className="h-4 w-4" /></button>}</div>
           </div>
         </header>
 
-        <WebchatModal open={notificationPromptOpen && notificationStatusLoaded && !pushNotificationsEnabled} className="p-5" cardClassName="w-full max-w-[420px]">
-          <div role="dialog" aria-modal="true" aria-labelledby="notification-prompt-title" className="max-h-[calc(100dvh-2.5rem)] w-full overflow-y-auto rounded-[28px] border border-white/70 bg-white text-slate-800 shadow-[0_28px_90px_rgba(0,25,50,0.3)]">
-            <div className="relative overflow-hidden bg-gradient-to-br from-[#00345f] via-[#07558b] to-[#2479a9] px-6 pb-7 pt-6 text-white sm:px-7">
+        {token && isOperatorHandling ? <div role="status" className="flex shrink-0 items-center gap-2.5 border-b border-[#003f73]/10 bg-[#e8f0f6] px-4 py-2.5 text-[#003f73] sm:px-7"><span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white text-[#003f73]"><Headset className="h-4 w-4" /></span><p className="min-w-0 text-xs leading-5 sm:text-sm"><span className="font-bold">{operatorName ? `${operatorName} te está atendiendo.` : waitingWithoutOperator ? "Tu conversación quedó en espera." : "Estamos buscando un operador."}</span> Mantené este chat abierto para continuar la atención por acá.</p></div> : null}
+
+        <WebchatModal open={welcomeModalOpen} className="p-5" cardClassName="w-full max-w-[420px]">
+          <div role="dialog" aria-modal="true" aria-labelledby="webchat-welcome-title" className="max-h-[calc(100dvh-2.5rem)] w-full overflow-y-auto rounded-[28px] border border-white/70 bg-white text-slate-800 shadow-[0_28px_90px_rgba(0,25,50,0.3)]">
+            <div className="relative overflow-hidden bg-gradient-to-br from-[#00345f] via-[#07558b] to-[#2479a9] px-6 pb-6 pt-6 text-white sm:px-7">
               <div className="pointer-events-none absolute -right-10 -top-14 h-40 w-40 rounded-full border-[20px] border-white/[0.08]" />
               <div className="pointer-events-none absolute -bottom-16 right-16 h-36 w-36 rounded-full bg-white/[0.06]" />
               <div className="relative flex items-center justify-between gap-3">
@@ -1468,38 +1480,66 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
                     <p className="mt-0.5 flex items-center gap-1.5 text-[11px] font-medium text-white/75"><span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />Atención por chat</p>
                   </div>
                 </div>
-                <button type="button" onClick={dismissNotificationPrompt} aria-label="Cerrar recomendación" className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-white/15 bg-white/10 text-white/85 transition hover:bg-white/20"><X className="h-4 w-4" /></button>
+                <button type="button" onClick={dismissWelcomeModal} aria-label="Cerrar bienvenida" className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-white/15 bg-white/10 text-white/85 transition hover:bg-white/20"><X className="h-4 w-4" /></button>
               </div>
-              <div className="relative mt-7">
-                <div className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-white/85"><Bell className="h-3.5 w-3.5" />Avisos importantes</div>
-                <h2 id="notification-prompt-title" className="mt-3 max-w-xs text-[25px] font-bold leading-[1.14] tracking-tight sm:text-[28px]">Recibí avisos sobre tu consulta</h2>
-                <p className="mt-2.5 max-w-sm text-sm leading-6 text-white/80">Activá las notificaciones para enterarte cuando haya novedades, incluso si no estás mirando el webchat.</p>
+              <div className="relative mt-5">
+                <div className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-white/85"><MessageCircle className="h-3.5 w-3.5" />Atención en línea</div>
+                <h2 id="webchat-welcome-title" className="mt-3 max-w-xs text-[25px] font-bold leading-[1.14] tracking-tight sm:text-[28px]">¡Te damos la bienvenida!</h2>
+                <p className="mt-2.5 max-w-sm text-sm leading-6 text-white/80">Este es el webchat de {webchat.title}. Podés hacer tu consulta y recibir ayuda de HUni o de nuestro equipo.</p>
               </div>
             </div>
             <div className="px-6 pb-6 pt-5 sm:px-7 sm:pb-7">
-              <div role="note" className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-3.5 text-amber-950">
-                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-amber-100 text-amber-700"><Info className="h-[18px] w-[18px]" /></span>
-                <span className="min-w-0 text-xs leading-5"><span className="block font-bold">Durante la atención con un operador</span>Cuando un operador te atienda, mantené el webchat abierto hasta finalizar la conversación y recibir la confirmación de tu turno. Si salís antes, podrías perder la comunicación.</span>
+              <button type="button" onClick={dismissWelcomeModal} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#003f73] px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-[#003461] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#003f73] focus-visible:ring-offset-2"><MessageCircle className="h-4 w-4" />Ir al chat</button>
+
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-3.5">
+                <div className="flex items-center gap-3">
+                  <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${pushNotificationsEnabled ? "bg-emerald-50 text-emerald-700" : "bg-[#e8f0f6] text-[#003f73]"}`}>{pushNotificationsEnabled ? <Check className="h-4 w-4" /> : <Bell className="h-4 w-4" />}</span>
+                  <span className="min-w-0 flex-1"><span className="block text-sm font-bold text-slate-800">{pushNotificationsEnabled ? "Notificaciones activadas" : "Recibí avisos de respuesta"}</span><span className="mt-0.5 block text-xs leading-5 text-slate-500">{pushNotificationsEnabled ? "Te avisaremos cuando llegue una respuesta." : "Activá las notificaciones para enterarte cuando el equipo responda."}</span></span>
+                  {!pushNotificationsEnabled ? <button type="button" onClick={() => void enableNotifications()} disabled={!notificationStatusLoaded} className="shrink-0 rounded-lg border border-[#003f73]/20 bg-[#e8f0f6] px-3 py-2 text-xs font-bold text-[#003f73] transition hover:bg-[#dcebf3] disabled:opacity-50">{notificationStatusLoaded ? "Activar" : "…"}</button> : null}
+                </div>
               </div>
-              <button type="button" onClick={async () => { if (await enableNotifications()) dismissNotificationPrompt() }} className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#064d7d] px-4 py-3.5 text-sm font-bold text-white shadow-lg shadow-[#064d7d]/20 transition hover:-translate-y-0.5 hover:bg-[#003f73] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#064d7d] focus-visible:ring-offset-2"><Bell className="h-4 w-4" />Activar notificaciones</button>
-              <button type="button" onClick={dismissNotificationPrompt} className="mt-2 w-full rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-500 transition hover:bg-slate-50 hover:text-slate-700">Ahora no</button>
-              <p className="mt-2 text-center text-[11px] leading-5 text-slate-400">Tu navegador te pedirá permiso. Podés cambiar esta opción más adelante.</p>
+
+              <div className="mt-4 border-t border-slate-100 pt-3">
+                <p className="mb-2 text-xs font-semibold text-slate-500">Otras formas de atención</p>
+                <div className="space-y-2">
+                  <a href="https://turnos.hospital.uncu.edu.ar/formulario" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-700 transition hover:border-[#003f73]/25 hover:bg-[#f5f9fc]"><span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[#e8f0f6] text-[#003f73]"><ArrowUpRight className="h-4 w-4" /></span><span className="min-w-0 flex-1 font-semibold">Autogestión de turnos</span><ChevronDown className="h-4 w-4 -rotate-90 text-slate-400" /></a>
+                  <a href="tel:+542615644000" aria-label="Llamar al call center al 261 564 4000" className="flex items-center gap-3 rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-700 transition hover:border-[#003f73]/25 hover:bg-[#f5f9fc]"><span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[#e8f0f6] text-[#003f73]"><Phone className="h-4 w-4" /></span><span className="min-w-0 flex-1"><span className="block font-semibold">Llamar al call center</span><span className="text-xs text-slate-500">261 564 4000</span></span><ChevronDown className="h-4 w-4 -rotate-90 text-slate-400" /></a>
+                </div>
+              </div>
+              <p className="mt-3 text-center text-[11px] leading-5 text-slate-400">Podés activar los avisos o elegir otra opción cuando quieras.</p>
             </div>
           </div>
         </WebchatModal>
 
         <WebchatModal open={restartConfirmOpen} className="p-5" cardClassName="w-full max-w-[420px]">
-          <div role="dialog" aria-modal="true" aria-labelledby="restart-conversation-title" className="w-full rounded-2xl bg-white p-5 text-slate-800 shadow-xl">
-            <div className="flex items-start gap-3">
-              <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#e8f0f6] text-[#003f73]"><RefreshCw className="h-5 w-5" /></span>
-              <div>
-                <p id="restart-conversation-title" className="text-base font-bold">¿Reiniciar la conversación con Huni?</p>
-                <p className="mt-1 text-sm leading-5 text-slate-500">{isOperatorHandling ? "La atención del operador se interrumpirá y volverás al inicio del flujo con Huni." : "La conversación volverá al inicio del flujo con Huni."}</p>
+          <div role="dialog" aria-modal="true" aria-labelledby="restart-conversation-title" className="max-h-[calc(100dvh-2.5rem)] w-full overflow-y-auto rounded-[28px] border border-white/70 bg-white text-slate-800 shadow-[0_28px_90px_rgba(0,25,50,0.3)]">
+            <div className="relative overflow-hidden bg-gradient-to-br from-[#00345f] via-[#07558b] to-[#2479a9] px-6 pb-6 pt-6 text-white sm:px-7">
+              <div className="pointer-events-none absolute -right-10 -top-14 h-40 w-40 rounded-full border-[20px] border-white/[0.08]" />
+              <div className="pointer-events-none absolute -bottom-16 right-16 h-36 w-36 rounded-full bg-white/[0.06]" />
+              <div className="relative flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="grid h-[58px] w-[58px] shrink-0 place-items-center rounded-2xl bg-white p-2.5 shadow-lg shadow-black/15 ring-1 ring-white/50">
+                    <img src={webchat.logo_url ? publicAssetUrl(webchat.logo_url) : `${import.meta.env.VITE_APP_URL}/images/hu_icon_new.png`} alt={`Logo de ${webchat.title}`} className="h-full w-full object-contain" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold">{webchat.title}</p>
+                    <p className="mt-0.5 flex items-center gap-1.5 text-[11px] font-medium text-white/75"><span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />Asistente HUni</p>
+                  </div>
+                </div>
+                <button type="button" onClick={() => setRestartConfirmOpen(false)} disabled={sending} aria-label="Cerrar confirmación" className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-white/15 bg-white/10 text-white/85 transition hover:bg-white/20 disabled:opacity-50"><X className="h-4 w-4" /></button>
+              </div>
+              <div className="relative mt-5">
+                <div className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-white/85"><RefreshCw className="h-3.5 w-3.5" />Cambiar el curso del chat</div>
+                <h2 id="restart-conversation-title" className="mt-3 max-w-xs text-[25px] font-bold leading-[1.14] tracking-tight sm:text-[28px]">¿Volvemos al inicio?</h2>
+                <p className="mt-2.5 max-w-sm text-sm leading-6 text-white/80">{isOperatorHandling ? `La atención${operatorName ? ` con ${operatorName}` : " con el operador"} finalizará y volverás a conversar con HUni desde el comienzo.` : "Volverás al primer paso del asistente para iniciar otra consulta."}</p>
               </div>
             </div>
-            <div className="mt-5 flex justify-end gap-2">
-              <button type="button" onClick={() => setRestartConfirmOpen(false)} disabled={sending} className="rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 disabled:opacity-50">Cancelar</button>
-              <button type="button" onClick={() => void confirmRestartConversation()} disabled={sending} className="inline-flex items-center gap-2 rounded-xl bg-[#003f73] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#003461] disabled:opacity-60">{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}{sending ? "Reiniciando..." : "Reiniciar conversación"}</button>
+            <div className="px-6 pb-6 pt-5 sm:px-7 sm:pb-7">
+
+              <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <button type="button" onClick={() => setRestartConfirmOpen(false)} disabled={sending} className="rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50">Seguir en esta conversación</button>
+                <button type="button" onClick={() => void confirmRestartConversation()} disabled={sending} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#003f73] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#003461] disabled:opacity-60">{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}{sending ? "Volviendo al inicio..." : "Volver al inicio de HUni"}</button>
+              </div>
             </div>
           </div>
         </WebchatModal>
