@@ -337,6 +337,7 @@ export default function ChatSidebar({
   }, [refreshing])
 
   const normalizePhone = (value?: string | null) => String(value ?? "").replace(/\D/g, "")
+  const foldText = (value?: string | null) => String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
   const chatVariablesMatch = (chat: Chat, query: string, normalizedQuery: string) => {
     if (!query) return false
 
@@ -358,7 +359,7 @@ export default function ChatSidebar({
     })
 
     return values.some((value) => {
-      const normalizedValue = value.toLowerCase()
+      const normalizedValue = foldText(value)
       return normalizedValue.includes(query)
         || (normalizedNumberSearch && normalizePhone(value).includes(normalizedQuery))
     })
@@ -467,14 +468,14 @@ export default function ChatSidebar({
   // Filtrar + ordenar por la última actividad: abrir un chat no debe bajarlo
   // solo por haber marcado sus mensajes como leídos.
   const visibleChats = useMemo(() => {
-    const query = search.trim().toLowerCase()
-    const phoneQuery = normalizePhone(search)
+    const query = foldText(search.trim())
+    const phoneQuery = /^\+?[\d\s.\-()]+$/.test(search.trim()) ? normalizePhone(search) : ""
 
     const filtered = chats.filter((chat) => {
       const chatStatus = chat.attention_status as "bot" | "assigned" | "pending_assignment" | "archived"
       const chatChannel = chat.channel === "webchat" ? "webchat" : "whatsapp"
       const matchesVariable = chatVariablesMatch(chat, query, phoneQuery)
-      const matchesServerSearch = chat.search_match === query
+      const matchesServerSearch = Boolean(chat.search_match) && foldText(chat.search_match) === query
       const belongsToCurrentOperator = Number(chat.operator_id ?? 0) === Number(currentOperatorId ?? 0)
       const belongsToCurrentOperatorArchived = Number(chat.last_operator_id ?? 0) === Number(currentOperatorId ?? 0)
       const matchesSelectedOperator = operatorId === null || (chatStatus === "archived"
@@ -490,8 +491,8 @@ export default function ChatSidebar({
 
       return matchesStatus && matchesSelectedOperator && matchesChannel && (
         matchesServerSearch ||
-        chat.name.toLowerCase().includes(query) ||
-        formatLastMessagePreview(chat.lastMessage).toLowerCase().includes(query) ||
+        foldText(chat.name).includes(query) ||
+        foldText(formatLastMessagePreview(chat.lastMessage)).includes(query) ||
         (phoneQuery.length > 0 && normalizePhone(chat.number).includes(phoneQuery)) ||
         matchesVariable
       )
@@ -653,12 +654,14 @@ export default function ChatSidebar({
     const normalizedChatId = String(chatId)
     const alreadySelected = normalizedChatId === String(selectedChatId)
     const selectedRow = chats.find((chat) => String(chat.id) === normalizedChatId)
-    const isCurrentSearchResult = selectedRow?.search_match === search.trim().toLowerCase()
-    const matchedMessageId = !isCurrentSearchResult || searchMessageId === null || searchMessageId === undefined
+    // El mensaje encontrado corresponde al término con el que el servidor armó la fila (search_match),
+    // que puede diferir del input actual mientras llega la respuesta del debounce.
+    const rowSearchTerm = search.trim() && selectedRow?.search_match ? selectedRow.search_match : ""
+    const matchedMessageId = !rowSearchTerm || searchMessageId === null || searchMessageId === undefined
       ? null
       : String(searchMessageId)
     if (alreadySelected && !matchedMessageId) return
-    onSelectChat(normalizedChatId, search.trim(), matchedMessageId)
+    onSelectChat(normalizedChatId, rowSearchTerm || search.trim(), matchedMessageId)
     if (alreadySelected) return
 
     window.dispatchEvent(new CustomEvent("chat:read", { detail: { chatId: normalizedChatId } }))

@@ -135,6 +135,8 @@ const mapApiMessage = (message: any): Message => ({
   media_name: message.media_name ?? null,
 })
 
+const foldSearchText = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+
 const normalizeContactPhone = (phone: string) => phone.replace(/[^\d+]/g, "")
 
 const validateContactDraft = (draft: AgendaContact) => {
@@ -402,6 +404,7 @@ export default function ChatMain({
   const pendingMessageStatusRef = useRef<Record<string, Message["status"]>>({})
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const previousSearchQueryRef = useRef("")
+  const navigationTargetIdRef = useRef<string | null>(null)
   const attachmentMenuRef = useRef<HTMLDivElement | null>(null)
   const quickRepliesMenuRef = useRef<HTMLDivElement | null>(null)
   const messageInputRef = useRef<HTMLTextAreaElement | null>(null)
@@ -645,6 +648,7 @@ export default function ChatMain({
     if (navigationRequest) {
       setSearchOpen(true)
       setSearchQuery(navigationRequest.query)
+      navigationTargetIdRef.current = navigationRequest.messageId
       previousSearchQueryRef.current = ""
       setSearchResultIds([])
       setActiveSearchIndex(0)
@@ -1022,15 +1026,6 @@ export default function ChatMain({
   }, [chat?.id, messages])
 
   useEffect(() => {
-    if (!chat?.id) return
-    setSearchOpen(false)
-    setSearchQuery("")
-    setSearchResultIds([])
-    setActiveSearchIndex(0)
-    previousSearchQueryRef.current = ""
-  }, [chat?.id])
-
-  useEffect(() => {
     closeAllModals()
     setLocationSubmitted(false)
     setContactSubmitted(false)
@@ -1065,7 +1060,7 @@ export default function ChatMain({
   useEffect(() => {
     if (!searchOpen) return
 
-    const query = searchQuery.trim().toLowerCase()
+    const query = foldSearchText(searchQuery.trim())
     const queryChanged = previousSearchQueryRef.current !== query
     previousSearchQueryRef.current = query
 
@@ -1077,7 +1072,7 @@ export default function ChatMain({
 
     const resultIds = messages
       .filter((message) => {
-        const haystack = `${message.body ?? ""} ${message.media_name ?? ""}`.toLowerCase()
+        const haystack = foldSearchText(`${message.body ?? ""} ${message.media_name ?? ""}`)
         return haystack.includes(query)
       })
       .map((message) => String(message.id))
@@ -1085,7 +1080,13 @@ export default function ChatMain({
     setSearchResultIds(resultIds)
     setActiveSearchIndex((prev) => {
       if (resultIds.length === 0) return 0
-      if (queryChanged) return resultIds.length - 1
+      if (queryChanged) {
+        // Si venimos de un resultado global, posicionarse en ese mensaje y no en el último de la ventana.
+        const targetId = navigationTargetIdRef.current
+        navigationTargetIdRef.current = null
+        const targetIndex = targetId ? resultIds.indexOf(targetId) : -1
+        return targetIndex >= 0 ? targetIndex : resultIds.length - 1
+      }
       const activeMessageId = searchResultIds[prev]
       const preservedIndex = activeMessageId ? resultIds.indexOf(activeMessageId) : -1
       return preservedIndex >= 0 ? preservedIndex : Math.min(prev, resultIds.length - 1)

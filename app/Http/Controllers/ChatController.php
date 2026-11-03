@@ -622,7 +622,7 @@ class ChatController extends Controller
         $searchMessageIds = $search !== '' && $pageRows->isNotEmpty()
             ? Message::query()
                 ->whereIn('chat_id', $pageRows->pluck('id')->unique())
-                ->where('body', 'like', '%'.$search.'%')
+                ->where('body', 'like', '%'.addcslashes($search, '\\%_').'%')
                 ->selectRaw('chat_id, MAX(id) as message_id')
                 ->groupBy('chat_id')
                 ->pluck('message_id', 'chat_id')
@@ -703,11 +703,14 @@ class ChatController extends Controller
         }
 
         if ($search !== '') {
-            $like = '%'.$search.'%';
-            $phoneSearch = preg_replace('/\D+/', '', $search);
+            $like = '%'.addcslashes($search, '\\%_').'%';
+            // Los dígitos solo se buscan como teléfono si el texto parece un número (no un mail o nombre con números).
+            $phoneSearch = preg_match('/^\+?[\d\s.\-()]+$/u', $search)
+                ? preg_replace('/\D+/', '', $search)
+                : '';
             $variableSearch = '%'.addcslashes($search, '\\%_').'%';
             $numericVariableSearch = preg_match('/^[\d\s.\-]+$/u', $search) && strlen($phoneSearch) >= 3
-                ? '%'.implode('%', str_split($phoneSearch)).'%'
+                ? implode('[ .-]*', str_split($phoneSearch))
                 : null;
             $query->where(function ($searchQuery) use ($like, $phoneSearch, $variableSearch, $numericVariableSearch) {
                 $searchQuery
@@ -719,7 +722,7 @@ class ChatController extends Controller
                     ->orWhereRaw("JSON_SEARCH(chats.bot_state, 'one', ?, NULL, '$.vars.*') IS NOT NULL", [$variableSearch])
                     ->orWhereRaw("JSON_SEARCH(chats.bot_state, 'one', ?, NULL, '$.vars_by_date.*.*.value') IS NOT NULL", [$variableSearch]);
                 if ($numericVariableSearch !== null) {
-                    $searchQuery->orWhereRaw("CAST(JSON_EXTRACT(chats.bot_state, '$.vars') AS CHAR) LIKE ?", [$numericVariableSearch]);
+                    $searchQuery->orWhereRaw("CAST(JSON_EXTRACT(chats.bot_state, '$.vars') AS CHAR) REGEXP ?", [$numericVariableSearch]);
                 }
                 if ($phoneSearch !== '') {
                     $searchQuery->orWhereHas('contact', function ($contactQuery) use ($phoneSearch) {
