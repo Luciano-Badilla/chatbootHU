@@ -2055,13 +2055,6 @@ export default function ChatMain({
       setSending(false)
     }
   }
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault()
-      handleSendMessage()
-    }
-  }
-
   const isPreviewableDocument = (name: string, url: string) => {
     const target = `${name} ${url}`.toLowerCase()
     return target.includes(".pdf")
@@ -3194,7 +3187,6 @@ export default function ChatMain({
                 ref={messageInputRef}
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
-                onKeyDown={handleKeyDown}
                 onPaste={handleMessagePaste}
                 onClick={activateSpellingMatchAtCaret}
                 onKeyUp={(event) => {
