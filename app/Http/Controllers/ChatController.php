@@ -11,7 +11,6 @@ use App\Models\User;
 use App\Services\AuditService;
 use App\Services\BotInactivityService;
 use App\Services\ChatAssignmentService;
-use App\Services\WebchatAvailabilityService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
@@ -23,7 +22,6 @@ class ChatController extends Controller
         private readonly AuditService $auditService,
         private readonly BotInactivityService $botInactivityService,
         private readonly ChatAssignmentService $chatAssignmentService,
-        private readonly WebchatAvailabilityService $webchatAvailabilityService,
     ) {}
 
     public function index(Request $request)
@@ -207,13 +205,9 @@ class ChatController extends Controller
             && $chat->attention_status === 'assigned';
 
         if ($data['active']) {
-            if (! $this->webchatAvailabilityService->canAssignOperator($chat)) {
-                return response()->json([
-                    'ok' => false,
-                    'message' => 'La atención por operadores para Webchat está fuera de horario. El bot puede continuar atendiendo.',
-                ], 422);
-            }
-
+            // Tomar un chat es una acción manual y no depende del horario de atención:
+            // el operador o admin puede intervenir un chat del bot dentro y fuera de horario.
+            // El horario sigue limitando la asignación automática (ChatAssignmentService).
             if (! $operatorId) {
                 return response()->json([
                     'ok' => false,
@@ -835,8 +829,15 @@ class ChatController extends Controller
             ->selectRaw("SUM(CASE WHEN channel IS NULL OR channel != 'webchat' THEN 1 ELSE 0 END) as whatsapp_total")
             ->first();
         $canViewAll = $user?->hasPermission('can_view_all_chats') ?? false;
+        // "archived" cuenta lo mismo que muestra la lista sin "Mis archivados" (todos los archivados).
+        // "archived_mine" cuenta solo los archivados por el usuario, para el filtro "Mis archivados".
+        $archivedMine = Chat::query()
+            ->where('attention_status', 'archived')
+            ->where('last_operator_id', $user?->id)
+            ->count();
 
         return [
+            // Bot y pendientes se cuentan para todos los operadores: pueden tomar esos chats.
             'bot' => $operatorId !== null ? 0 : (int) ($statusCounts['bot'] ?? 0),
             'assigned' => $operatorId !== null
                 ? (int) ($statusCounts['assigned'] ?? 0)
@@ -844,9 +845,8 @@ class ChatController extends Controller
                     ? (int) ($statusCounts['assigned'] ?? 0)
                     : Chat::query()->where('attention_status', 'assigned')->where('operator_id', $user?->id)->count()),
             'pending_assignment' => $operatorId !== null ? 0 : (int) ($statusCounts['pending_assignment'] ?? 0),
-            'archived' => $operatorId !== null || $canViewAll
-                ? (int) ($statusCounts['archived'] ?? 0)
-                : Chat::query()->where('attention_status', 'archived')->where('last_operator_id', $user?->id)->count(),
+            'archived' => (int) ($statusCounts['archived'] ?? 0),
+            'archived_mine' => $archivedMine,
             'whatsapp' => (int) ($channelCounts?->whatsapp_total ?? 0),
             'webchat' => (int) ($channelCounts?->webchat_total ?? 0),
         ];

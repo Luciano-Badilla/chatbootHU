@@ -76,6 +76,7 @@ export type ChatSidebarCounts = {
   assigned: number
   pending_assignment: number
   archived: number
+  archived_mine?: number
   whatsapp: number
   webchat: number
 }
@@ -514,6 +515,9 @@ export default function ChatSidebar({
     ).length,
     pending_assignment: counts?.pending_assignment ?? chats.filter((chat) => chat.attention_status === "pending_assignment").length,
     archived: counts?.archived ?? chats.filter((chat) => chat.attention_status === "archived").length,
+    archived_mine: counts?.archived_mine ?? chats.filter((chat) =>
+      chat.attention_status === "archived" && Number(chat.last_operator_id ?? 0) === Number(currentOperatorId ?? 0),
+    ).length,
   }), [chats, canViewAll, currentOperatorId, counts])
 
   const toggleStatusFilter = (filter: "bot" | "assigned" | "pending_assignment" | "archived") => {
@@ -534,11 +538,13 @@ export default function ChatSidebar({
     setChannelFilters((current) => current.includes(filter) ? current.filter((item) => item !== filter) : [...current, filter])
   }
 
+  // Bot y pendientes se ven para todos los operadores: pueden tomar esos chats.
+  // El badge de Archivados coincide con la lista activa: todos, o solo los propios con "Mis archivados".
   const statusFilterOptions = [
-    ...(canViewAll ? [{ key: "bot" as const, label: "Atendidos por bot", icon: Bot, count: inboxCounts.bot }] : []),
+    { key: "bot" as const, label: "Atendidos por bot", icon: Bot, count: inboxCounts.bot },
     { key: "assigned" as const, label: canViewAll ? "Asignados" : "Mis asignados", icon: Headset, count: inboxCounts.assigned },
-    ...(canViewAll ? [{ key: "pending_assignment" as const, label: "Pendientes de asignación", icon: Clock3, count: inboxCounts.pending_assignment }] : []),
-    { key: "archived" as const, label: "Archivados", icon: Archive, count: inboxCounts.archived },
+    { key: "pending_assignment" as const, label: "Pendientes de asignación", icon: Clock3, count: inboxCounts.pending_assignment },
+    { key: "archived" as const, label: "Archivados", icon: Archive, count: archivedScope === "mine" ? inboxCounts.archived_mine : inboxCounts.archived },
   ]
 
   const channelFilterOptions = [
@@ -789,7 +795,7 @@ export default function ChatSidebar({
                         >
                           <CompactFilterButton
                             label="Mis archivados"
-                            count={0}
+                            count={inboxCounts.archived_mine}
                             active={archivedScope === "mine"}
                             onClick={() => setArchivedScope((current) => current === "mine" ? "all" : "mine")}
                             Icon={ArchiveArrowDownIcon}
