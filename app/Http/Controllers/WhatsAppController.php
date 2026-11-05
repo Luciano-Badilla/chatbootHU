@@ -2024,7 +2024,7 @@ class WhatsAppController extends Controller
 
                 if (! $option) {
                     $state = $this->getState($chat);
-                    $state['pending_input']['last_error'] = $pending['error_message'] ?? 'ElegÃƒÂ­ una opciÃƒÂ³n vÃƒÂ¡lida.';
+                    $state['pending_input']['last_error'] = $this->pendingErrorMessage($pending, 'invalid_option_message');
                     $this->setState($chat, $state);
 
                     return BotNode::find($pending['node_id']);
@@ -2055,7 +2055,7 @@ class WhatsAppController extends Controller
 
             if ($value === '') {
                 $state = $this->getState($chat);
-                $state['pending_input']['last_error'] = $pending['error_message'] ?? 'Valor invÃƒÂ¡lido, intentÃƒÂ¡ de nuevo.';
+                $state['pending_input']['last_error'] = $this->pendingErrorMessage($pending, 'error_message');
                 $this->setState($chat, $state);
 
                 return BotNode::find($pending['node_id']);
@@ -2073,7 +2073,7 @@ class WhatsAppController extends Controller
 
                 if (@preg_match($pattern, '') !== false && ! preg_match($pattern, $value)) {
                     $state = $this->getState($chat);
-                    $state['pending_input']['last_error'] = $pending['error_message'] ?? 'Valor invÃƒÂ¡lido, intentÃƒÂ¡ de nuevo.';
+                    $state['pending_input']['last_error'] = $this->pendingErrorMessage($pending, 'error_message');
                     $this->setState($chat, $state);
 
                     return BotNode::find($pending['node_id']);
@@ -3251,7 +3251,7 @@ class WhatsAppController extends Controller
 
         if ($dni === '') {
             $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'missing_dni']));
-            $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos porque falta el DNI.');
+            $messageToSend = $this->botMessage($node, $settings, 'error_message');
             $targetNextNodeId = $settings['error_next_node_id'] ?? null;
         } else {
             $baseUrl = $this->alephooV3BaseUrl();
@@ -3261,11 +3261,11 @@ class WhatsAppController extends Controller
 
             if (! $this->isAlephooEndpointEnabled('/admin/personas')) {
                 $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'endpoint_disabled']));
-                $messageToSend = (string) ($settings['error_message'] ?? 'La consulta de datos personales no esta habilitada en este momento.');
+                $messageToSend = $this->botMessage($node, $settings, 'error_message');
                 $targetNextNodeId = $settings['error_next_node_id'] ?? null;
             } elseif ($baseUrl === '' || $username === '' || $password === '') {
                 $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'misconfigured']));
-                $messageToSend = (string) ($settings['error_message'] ?? 'La integracion con Alephoo no esta configurada correctamente.');
+                $messageToSend = $this->botMessage($node, $settings, 'error_message');
                 $targetNextNodeId = $settings['error_next_node_id'] ?? null;
             } else {
                 try {
@@ -3311,16 +3311,16 @@ class WhatsAppController extends Controller
                             $targetNextNodeId = $node->next_node_id;
                         } else {
                             $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'not_found']));
-                            $messageToSend = (string) ($settings['not_found_message'] ?? 'No encontramos datos personales para el DNI ingresado.');
+                            $messageToSend = $this->botMessage($node, $settings, 'not_found_message');
                             $targetNextNodeId = $settings['not_found_next_node_id'] ?? null;
                         }
                     } elseif ($response->status() === 404) {
                         $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'not_found']));
-                        $messageToSend = (string) ($settings['not_found_message'] ?? 'No encontramos datos personales para el DNI ingresado.');
+                        $messageToSend = $this->botMessage($node, $settings, 'not_found_message');
                         $targetNextNodeId = $settings['not_found_next_node_id'] ?? null;
                     } else {
                         $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'error']));
-                        $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos en este momento.');
+                        $messageToSend = $this->botMessage($node, $settings, 'error_message');
                         $targetNextNodeId = $settings['error_next_node_id'] ?? null;
 
                         Log::warning('Alephoo person lookup error response', [
@@ -3333,7 +3333,7 @@ class WhatsAppController extends Controller
                     }
                 } catch (\Throwable $e) {
                     $this->setVars($chat, array_merge($baseVars, ['persona_lookup_status' => 'error']));
-                    $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus datos en este momento.');
+                    $messageToSend = $this->botMessage($node, $settings, 'error_message');
                     $targetNextNodeId = $settings['error_next_node_id'] ?? null;
 
                     Log::error('Alephoo person lookup failed: '.$e->getMessage(), [
@@ -3368,11 +3368,11 @@ class WhatsAppController extends Controller
 
         if ($personId === '') {
             $this->setVars($chat, array_merge($baseVars, ['turnos_lookup_status' => 'missing_person']));
-            $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus turnos porque falta identificar a la persona.');
+            $messageToSend = $this->botMessage($node, $settings, 'error_message');
             $targetNextNodeId = $settings['error_next_node_id'] ?? null;
         } elseif (! $this->isAlephooEndpointEnabled('/admision/turnos')) {
             $this->setVars($chat, array_merge($baseVars, ['turnos_lookup_status' => 'endpoint_disabled']));
-            $messageToSend = (string) ($settings['error_message'] ?? 'La consulta de turnos no esta habilitada en este momento.');
+            $messageToSend = $this->botMessage($node, $settings, 'error_message');
             $targetNextNodeId = $settings['error_next_node_id'] ?? null;
         } else {
             $baseUrl = $this->alephooV3BaseUrl();
@@ -3382,7 +3382,7 @@ class WhatsAppController extends Controller
 
             if ($baseUrl === '' || $username === '' || $password === '') {
                 $this->setVars($chat, array_merge($baseVars, ['turnos_lookup_status' => 'misconfigured']));
-                $messageToSend = (string) ($settings['error_message'] ?? 'La integracion con Alephoo no esta configurada correctamente.');
+                $messageToSend = $this->botMessage($node, $settings, 'error_message');
                 $targetNextNodeId = $settings['error_next_node_id'] ?? null;
             } else {
                 try {
@@ -3450,12 +3450,12 @@ class WhatsAppController extends Controller
                             $targetNextNodeId = $node->next_node_id;
                         } else {
                             $this->setVars($chat, array_merge($baseVars, ['turnos_lookup_status' => 'not_found']));
-                            $messageToSend = (string) ($settings['not_found_message'] ?? 'No encontramos turnos pendientes próximos.');
+                            $messageToSend = $this->botMessage($node, $settings, 'not_found_message');
                             $targetNextNodeId = $settings['not_found_next_node_id'] ?? null;
                         }
                     } else {
                         $this->setVars($chat, array_merge($baseVars, ['turnos_lookup_status' => 'error']));
-                        $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus turnos en este momento.');
+                        $messageToSend = $this->botMessage($node, $settings, 'error_message');
                         $targetNextNodeId = $settings['error_next_node_id'] ?? null;
                         Log::warning('Alephoo active appointments error response', [
                             'chat_id' => $chat->id,
@@ -3467,7 +3467,7 @@ class WhatsAppController extends Controller
                     }
                 } catch (\Throwable $e) {
                     $this->setVars($chat, array_merge($baseVars, ['turnos_lookup_status' => 'error']));
-                    $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos consultar tus turnos en este momento.');
+                    $messageToSend = $this->botMessage($node, $settings, 'error_message');
                     $targetNextNodeId = $settings['error_next_node_id'] ?? null;
                     Log::error('Alephoo active appointments lookup failed: '.$e->getMessage(), [
                         'chat_id' => $chat->id,
@@ -3531,7 +3531,7 @@ class WhatsAppController extends Controller
                     'node_id' => $node->id,
                     'variable' => '',
                     'validation_regex' => '',
-                    'error_message' => (string) ($settings['invalid_message'] ?? 'Selecciona el botón Cancelar del turno que quieras cancelar.'),
+                    'error_message' => $this->botMessage($node, $settings, 'invalid_message'),
                     'next_node_id' => $node->next_node_id,
                     'response_mode' => 'buttons',
                     'options' => $pendingOptions,
@@ -4024,8 +4024,8 @@ class WhatsAppController extends Controller
             }
 
             $message = $failed
-                ? (string) ($settings['error_message'] ?? 'No pudimos consultar el sistema en este momento.')
-                : (string) ($settings['empty_message'] ?? 'No encontramos turnos disponibles.');
+                ? $this->botMessage($node, $settings, 'error_message')
+                : $this->botMessage($node, $settings, 'empty_message');
             $this->sendWhatsAppText($chat, $this->renderTemplate($message, $chat, $node), 'user', 'bot', $node->type);
             $targetNextNodeId = $failed
                 ? ($settings['error_next_node_id'] ?? null)
@@ -4046,7 +4046,7 @@ class WhatsAppController extends Controller
             'node_id' => $node->id,
             'variable' => '',
             'validation_regex' => '',
-            'error_message' => (string) ($settings['invalid_message'] ?? 'Elegi una opcion de la lista.'),
+            'error_message' => $this->botMessage($node, $settings, 'invalid_message'),
             'next_node_id' => $node->next_node_id,
             'response_mode' => 'list',
             'options' => array_map(fn ($row) => [
@@ -4167,7 +4167,7 @@ class WhatsAppController extends Controller
             'persona_create_response' => null,
         ];
         $targetNextNodeId = $settings['error_next_node_id'] ?? null;
-        $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos registrar al paciente en este momento.');
+        $messageToSend = $this->botMessage($node, $settings, 'error_message');
 
         $invalidData = strlen($dni) < 7
             || strlen($dni) > 9
@@ -4189,7 +4189,7 @@ class WhatsAppController extends Controller
         if ($invalidData) {
             $resultVars['persona_create_status'] = 'invalid_data';
             $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
-            $messageToSend = (string) ($settings['invalid_message'] ?? 'Algunos datos del paciente no son validos.');
+            $messageToSend = $this->botMessage($node, $settings, 'invalid_message');
         } else {
             $baseUrl = $this->alephooV3BaseUrl();
             $username = $this->alephooV3Username();
@@ -4252,11 +4252,11 @@ class WhatsAppController extends Controller
                     } elseif ($response->status() === 409) {
                         $resultVars['persona_create_status'] = 'already_exists';
                         $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
-                        $messageToSend = (string) ($settings['already_exists_message'] ?? 'El paciente ya se encuentra registrado.');
+                        $messageToSend = $this->botMessage($node, $settings, 'already_exists_message');
                     } elseif (in_array($response->status(), [400, 422], true)) {
                         $resultVars['persona_create_status'] = 'invalid_data';
                         $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
-                        $messageToSend = (string) ($settings['invalid_message'] ?? 'Algunos datos del paciente no son validos.');
+                        $messageToSend = $this->botMessage($node, $settings, 'invalid_message');
                     } else {
                         Log::warning('Alephoo V3 person create error response', [
                             'chat_id' => $chat->id,
@@ -4354,7 +4354,7 @@ class WhatsAppController extends Controller
             'turno_create_response' => null,
         ];
         $targetNextNodeId = $settings['error_next_node_id'] ?? null;
-        $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos confirmar el turno en este momento.');
+        $messageToSend = $this->botMessage($node, $settings, 'error_message');
 
         $validDate = null;
         if (preg_match('/^\d{2}\/\d{2}\/\d{4}$/', $date)) {
@@ -4405,7 +4405,7 @@ class WhatsAppController extends Controller
                     if (! $stillAvailable) {
                         $resultVars['turno_create_status'] = 'unavailable';
                         $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
-                        $messageToSend = (string) ($settings['unavailable_message'] ?? 'El turno seleccionado ya no esta disponible.');
+                        $messageToSend = $this->botMessage($node, $settings, 'unavailable_message');
                     } else {
                         $payload = [
                             'hora' => $apiTime,
@@ -4437,7 +4437,7 @@ class WhatsAppController extends Controller
                             $resultVars['turno_create_status'] = 'unavailable';
                             $resultVars['turno_create_response'] = $response->json();
                             $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
-                            $messageToSend = (string) ($settings['unavailable_message'] ?? 'El turno seleccionado ya no esta disponible.');
+                            $messageToSend = $this->botMessage($node, $settings, 'unavailable_message');
                         } else {
                             $resultVars['turno_create_status'] = 'error';
                             Log::warning('Hospital API appointment create error response', [
@@ -4493,7 +4493,7 @@ class WhatsAppController extends Controller
             'turno_cancel_response' => null,
         ];
         $targetNextNodeId = $settings['error_next_node_id'] ?? null;
-        $messageToSend = (string) ($settings['error_message'] ?? 'No pudimos cancelar el turno en este momento.');
+        $messageToSend = $this->botMessage($node, $settings, 'error_message');
 
         if ($appointmentId === '') {
             $resultVars['turno_cancel_status'] = 'missing_data';
@@ -4531,7 +4531,7 @@ class WhatsAppController extends Controller
                         $targetNextNodeId = $node->next_node_id;
                     } elseif (in_array($response->status(), [404, 409, 410, 422], true)) {
                         $resultVars['turno_cancel_status'] = 'not_available';
-                        $messageToSend = (string) ($settings['unavailable_message'] ?? 'El turno ya no esta disponible o fue cancelado anteriormente.');
+                        $messageToSend = $this->botMessage($node, $settings, 'unavailable_message');
                         $targetNextNodeId = $settings['unavailable_next_node_id'] ?? null;
                     } else {
                         $resultVars['turno_cancel_status'] = 'error';
@@ -5248,6 +5248,30 @@ class WhatsAppController extends Controller
         }
     }
 
+    /**
+     * Mensaje configurado en el nodo o, si falta o está vacío, el default del tipo de nodo
+     * (config/bot_messages.php), que es el mismo que muestra el panel de flujos.
+     */
+    private function botMessage(BotNode $node, array $settings, string $key): string
+    {
+        $value = $settings[$key] ?? null;
+        if (is_string($value) && trim($value) !== '') {
+            return $value;
+        }
+
+        return (string) config("bot_messages.{$node->type}.{$key}", '');
+    }
+
+    private function pendingErrorMessage(array $pending, string $defaultKey): string
+    {
+        $value = $pending['error_message'] ?? null;
+        if (is_string($value) && trim($value) !== '') {
+            return $value;
+        }
+
+        return (string) config("bot_messages.input.{$defaultKey}", '');
+    }
+
     private function nodeSettings(BotNode $node): array
     {
         // settings puede venir como array o como Collection, lo normalizamos
@@ -5468,7 +5492,7 @@ class WhatsAppController extends Controller
             'node_id' => $node->id,
             'variable' => (string) ($settings['variable'] ?? ''),
             'validation_regex' => (string) ($settings['validation_regex'] ?? ''),
-            'error_message' => (string) ($settings['error_message'] ?? 'Valor invÃƒÂ¡lido, intentÃƒÂ¡ de nuevo.'),
+            'error_message' => $this->botMessage($node, $settings, 'error_message'),
             'next_node_id' => $node->next_node_id, // clave: a dÃƒÂ³nde avanzar cuando capture OK
             'response_mode' => $responseMode,
             'options' => $this->pendingInputOptions($settings, $responseMode, $chat, $node),

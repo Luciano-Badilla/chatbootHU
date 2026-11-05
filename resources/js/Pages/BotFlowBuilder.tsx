@@ -1851,8 +1851,14 @@ const serializeNodeSnapshot = (node: BotNode | null) => {
   })
 }
 
+// Mensajes por defecto de los nodos: vienen del backend (config/bot_messages.php) para que
+// el panel muestre exactamente lo que el bot enviará si el nodo no tiene el mensaje guardado.
+let botMessageDefaults: Record<string, Record<string, string>> = {}
+const botMsg = (type: string, key: string): string => botMessageDefaults[type]?.[key] ?? ""
+
 export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolean }) {
   const { props } = usePage() as any
+  botMessageDefaults = props?.botMessageDefaults ?? {}
   const isReadOnly = Boolean(readOnly || !props?.auth?.permissions?.can_manage_flows)
   const [flows, setFlows] = useState<BotFlow[]>([])
   const [selectedFlowId, setSelectedFlowId] = useState<number | null>(null)
@@ -2574,9 +2580,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               query_variable: "obra_social_busqueda",
               button_text: "Ver obras sociales",
               section_title: "Obras sociales",
-              empty_message: "No encontramos obras sociales disponibles.",
-              invalid_message: "Elegi una obra social de la lista.",
-              error_message: "No pudimos consultar las obras sociales en este momento.",
+              empty_message: botMsg("health_insurance_select", "empty_message"),
+              invalid_message: botMsg("health_insurance_select", "invalid_message"),
+              error_message: botMsg("health_insurance_select", "error_message"),
             },
           })
           addDependency("registro_plan_id", {
@@ -2587,9 +2593,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               insurance_variable: "registro_obra_social_id",
               button_text: "Ver planes",
               section_title: "Planes",
-              empty_message: "No encontramos planes disponibles para esa obra social.",
-              invalid_message: "Elegi un plan de la lista.",
-              error_message: "No pudimos consultar los planes en este momento.",
+              empty_message: botMsg("health_insurance_plan_select", "empty_message"),
+              invalid_message: botMsg("health_insurance_plan_select", "invalid_message"),
+              error_message: botMsg("health_insurance_plan_select", "error_message"),
             },
           })
         }
@@ -2600,8 +2606,8 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             body: "",
             settings: {
               dni_variable: "dni",
-              not_found_message: "No encontramos datos personales para el DNI ingresado.",
-              error_message: "No pudimos consultar tus datos en este momento.",
+              not_found_message: botMsg("person_lookup", "not_found_message"),
+              error_message: botMsg("person_lookup", "error_message"),
             },
           })
         }
@@ -2617,7 +2623,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               query_variable: "especialidad_busqueda",
               button_text: "Ver especialidades",
               section_title: "Especialidades",
-              empty_message: "No encontramos especialidades que coincidan. Proba con otra palabra.",
+              empty_message: botMsg("specialty_search", "empty_message"),
             },
           })
         }
@@ -2658,9 +2664,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               person_variable: "persona_id",
               result_mode: "cancel_buttons",
               cancel_button_text: "Cancelar",
-              invalid_message: "Selecciona el boton Cancelar del turno que quieras cancelar.",
+              invalid_message: botMsg("appointment_lookup", "invalid_message"),
               not_found_message: "No encontramos turnos pendientes.",
-              error_message: "No pudimos consultar tus turnos en este momento.",
+              error_message: botMsg("appointment_lookup", "error_message"),
             },
           })
         }
@@ -2691,9 +2697,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           email_variable: "registro_email",
           insurance_variable: "registro_obra_social_id",
           plan_variable: "registro_plan_id",
-          already_exists_message: "Ya existe un paciente registrado con ese DNI.",
-          invalid_message: "No pudimos registrar al paciente porque algunos datos no son validos.",
-          error_message: "No pudimos registrar al paciente en este momento.",
+          already_exists_message: botMsg("person_create", "already_exists_message"),
+          invalid_message: botMsg("person_create", "invalid_message"),
+          error_message: botMsg("person_create", "error_message"),
         } : {},
       })
       const createdNodes: BotNode[] = []
@@ -5022,7 +5028,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         button_text: "Ver opciones",
         section_title: "Opciones",
         rows: [],
-        error_message: "Valor inválido, por favor revisá el formato e intentá de nuevo.",
+        error_message: botMsg("input", "error_message"),
       })
 
       const update = (field: keyof typeof settings, value: string | any[]) => {
@@ -5355,9 +5361,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         error_next_node_id: number | null
       }>({
         dni_variable: "dni",
-        not_found_message: "No encontramos datos personales para el DNI ingresado.",
+        not_found_message: botMsg("person_lookup", "not_found_message"),
         not_found_next_node_id: null,
-        error_message: "No pudimos consultar tus datos en este momento.",
+        error_message: botMsg("person_lookup", "error_message"),
         error_next_node_id: null,
       })
 
@@ -5529,10 +5535,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         limit: 50,
         result_mode: "messages",
         cancel_button_text: "Cancelar",
-        invalid_message: "Selecciona el boton Cancelar del turno que quieras cancelar.",
-        not_found_message: "No encontramos turnos pendientes próximos.",
+        invalid_message: botMsg("appointment_lookup", "invalid_message"),
+        not_found_message: botMsg("appointment_lookup", "not_found_message"),
         not_found_next_node_id: null,
-        error_message: "No pudimos consultar tus turnos en este momento.",
+        error_message: botMsg("appointment_lookup", "error_message"),
         error_next_node_id: null,
       })
 
@@ -5690,10 +5696,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           query_variable: "obra_social_busqueda",
           button_text: "Ver obras sociales",
           section_title: "Obras sociales",
-          empty_message: "No encontramos obras sociales disponibles.",
-          invalid_message: "Elegi una obra social de la lista.",
+          empty_message: botMsg("health_insurance_select", "empty_message"),
+          invalid_message: botMsg("health_insurance_select", "invalid_message"),
           empty_next_node_id: null,
-          error_message: "No pudimos consultar las obras sociales en este momento.",
+          error_message: botMsg("health_insurance_select", "error_message"),
           error_next_node_id: null,
         }
         : t === "health_insurance_plan_select"
@@ -5701,10 +5707,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             insurance_variable: "registro_obra_social_id",
             button_text: "Ver planes",
             section_title: "Planes",
-            empty_message: "No encontramos planes disponibles para esa obra social.",
-            invalid_message: "Elegi un plan de la lista.",
+            empty_message: botMsg("health_insurance_plan_select", "empty_message"),
+            invalid_message: botMsg("health_insurance_plan_select", "invalid_message"),
             empty_next_node_id: null,
-            error_message: "No pudimos consultar los planes en este momento.",
+            error_message: botMsg("health_insurance_plan_select", "error_message"),
             error_next_node_id: null,
           }
         : t === "specialty_search"
@@ -5712,10 +5718,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
           query_variable: "especialidad_busqueda",
           button_text: "Ver especialidades",
           section_title: "Especialidades",
-          empty_message: "No encontramos especialidades que coincidan. Proba con otra palabra.",
-          invalid_message: "Elegi una especialidad de la lista.",
+          empty_message: botMsg("specialty_search", "empty_message"),
+          invalid_message: botMsg("specialty_search", "invalid_message"),
           empty_next_node_id: null,
-          error_message: "No pudimos consultar las especialidades en este momento.",
+          error_message: botMsg("specialty_search", "error_message"),
           error_next_node_id: null,
         }
         : t === "doctor_select"
@@ -5724,10 +5730,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             days: 28,
             button_text: "Ver profesionales",
             section_title: "Profesionales",
-            empty_message: "No encontramos profesionales disponibles para esa especialidad.",
-            invalid_message: "Elegi un profesional de la lista.",
+            empty_message: botMsg("doctor_select", "empty_message"),
+            invalid_message: botMsg("doctor_select", "invalid_message"),
             empty_next_node_id: null,
-            error_message: "No pudimos consultar los profesionales en este momento.",
+            error_message: botMsg("doctor_select", "error_message"),
             error_next_node_id: null,
           }
           : {
@@ -5737,10 +5743,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
             days: 28,
             button_text: "Ver turnos",
             section_title: "Fecha y horario",
-            empty_message: "No encontramos turnos disponibles para ese profesional.",
-            invalid_message: "Elegi una fecha y horario de la lista.",
+            empty_message: botMsg("availability_select", "empty_message"),
+            invalid_message: botMsg("availability_select", "invalid_message"),
             empty_next_node_id: null,
-            error_message: "No pudimos consultar los turnos en este momento.",
+            error_message: botMsg("availability_select", "error_message"),
             error_next_node_id: null,
           }
       const settings = ensureSettings<any>(defaults)
@@ -5850,9 +5856,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
     if (t === "appointment_cancel") {
       const settings = ensureSettings<any>({
         appointment_variable: "turno_id",
-        unavailable_message: "El turno ya no esta disponible o fue cancelado anteriormente.",
+        unavailable_message: botMsg("appointment_cancel", "unavailable_message"),
         unavailable_next_node_id: null,
-        error_message: "No pudimos cancelar el turno en este momento.",
+        error_message: botMsg("appointment_cancel", "error_message"),
         error_next_node_id: null,
       })
       const update = (field: string, value: string | number | null) => {
@@ -5917,10 +5923,10 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         email_variable: "registro_email",
         insurance_variable: "registro_obra_social_id",
         plan_variable: "registro_plan_id",
-        already_exists_message: "Ya existe un paciente registrado con ese DNI.",
-        invalid_message: "No pudimos registrar al paciente porque algunos datos no son validos.",
+        already_exists_message: botMsg("person_create", "already_exists_message"),
+        invalid_message: botMsg("person_create", "invalid_message"),
         unavailable_next_node_id: null,
-        error_message: "No pudimos registrar al paciente en este momento.",
+        error_message: botMsg("person_create", "error_message"),
         error_next_node_id: null,
       })
       const update = (field: string, value: string | number | null) => {
@@ -6009,9 +6015,9 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         update_insurance_variable: "actualizar_obra_social",
         insurance_variable: "persona_obra_social_id",
         plan_variable: "persona_plan_id",
-        unavailable_message: "Es posible que alguno de los datos, como la edad, la obra social u otros requisitos de la especialidad, no coincida con los parámetros necesarios para otorgar el turno.",
+        unavailable_message: botMsg("appointment_create", "unavailable_message"),
         unavailable_next_node_id: null,
-        error_message: "No pudimos confirmar el turno en este momento.",
+        error_message: botMsg("appointment_create", "error_message"),
         error_next_node_id: null,
       })
       const update = (field: string, value: string | number | null) => {

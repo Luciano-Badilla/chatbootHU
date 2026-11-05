@@ -25,6 +25,7 @@ class BotFlowController extends Controller
 
         return Inertia::render('BotFlowBuilder', [
             'flows' => $flows,
+            'botMessageDefaults' => config('bot_messages'),
             'readOnly' => !$request->user()?->hasPermission('can_manage_flows'),
         ]);
     }
