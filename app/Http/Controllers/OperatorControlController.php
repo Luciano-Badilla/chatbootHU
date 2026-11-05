@@ -86,10 +86,12 @@ class OperatorControlController extends Controller
                     ?? ($activity->subject_type === Chat::class ? $activity->subject_id : null)
                     ?? $messageChatIds->get($activity->subject_id);
                 $chat = $chatId ? $chatRecords->get($chatId) : null;
+                $chatNumber = $this->visibleContactNumber(
+                    data_get($chatContext, 'contact_number') ?? $chat?->contact?->whatsapp_id,
+                );
                 $chatName = data_get($chatContext, 'contact_name')
                     ?: $chat?->contact?->name
-                    ?: data_get($chatContext, 'contact_number')
-                    ?: $chat?->contact?->whatsapp_id;
+                    ?: $chatNumber;
 
                 return [
                     'id' => $activity->id,
@@ -98,10 +100,20 @@ class OperatorControlController extends Controller
                     'created_at' => optional($activity->created_at)?->toIso8601String(),
                     'chat_id' => $chatId ? (int) $chatId : null,
                     'chat_name' => $chatName ?: ($chatId ? "Chat #{$chatId}" : null),
-                    'chat_number' => data_get($chatContext, 'contact_number') ?? $chat?->contact?->whatsapp_id,
+                    'chat_number' => $chatNumber,
                 ];
             })->values(),
         ]);
+    }
+
+    /** Los contactos de webchat usan un token interno como identificador: no es un teléfono ni debe mostrarse. */
+    private function visibleContactNumber(?string $number): ?string
+    {
+        if ($number === null || $number === '' || str_starts_with($number, 'webchat:')) {
+            return null;
+        }
+
+        return $number;
     }
 
     private function controlPayload(?User $viewer): array
@@ -139,7 +151,7 @@ class OperatorControlController extends Controller
 
                     return [
                         'id' => $chat->id,
-                        'name' => $chat->contact?->name ?? $chat->contact?->whatsapp_id ?? "Chat #{$chat->id}",
+                        'name' => $chat->contact?->name ?? $this->visibleContactNumber($chat->contact?->whatsapp_id) ?? "Chat #{$chat->id}",
                         'assigned_at' => $chat->assigned_at?->toIso8601String(),
                         'last_contact_at' => $lastContactMessage?->created_at?->toIso8601String(),
                         'waiting_response' => (bool) $waiting,
@@ -303,7 +315,7 @@ class OperatorControlController extends Controller
             $closingProperties = $closingEvent?->properties?->toArray() ?? [];
             $attentionSeconds = data_get($closingProperties, 'meta.attention_seconds');
 
-            if (! is_numeric($attentionSeconds) && ! $assignedAt) {
+            if (! $assignedAt) {
                 $assignmentEvent = $events->filter(function (Activity $activity) use ($operator, $chat) {
                     if (! in_array($activity->event, [
                         'operator_assigned',
@@ -333,11 +345,10 @@ class OperatorControlController extends Controller
                 $message->created_at?->getTimestamp() ?? 0,
                 (int) $message->id,
             ])->values();
-            $firstContact = $messages->first(fn (Message $message) =>
-                $message->sender === 'contact' || $message->sender_subtype === 'contact'
-            );
-            $firstOperatorReply = $firstContact
-                ? $messages->first(function (Message $message) use ($firstContact, $operator) {
+            // La primera respuesta se mide desde que el chat fue asignado al operador:
+            // el tiempo que estuvo atendiendo el bot no forma parte de la métrica.
+            $firstOperatorReply = $assignedAt
+                ? $messages->first(function (Message $message) use ($assignedAt, $operator) {
                     $isOperatorReply = $message->sender_subtype === 'operator'
                         || ($message->sender === 'user' && filled($message->operator_name));
                     $isThisOperator = ! filled($message->operator_name)
@@ -345,19 +356,19 @@ class OperatorControlController extends Controller
 
                     return $isOperatorReply
                         && $isThisOperator
-                        && $message->created_at?->gte($firstContact->created_at);
+                        && $message->created_at?->gte($assignedAt);
                 })
                 : null;
-            $firstResponseSeconds = $firstContact && $firstOperatorReply
-                ? max(0, $firstContact->created_at->diffInSeconds($firstOperatorReply->created_at))
+            $firstResponseSeconds = $assignedAt && $firstOperatorReply
+                ? max(0, $assignedAt->diffInSeconds($firstOperatorReply->created_at))
                 : null;
             $attentionMinutes = is_numeric($attentionSeconds) ? (int) round(((int) $attentionSeconds) / 60) : null;
             $firstResponseMinutes = $firstResponseSeconds !== null ? (int) round($firstResponseSeconds / 60) : null;
 
             return [
                 'id' => (int) $chat->id,
-                'name' => $chat->contact?->name ?? $chat->contact?->whatsapp_id ?? "Chat #{$chat->id}",
-                'number' => $chat->contact?->whatsapp_id,
+                'name' => $chat->contact?->name ?? $this->visibleContactNumber($chat->contact?->whatsapp_id) ?? "Chat #{$chat->id}",
+                'number' => $this->visibleContactNumber($chat->contact?->whatsapp_id),
                 'channel' => $chat->channel ?? 'whatsapp',
                 'closed_at' => $chat->closed_at?->toIso8601String(),
                 'attention_minutes' => $attentionMinutes,
@@ -369,11 +380,10 @@ class OperatorControlController extends Controller
 
         return [
             'closed' => $chatMetrics->count(),
-            'avg_attention_minutes' => $attentionMetrics->isNotEmpty() ? (int) round($attentionMetrics->avg()) : null,
+            'avg_attention_minutes' => $attentionMetrics->isNotEmpty() ? (int) round($attentionMetrics->median()) : null,
             'attention_samples' => $attentionMetrics->count(),
-            'avg_first_response_minutes' => $firstResponseMetrics->isNotEmpty() ? (int) round($firstResponseMetrics->avg()) : null,
+            'avg_first_response_minutes' => $firstResponseMetrics->isNotEmpty() ? (int) round($firstResponseMetrics->median()) : null,
             'first_response_samples' => $firstResponseMetrics->count(),
-            'chat_samples' => $chatMetrics->take(5)->values(),
         ];
     }
 
@@ -550,7 +560,7 @@ class OperatorControlController extends Controller
     private function chatPayload(?Chat $chat): ?array
     {
         if (! $chat) return null;
-        return ['id' => $chat->id, 'name' => $chat->contact?->name ?? $chat->contact?->whatsapp_id ?? "Chat #{$chat->id}"];
+        return ['id' => $chat->id, 'name' => $chat->contact?->name ?? $this->visibleContactNumber($chat->contact?->whatsapp_id) ?? "Chat #{$chat->id}"];
     }
 
     private function publishControlUpdate(array $payload): void
