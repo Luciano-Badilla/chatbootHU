@@ -11,7 +11,6 @@ use App\Models\SystemSetting;
 use App\Models\User;
 use App\Services\AuditService;
 use App\Services\BotInactivityService;
-use App\Services\CampaignImportService;
 use App\Services\ChatAssignmentService;
 use App\Support\WhatsAppPhone;
 use Illuminate\Http\Request;
@@ -115,7 +114,7 @@ class ChatController extends Controller
      * Si el número ya tiene un chat abierto, lo devuelve sin reasignarlo.
      * Si no, lo crea asignado a quien lo abre, con el bot desactivado.
      */
-    public function openWhatsAppChat(Request $request, CampaignImportService $campaignImportService)
+    public function openWhatsAppChat(Request $request)
     {
         $validated = $request->validate([
             'phone' => ['required', 'string', 'max:40'],
@@ -125,10 +124,10 @@ class ChatController extends Controller
         $actor = $request->user();
         $phone = WhatsAppPhone::canonical($validated['phone']);
 
-        if (! $campaignImportService->isValidPhone($phone)) {
+        if (! WhatsAppPhone::isValid($phone)) {
             return response()->json([
                 'ok' => false,
-                'message' => 'El teléfono debe incluir código de país y tener entre 10 y 15 dígitos.',
+                'message' => 'Ingresá el número con código de país (entre 8 y 15 dígitos).',
             ], 422);
         }
 

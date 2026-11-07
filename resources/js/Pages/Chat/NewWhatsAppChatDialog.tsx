@@ -23,6 +23,16 @@ interface NewWhatsAppChatDialogProps {
 
 const API_BASE = (import.meta.env.VITE_APP_URL || "").replace(/\/$/, "")
 
+// Formato internacional: + código de país y número (entre 8 y 15 dígitos). Ej.: +5492612155672 o +14155552671.
+const MANUAL_PHONE_PATTERN = /^\+[1-9]\d{7,14}$/
+
+// Deja solo el "+" inicial y los dígitos.
+const formatManualPhone = (raw: string) => {
+  const trimmed = raw.trimStart()
+  const digits = trimmed.replace(/\D+/g, "")
+  return `${trimmed.startsWith("+") ? "+" : ""}${digits}`
+}
+
 export default function NewWhatsAppChatDialog({ open, onOpenChange, onOpened }: NewWhatsAppChatDialogProps) {
   const [mode, setMode] = useState<"agenda" | "manual">("agenda")
   const [agendaQuery, setAgendaQuery] = useState("")
@@ -81,7 +91,15 @@ export default function NewWhatsAppChatDialog({ open, onOpenChange, onOpened }: 
   const selectedAgenda = agendaContacts.find((contact) => contact.id === selectedAgendaId) ?? null
   const phoneToOpen = mode === "agenda" ? (selectedAgenda?.phone ?? "") : manualPhone
   const nameToOpen = mode === "agenda" ? (selectedAgenda?.formatted_name ?? "") : manualName
-  const canSubmit = !submitting && phoneToOpen.trim() !== ""
+  const manualPhoneValid = MANUAL_PHONE_PATTERN.test(manualPhone)
+  const manualDigits = manualPhone.replace(/\D/g, "").length
+  // Cada regla tiene su punto: verde si se cumple, rojo si no (una vez que se empezó a escribir).
+  const phoneRules = [
+    { label: "Empieza con +, ej: (+549)", ok: manualPhone.startsWith("+") },
+    { label: "Código de país (no empieza con 0)", ok: /^\+[1-9]/.test(manualPhone) },
+    { label: `Entre 8 y 15 dígitos (hay ${manualDigits})`, ok: manualDigits >= 8 && manualDigits <= 15 },
+  ]
+  const canSubmit = !submitting && (mode === "agenda" ? phoneToOpen.trim() !== "" : manualPhoneValid)
 
   const openChat = async () => {
     if (!canSubmit) return
@@ -190,14 +208,33 @@ export default function NewWhatsAppChatDialog({ open, onOpenChange, onOpened }: 
         ) : (
           <div className="space-y-3">
             <div className="space-y-1.5">
-              <Label htmlFor="new-chat-phone">Teléfono (con código de país)</Label>
+              <Label htmlFor="new-chat-phone">Teléfono de WhatsApp</Label>
               <Input
                 id="new-chat-phone"
                 value={manualPhone}
-                onChange={(event) => setManualPhone(event.target.value)}
-                placeholder="5493811234567"
+                onChange={(event) => setManualPhone(formatManualPhone(event.target.value))}
+                placeholder="+5492612155672"
+                inputMode="tel"
+                autoComplete="off"
                 disabled={submitting}
+                aria-invalid={manualPhone !== "" && !manualPhoneValid}
               />
+              <ul className="space-y-1" aria-label="Requisitos del número">
+                {phoneRules.map((rule) => (
+                  <li key={rule.label} className="flex items-center gap-2 text-xs">
+                    <span
+                      className={cn(
+                        "h-2 w-2 shrink-0 rounded-full",
+                        manualPhone === "" ? "bg-slate-300" : rule.ok ? "bg-emerald-500" : "bg-red-500",
+                      )}
+                      aria-hidden="true"
+                    />
+                    <span className={cn(manualPhone === "" ? "text-slate-500" : rule.ok ? "text-emerald-700" : "text-red-600")}>
+                      {rule.label}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="new-chat-name">Nombre (opcional)</Label>
