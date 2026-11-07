@@ -13,6 +13,7 @@ use App\Services\AuditService;
 use App\Services\BotInactivityService;
 use App\Services\CampaignImportService;
 use App\Services\ChatAssignmentService;
+use App\Support\WhatsAppPhone;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
@@ -122,7 +123,7 @@ class ChatController extends Controller
         ]);
 
         $actor = $request->user();
-        $phone = $campaignImportService->normalizePhone($validated['phone']);
+        $phone = WhatsAppPhone::canonical($validated['phone']);
 
         if (! $campaignImportService->isValidPhone($phone)) {
             return response()->json([
@@ -132,13 +133,11 @@ class ChatController extends Controller
         }
 
         $name = trim((string) ($validated['name'] ?? ''));
-        $contact = Contact::query()->firstOrCreate(
-            ['whatsapp_id' => $phone],
-            ['name' => $name !== '' ? $name : $phone],
-        );
+        $contacts = Contact::query()->whereIn('whatsapp_id', WhatsAppPhone::variants($phone))->get();
 
+        // Si el número ya tiene un chat abierto de WhatsApp, con cualquier formato, se abre ese.
         $existing = Chat::query()
-            ->where('contact_id', $contact->id)
+            ->whereIn('contact_id', $contacts->pluck('id'))
             ->where('status', 'open')
             ->where(fn ($query) => $query->where('channel', 'whatsapp')->orWhereNull('channel'))
             ->first();
@@ -146,6 +145,11 @@ class ChatController extends Controller
         if ($existing) {
             return response()->json(['ok' => true, 'chat_id' => (int) $existing->id, 'reused' => true]);
         }
+
+        // Contacto existente con cualquier formato, o uno nuevo con la forma canónica.
+        $contact = $contacts->firstWhere('whatsapp_id', $phone)
+            ?? $contacts->first()
+            ?? Contact::query()->create(['whatsapp_id' => $phone, 'name' => $name !== '' ? $name : $phone]);
 
         $chat = Chat::query()->create([
             'contact_id' => $contact->id,
