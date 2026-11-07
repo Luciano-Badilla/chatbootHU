@@ -41,6 +41,16 @@ const getAttachmentKind = (file: File): "image" | "video" | "audio" | "document"
 const SESSION_KEY = "hu.webchat.resume_token"
 const WEBCHAT_WELCOME_SEEN_KEY = "hu.webchat.welcome_seen"
 const publicAssetUrl = (path: string) => path.startsWith("http") ? path : `${import.meta.env.VITE_APP_URL}${path}`
+// WhatsApp abre los enlaces en su navegador interno, que no comparte el almacenamiento
+// ni las notificaciones del navegador del teléfono. Estas URLs piden abrir la misma página afuera.
+const WHATSAPP_IN_APP_BROWSER_PATTERN = /WhatsApp/i
+const externalBrowserUrl = (href: string, isIos: boolean) => {
+  const url = new URL(href)
+  const target = `${url.host}${url.pathname}${url.search}`
+  return isIos
+    ? `x-safari-https://${target}`
+    : `intent://${target}#Intent;scheme=https;action=android.intent.action.VIEW;end`
+}
 
 function WebchatMessagesLoader() {
   const placeholders = [
@@ -320,6 +330,9 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   const [notificationStatusLoaded, setNotificationStatusLoaded] = useState(false)
   const [welcomeModalOpen, setWelcomeModalOpen] = useState(false)
   const [isIos, setIsIos] = useState(false)
+  const [inAppBrowserLink, setInAppBrowserLink] = useState<{ href: string; openUrl: string } | null>(null)
+  const [inAppGateDismissed, setInAppGateDismissed] = useState(false)
+  const [inAppLinkCopied, setInAppLinkCopied] = useState(false)
   const [showIosInstallHelp, setShowIosInstallHelp] = useState(false)
   const [isClosingIosInstallHelp, setIsClosingIosInstallHelp] = useState(false)
   const [infoSheetOpen, setInfoSheetOpen] = useState(false)
@@ -611,7 +624,12 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   }, [token])
 
   useEffect(() => {
-    setIsIos(/iPad|iPhone|iPod/.test(navigator.userAgent))
+    const userAgent = navigator.userAgent
+    const ios = /iPad|iPhone|iPod/.test(userAgent)
+    setIsIos(ios)
+    setInAppBrowserLink(WHATSAPP_IN_APP_BROWSER_PATTERN.test(userAgent)
+      ? { href: window.location.href, openUrl: externalBrowserUrl(window.location.href, ios) }
+      : null)
   }, [])
 
   useEffect(() => {
@@ -1453,6 +1471,16 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   const sharedMedia = messages.filter((message) => ["image", "video", "audio", "document"].includes(message.message_type ?? "text")).slice(-12).reverse()
   const hasOperatorMessages = messages.some((message) => message.sender_subtype === "operator")
 
+  const copyWebchatLink = async () => {
+    if (!inAppBrowserLink) return
+    try {
+      await navigator.clipboard.writeText(inAppBrowserLink.href)
+      setInAppLinkCopied(true)
+    } catch {
+      toast.error("No pudimos copiar el enlace. Seleccionalo y copialo manualmente.")
+    }
+  }
+
   return (
     <main className="h-[100dvh] overflow-hidden bg-[#f4f7fa] p-0 font-sans text-slate-800 sm:p-5 lg:p-7">
       <StartupCurtain
@@ -1675,6 +1703,22 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
             <p className="mt-2 text-center text-[10px] leading-4 text-slate-500">Al usar este canal, se aplica nuestra <a className="font-semibold text-[#003f73] underline underline-offset-2" href="/politica-de-privacidad">Política de privacidad</a>.</p>
           </div></form>
         </>}
+        <WebchatModal open={Boolean(inAppBrowserLink) && !inAppGateDismissed} className="p-5" cardClassName="w-full max-w-[420px]">
+          <div role="dialog" aria-modal="true" aria-labelledby="webchat-in-app-title" className="w-full rounded-[28px] border border-white/70 bg-white p-6 text-slate-800 shadow-[0_28px_90px_rgba(0,25,50,0.3)] sm:p-7">
+            <span className="grid h-12 w-12 place-items-center rounded-2xl bg-[#e8f0f6] text-[#003f73]"><ArrowUpRight className="h-5 w-5" /></span>
+            <h2 id="webchat-in-app-title" className="mt-4 text-xl font-bold tracking-tight text-slate-900">Abrí el chat en tu navegador</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-600">Estás viendo esta página dentro de WhatsApp. Para retomar la conversación más tarde y recibir avisos de respuesta, abrila en Chrome o Safari.</p>
+            {inAppBrowserLink ? <a href={inAppBrowserLink.openUrl} className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-[#003f73] px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-[#003461]"><ArrowUpRight className="h-4 w-4" />{isIos ? "Abrir en Safari" : "Abrir en el navegador"}</a> : null}
+            <div className="mt-4">
+              <p className="mb-1.5 text-xs font-semibold text-slate-500">Si no se abre, copiá el enlace y pegalo en tu navegador</p>
+              <div className="flex items-center gap-2">
+                <input readOnly value={inAppBrowserLink?.href ?? ""} onFocus={(event) => event.currentTarget.select()} aria-label="Enlace del webchat" className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600" />
+                <button type="button" onClick={() => void copyWebchatLink()} className="shrink-0 rounded-xl border border-[#003f73]/20 bg-[#e8f0f6] px-3 py-2 text-xs font-bold text-[#003f73] transition hover:bg-[#dcebf3]">{inAppLinkCopied ? "Copiado" : "Copiar"}</button>
+              </div>
+            </div>
+            <button type="button" onClick={() => setInAppGateDismissed(true)} className="mt-4 w-full rounded-xl px-4 py-2 text-xs font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-700">Seguir en WhatsApp</button>
+          </div>
+        </WebchatModal>
       </section>
     </main>
   )
