@@ -16,6 +16,7 @@ use App\Models\WebchatReferral;
 use App\Models\WhatsAppTemplate;
 use App\Services\AuditService;
 use App\Services\BotInactivityService;
+use App\Services\CampaignImportService;
 use App\Services\CampaignMetricsService;
 use App\Services\ChatAssignmentService;
 use App\Services\WhatsAppTemplateMessageService;
@@ -46,6 +47,7 @@ class WhatsAppController extends Controller
         private readonly ChatAssignmentService $chatAssignmentService,
         private readonly EmailHtmlSanitizer $emailHtmlSanitizer,
         private readonly WhatsAppTemplateMessageService $templateMessageService,
+        private readonly CampaignImportService $campaignImportService,
     ) {}
 
     public function verify(Request $request)
@@ -1597,6 +1599,15 @@ class WhatsAppController extends Controller
             ],
         );
 
+        $campaignId = $this->recordIndividualCampaign(
+            $chat,
+            $template,
+            $variables,
+            $response->json('messages.0.id'),
+            $message->body,
+            $actor,
+        );
+
         $this->publishOutgoingMessage($chat, $message);
 
         return response()->json([
@@ -1612,6 +1623,7 @@ class WhatsAppController extends Controller
                 'status' => $message->status,
                 'timestamp' => $message->created_at->toIso8601String(),
             ],
+            'campaign_id' => $campaignId,
         ]);
     }
 
@@ -1674,6 +1686,60 @@ class WhatsAppController extends Controller
         } catch (\Throwable $e) {
             Log::error('MQTT Error (sendTemplate): '.$e->getMessage());
         }
+    }
+
+    /**
+     * Registra el envío individual como una campaña de un solo destinatario: así aparece en la lista de campañas
+     * y el webhook de estados actualiza entregado/leído por whatsapp_message_id.
+     * Va en una transacción para no dejar un borrador si algo falla.
+     */
+    private function recordIndividualCampaign(
+        Chat $chat,
+        WhatsAppTemplate $template,
+        array $variables,
+        ?string $whatsappMessageId,
+        string $renderedBody,
+        ?User $actor,
+    ): ?int {
+        $contact = $chat->contact;
+        $now = now();
+        $name = Str::limit('Campaña individual · '.($contact?->name ?: $contact?->whatsapp_id).' · '.$now->format('d/m/Y H:i'), 160, '');
+
+        try {
+            $campaignId = DB::transaction(function () use ($chat, $template, $variables, $whatsappMessageId, $renderedBody, $actor, $contact, $name, $now) {
+                $campaign = $this->campaignImportService->create(
+                    $name,
+                    $template,
+                    'Chat #'.$chat->id,
+                    [['row_number' => 2, 'phone' => $contact->whatsapp_id, 'values' => $variables]],
+                    $actor,
+                );
+
+                $campaign->recipients()->firstOrFail()->update([
+                    'status' => 'sent',
+                    'attempts' => 1,
+                    'sent_at' => $now,
+                    'whatsapp_message_id' => $whatsappMessageId,
+                    'rendered_body' => $renderedBody,
+                ]);
+
+                $campaign->update([
+                    'status' => 'completed',
+                    'started_at' => $now,
+                    'finished_at' => $now,
+                ]);
+
+                return (int) $campaign->id;
+            });
+        } catch (\Throwable $e) {
+            Log::error('No se pudo registrar la campaña individual: '.$e->getMessage(), ['chat_id' => $chat->id]);
+
+            return null;
+        }
+
+        app(CampaignMetricsService::class)->refresh($campaignId);
+
+        return $campaignId;
     }
 
     private function formatPhoneNumber($number)

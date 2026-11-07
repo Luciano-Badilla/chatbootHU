@@ -1176,6 +1176,15 @@ export default function ChatInfo({
     }
   }
 
+  // Lo que cambia en el chat tras archivarlo: lo usan el botón "Finalizar atención" (admin) y el envío de la campaña.
+  const adminArchiveUpdate = (result: any) => ({
+    operator_id: null, operator_name: null, bot_enabled: true,
+    status: result.chat.status, attention_status: result.chat.attention_status,
+    assigned_at: result.chat.assigned_at, closed_at: result.chat.closed_at, closed_by: result.chat.closed_by,
+    bot_flow_id: result.chat.bot_flow_id, bot_flow_name: result.chat.bot_flow_name, bot_node_id: result.chat.bot_node_id, bot_node_name: result.chat.bot_node_name,
+    bot_step: result.chat.bot_step, bot_state: result.chat.bot_state,
+  })
+
   const changeLifecycle = () => {
     if (!chat?.id) return
     setAdminModalError(null)
@@ -1187,13 +1196,7 @@ export default function ChatInfo({
       requiresReason: false,
       onSuccess: (result) => {
         if (!result?.chat) return
-        onChatUpdated?.({
-          operator_id: null, operator_name: null, bot_enabled: true,
-          status: result.chat.status, attention_status: result.chat.attention_status,
-          assigned_at: result.chat.assigned_at, closed_at: result.chat.closed_at, closed_by: result.chat.closed_by,
-          bot_flow_id: result.chat.bot_flow_id, bot_flow_name: result.chat.bot_flow_name, bot_node_id: result.chat.bot_node_id, bot_node_name: result.chat.bot_node_name,
-          bot_step: result.chat.bot_step, bot_state: result.chat.bot_state,
-        })
+        onChatUpdated?.(adminArchiveUpdate(result))
         setAdminMessage("Chat archivado y bot reactivado.")
       },
     })
@@ -1307,23 +1310,37 @@ export default function ChatInfo({
 
       setTemplateDialogOpen(false)
 
-      if (!canFinishAttention || !onFinishAttention) {
-        toast.success("Campaña individual enviada.")
-        return
-      }
-
-      // Finalizar la atención usa el mismo flujo que el botón "Finalizar atención".
-      let finished = false
+      // Misma acción que el botón de Acciones que ve el usuario: admin archiva el chat;
+      // si no, el operador asignado finaliza la atención.
+      let attention: "archived" | "finished" | "none" | "failed" = "none"
       try {
-        finished = (await onFinishAttention()) === true
+        if (canAdminister) {
+          if (chat.status === "open") {
+            const archiveRes = await fetch(`${API_BASE}/api/chats/${chat.id}/archive`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Accept: "application/json" },
+              body: JSON.stringify({}),
+            })
+            const archivePayload = await archiveRes.json().catch(() => ({}))
+            if (!archiveRes.ok || !archivePayload?.chat) throw new Error(archivePayload.message || "No se pudo archivar el chat.")
+            onChatUpdated?.(adminArchiveUpdate(archivePayload))
+            attention = "archived"
+          }
+        } else if (canFinishAttention && onFinishAttention) {
+          attention = (await onFinishAttention()) === true ? "finished" : "failed"
+        }
       } catch {
-        finished = false
+        attention = "failed"
       }
 
-      if (finished) {
-        toast.success("Campaña individual enviada y atención finalizada.")
+      if (attention === "archived") {
+        toast.success("Campaña individual enviada. Chat archivado y bot reactivado.")
+      } else if (attention === "finished") {
+        toast.success("Campaña individual enviada. Atención finalizada.")
+      } else if (attention === "failed") {
+        toast.error("La campaña se envió, pero no se pudo finalizar la atención. Usá el botón Finalizar atención.")
       } else {
-        toast.error("La plantilla se envió, pero no se pudo finalizar la atención. Usá Finalizar atención.")
+        toast.success("Campaña individual enviada. No había atención activa para finalizar.")
       }
     } catch (error) {
       setTemplateError(error instanceof Error ? error.message : "No se pudo enviar la plantilla.")
@@ -1503,15 +1520,19 @@ export default function ChatInfo({
       </Dialog>
 
       <Dialog open={templateDialogOpen} onOpenChange={(open) => { if (!sendingTemplate) setTemplateDialogOpen(open) }}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="flex max-h-[92vh] max-w-4xl flex-col overflow-hidden border-[#dbe5ef]">
           <DialogHeader>
             <DialogTitle className="text-[#013765]">Campaña individual</DialogTitle>
-            <DialogDescription>
-              Se enviará una plantilla de WhatsApp solo a este chat. Completá las variables a mano.
+            <DialogDescription className="text-[#013765]/70">
+              Enviá una plantilla aprobada solo a {chat.name}. Completá las variables a mano.
               {canFinishAttention ? " Al enviarla, la atención de este chat se finaliza y el bot vuelve a activarse." : ""}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
+            <div className="grid gap-5 md:grid-cols-[0.9fr_1.1fr]">
+            <div className="space-y-4 rounded-xl border border-[#dbe5ef] bg-slate-50/60 p-4">
+              <div className="space-y-2">
+                <Label>Plantilla aprobada</Label>
             {templatesLoading ? (
               <div className="flex items-center gap-2 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Cargando plantillas...</div>
             ) : whatsappTemplates.length === 0 ? (
@@ -1526,6 +1547,7 @@ export default function ChatInfo({
                 </SelectContent>
               </Select>
             )}
+              </div>
             {selectedTemplate ? (
               <>
                 {selectedTemplate.variable_keys.map((key, index) => (
@@ -1546,6 +1568,8 @@ export default function ChatInfo({
                 ))}
               </>
             ) : null}
+            {templateError ? <p role="alert" className="text-xs font-medium text-red-600">{templateError}</p> : null}
+            </div>
             <div>
               <Label>Vista previa en WhatsApp</Label>
               <div className="mt-2 flex justify-center rounded-xl border border-[#dbe5ef] bg-white p-3">
@@ -1585,20 +1609,19 @@ export default function ChatInfo({
               </div>
               <p className="mt-1.5 text-[11px] text-slate-500">Las variables sin completar se muestran como {"{{n}}"}.</p>
             </div>
-            {templateError ? <p role="alert" className="text-xs font-medium text-red-600">{templateError}</p> : null}
+            </div>
           </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" disabled={sendingTemplate} onClick={() => setTemplateDialogOpen(false)}>Cancelar</Button>
+          <div className="flex shrink-0 justify-end gap-2 border-t border-slate-100 bg-background pt-4">
+            <Button variant="outline" className="border-[#dbe5ef] text-[#013765] hover:bg-[#013765]/[0.04]" disabled={sendingTemplate} onClick={() => setTemplateDialogOpen(false)}>Cancelar</Button>
             <Button
-              type="button"
-              className="bg-[#013765] hover:bg-[#024a8a]"
+              className="bg-[#013765] text-white hover:bg-[#024a8a]"
               disabled={sendingTemplate || !selectedTemplate || selectedTemplate.variable_keys.some((key) => (templateVariables[key] ?? "").trim() === "")}
               onClick={sendTemplateToChat}
             >
               {sendingTemplate ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              {sendingTemplate ? "Enviando…" : "Enviar plantilla"}
+              {sendingTemplate ? "Enviando…" : "Enviar campaña"}
             </Button>
-          </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
 
