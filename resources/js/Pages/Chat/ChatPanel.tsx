@@ -397,8 +397,8 @@ export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore =
     }
   }
 
-  const finishSelectedAttention = async () => {
-    if (!selectedChatId || !canFinishAttention) return
+  const finishSelectedAttention = async (): Promise<boolean> => {
+    if (!selectedChatId || !canFinishAttention) return false
     setFinishingAttention(true)
     try {
       const res = await fetch(`${import.meta.env.VITE_APP_URL}/api/chats/${selectedChatId}/finish-operator-attention`, {
@@ -407,13 +407,14 @@ export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore =
       })
       if (!res.ok) {
         console.error("Error finalizando atencion del operador:", await res.text())
-        return
+        return false
       }
       setChats((current) => current.map((chat) => String(chat.id) === String(selectedChatId)
         ? { ...chat, status: "closed", attention_status: "archived", bot_enabled: true, operator_id: null, operator_name: null, closed_by: "operator", closed_at: new Date().toISOString() }
         : chat,
       ))
       setSelectedChatId("")
+      return true
     } finally {
       setFinishingAttention(false)
     }

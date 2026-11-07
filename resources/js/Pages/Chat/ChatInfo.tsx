@@ -10,7 +10,9 @@ import { Button } from "shadcn/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "shadcn/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "shadcn/components/ui/dialog"
 import { Input } from "shadcn/components/ui/input"
+import { Label } from "shadcn/components/ui/label"
 import mqtt from "mqtt"
+import { toast } from "sonner"
 import { mqttWebSocketUrl } from "../../lib/mqtt"
 import { formatDistanceToNow, format, parseISO } from "date-fns"
 import { es } from "date-fns/locale"
@@ -30,7 +32,7 @@ interface ChatInfoProps {
   currentUserId?: number | null
   takingChat?: boolean
   finishingAttention?: boolean
-  onFinishAttention?: () => void
+  onFinishAttention?: () => Promise<boolean> | void
   onTakeChat?: () => void
   onChatUpdated?: (update: Partial<Chat>) => void
 }
@@ -404,7 +406,6 @@ export default function ChatInfo({
   const [templateVariables, setTemplateVariables] = useState<Record<string, string>>({})
   const [templateError, setTemplateError] = useState<string | null>(null)
   const [sendingTemplate, setSendingTemplate] = useState(false)
-  const [templateSentMessage, setTemplateSentMessage] = useState<string | null>(null)
   const selectedTemplate = whatsappTemplates.find((template) => String(template.id) === selectedTemplateId) ?? null
   const [auditLogs, setAuditLogs] = useState<Array<{ id: number; event: string; description: string; created_at?: string; causer_name?: string | null; properties?: any }>>([])
   const [auditOpen, setAuditOpen] = useState(false)
@@ -430,7 +431,6 @@ export default function ChatInfo({
     setSelectedTemplateId("")
     setTemplateVariables({})
     setTemplateError(null)
-    setTemplateSentMessage(null)
     knownMessageIdsRef.current = new Set()
   }, [chat?.id])
 
@@ -1266,7 +1266,6 @@ export default function ChatInfo({
     setSelectedTemplateId("")
     setTemplateVariables({})
     setTemplateError(null)
-    setTemplateSentMessage(null)
     setTemplatesLoading(true)
 
     try {
@@ -1307,7 +1306,25 @@ export default function ChatInfo({
       if (!response.ok) throw new Error(payload.error || payload.message || "No se pudo enviar la plantilla.")
 
       setTemplateDialogOpen(false)
-      setTemplateSentMessage(`Plantilla «${selectedTemplate.name}» enviada.`)
+
+      if (!canFinishAttention || !onFinishAttention) {
+        toast.success("Campaña individual enviada.")
+        return
+      }
+
+      // Finalizar la atención usa el mismo flujo que el botón "Finalizar atención".
+      let finished = false
+      try {
+        finished = (await onFinishAttention()) === true
+      } catch {
+        finished = false
+      }
+
+      if (finished) {
+        toast.success("Campaña individual enviada y atención finalizada.")
+      } else {
+        toast.error("La plantilla se envió, pero no se pudo finalizar la atención. Usá Finalizar atención.")
+      }
     } catch (error) {
       setTemplateError(error instanceof Error ? error.message : "No se pudo enviar la plantilla.")
     } finally {
@@ -1488,8 +1505,11 @@ export default function ChatInfo({
       <Dialog open={templateDialogOpen} onOpenChange={(open) => { if (!sendingTemplate) setTemplateDialogOpen(open) }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle className="text-[#013765]">Enviar plantilla de WhatsApp</DialogTitle>
-            <DialogDescription>Se enviará solo a este chat. Completá las variables a mano.</DialogDescription>
+            <DialogTitle className="text-[#013765]">Campaña individual</DialogTitle>
+            <DialogDescription>
+              Se enviará una plantilla de WhatsApp solo a este chat. Completá las variables a mano.
+              {canFinishAttention ? " Al enviarla, la atención de este chat se finaliza y el bot vuelve a activarse." : ""}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             {templatesLoading ? (
@@ -1524,12 +1544,47 @@ export default function ChatInfo({
                     />
                   </div>
                 ))}
-                <div className="rounded-lg bg-slate-50 px-3 py-2">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Vista previa</p>
-                  <p className="mt-1 break-words text-sm text-slate-800">{renderTemplatePreview(selectedTemplate, templateVariables)}</p>
-                </div>
               </>
             ) : null}
+            <div>
+              <Label>Vista previa en WhatsApp</Label>
+              <div className="mt-2 flex justify-center rounded-xl border border-[#dbe5ef] bg-white p-3">
+                <div className="flex h-[310px] w-full max-w-[220px] flex-col overflow-hidden rounded-[1.5rem] border-[5px] border-slate-800 bg-white shadow-md">
+                  <div className="flex h-5 shrink-0 items-center justify-between bg-white px-3 text-[8px] font-semibold text-slate-700">
+                    <span>9:41</span>
+                    <span className="flex items-end gap-0.5" aria-hidden="true">
+                      <span className="h-1 w-1 rounded-full bg-slate-700" />
+                      <span className="h-1.5 w-1 rounded-full bg-slate-700" />
+                      <span className="h-2 w-1 rounded-full bg-slate-700" />
+                      <span className="ml-1 h-2 w-4 rounded-sm border border-slate-500"><span className="m-[1px] block h-1 w-2.5 rounded-[1px] bg-emerald-500" /></span>
+                    </span>
+                  </div>
+                  <div className="flex h-11 shrink-0 items-center gap-2 bg-[#075e54] px-2.5 text-white">
+                    <div className="grid h-7 w-7 place-items-center rounded-full bg-white/15 text-[9px] font-bold">HU</div>
+                    <div className="min-w-0">
+                      <p className="truncate text-[10px] font-semibold">Hospital Universitario</p>
+                      <p className="text-[8px] text-white/75">en línea</p>
+                    </div>
+                  </div>
+                  <div className="flex min-h-0 flex-1 flex-col justify-end gap-2 overflow-y-auto p-2.5" style={{ backgroundColor: "#efeae2", backgroundImage: "radial-gradient(#d7d0c5 0.65px, transparent 0.65px)", backgroundSize: "12px 12px" }}>
+                    {selectedTemplate ? (
+                      <div className="max-w-[96%] self-start rounded-xl rounded-bl-sm bg-white px-2.5 py-2 shadow-sm">
+                        <p className="whitespace-pre-wrap break-words text-[10px] leading-[1.4] text-slate-800">{renderTemplatePreview(selectedTemplate, templateVariables)}</p>
+                        <p className="mt-1 text-right text-[8px] leading-none text-slate-400">9:41</p>
+                      </div>
+                    ) : (
+                      <p className="rounded-xl bg-white/90 px-2 py-2 text-center text-[10px] text-slate-500 shadow-sm">Seleccioná una plantilla para ver el mensaje.</p>
+                    )}
+                  </div>
+                  <div className="flex h-9 shrink-0 items-center gap-1.5 bg-white px-2">
+                    <span className="grid h-6 w-6 place-items-center rounded-full border border-slate-200 text-sm leading-none text-slate-400">+</span>
+                    <span className="flex-1 rounded-full border border-slate-200 px-2.5 py-1 text-[8px] text-slate-400">Mensaje</span>
+                    <span className="grid h-6 w-6 place-items-center rounded-full bg-[#075e54] text-[8px] text-white">➤</span>
+                  </div>
+                </div>
+              </div>
+              <p className="mt-1.5 text-[11px] text-slate-500">Las variables sin completar se muestran como {"{{n}}"}.</p>
+            </div>
             {templateError ? <p role="alert" className="text-xs font-medium text-red-600">{templateError}</p> : null}
           </div>
           <DialogFooter>
@@ -1720,10 +1775,9 @@ export default function ChatInfo({
                   onClick={openTemplateDialog}
                 >
                   <Send className="mr-1.5 h-3.5 w-3.5" />
-                  Enviar plantilla
+                  Campaña individual
                 </Button>
               )}
-              {templateSentMessage ? <p role="status" className="mt-2 text-xs font-medium text-emerald-700">{templateSentMessage}</p> : null}
               {canTakeChat && (
                 <Button
                   type="button"
