@@ -73,6 +73,7 @@ Route::middleware($sessionAuthenticated)->group(function () {
     Route::post('/message/send-media', [WhatsAppController::class, 'sendMedia']);
     Route::post('/message/send-contact', [WhatsAppController::class, 'sendContact']);
     Route::post('/message/send-location', [WhatsAppController::class, 'sendLocation']);
+    Route::post('/message/send-template', [WhatsAppController::class, 'sendTemplate'])->middleware('permission:can_manage_campaigns');
     Route::get('/location/search', [LocationController::class, 'search']);
     Route::get('/location/reverse', [LocationController::class, 'reverse']);
     Route::post('/chats/{chat}/bot', [WhatsAppController::class, 'updateBotStatus'])->middleware('permission:can_toggle_bot');
@@ -102,6 +103,7 @@ Route::middleware($sessionAuthenticated)->group(function () {
         Route::post('/campaigns/{campaign}/launch', [CampaignController::class, 'launch']);
         Route::post('/campaigns/{campaign}/pause', [CampaignController::class, 'pause']);
         Route::post('/campaigns/{campaign}/retry-failed', [CampaignController::class, 'retryFailed']);
+        Route::get('/campaign-templates', [WhatsAppTemplateController::class, 'apiIndex']);
         Route::post('/campaign-templates/sync', [WhatsAppTemplateController::class, 'sync']);
     });
 

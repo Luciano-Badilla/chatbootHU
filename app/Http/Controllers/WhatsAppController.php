@@ -13,10 +13,12 @@ use App\Models\MessageStatus;
 use App\Models\SystemSetting;
 use App\Models\User;
 use App\Models\WebchatReferral;
+use App\Models\WhatsAppTemplate;
 use App\Services\AuditService;
 use App\Services\BotInactivityService;
 use App\Services\CampaignMetricsService;
 use App\Services\ChatAssignmentService;
+use App\Services\WhatsAppTemplateMessageService;
 use App\Support\SpecialtyMatcher;
 use App\Support\EmailHtmlSanitizer;
 use Illuminate\Http\Client\Pool;
@@ -43,6 +45,7 @@ class WhatsAppController extends Controller
         private readonly AuditService $auditService,
         private readonly ChatAssignmentService $chatAssignmentService,
         private readonly EmailHtmlSanitizer $emailHtmlSanitizer,
+        private readonly WhatsAppTemplateMessageService $templateMessageService,
     ) {}
 
     public function verify(Request $request)
@@ -1493,6 +1496,184 @@ class WhatsAppController extends Controller
         }
 
         return response()->json(['ok' => true, 'message' => $message]);
+    }
+
+    /**
+     * Envía una plantilla aprobada de WhatsApp a un chat individual con las variables completadas a mano.
+     * Usa WhatsAppTemplateMessageService, la misma lógica que las campañas, y guarda el envío en el historial del chat.
+     */
+    public function sendTemplate(Request $request)
+    {
+        $validated = $request->validate([
+            'chat_id' => 'required|integer|exists:chats,id',
+            'whatsapp_template_id' => 'required|integer|exists:whatsapp_templates,id',
+            'variables' => 'present|array',
+            'variables.*' => 'nullable|string|max:1000',
+        ]);
+
+        $chat = Chat::with('contact')->findOrFail($validated['chat_id']);
+        $template = WhatsAppTemplate::query()->findOrFail($validated['whatsapp_template_id']);
+        $contact = $chat->contact;
+        $actor = $request->user();
+
+        if (($chat->channel ?? 'whatsapp') !== 'whatsapp') {
+            return response()->json(['error' => 'Las plantillas solo se pueden enviar a chats de WhatsApp.'], 422);
+        }
+
+        if (! $contact || ! $contact->whatsapp_id) {
+            return response()->json(['error' => 'Contacto sin whatsapp_id'], 422);
+        }
+
+        if (strtoupper($template->status) !== 'APPROVED' || ! $template->is_supported) {
+            return response()->json(['error' => 'Solo se pueden enviar plantillas aprobadas por Meta y compatibles.'], 422);
+        }
+
+        $variables = [];
+        foreach ($template->variable_keys ?? [] as $key) {
+            // Meta rechaza saltos de línea y tabulaciones dentro de los parámetros de texto.
+            $value = trim((string) preg_replace('/\s+/u', ' ', (string) ($validated['variables'][$key] ?? '')));
+
+            if ($value === '') {
+                return response()->json(['error' => "Completá la variable {$key} antes de enviar."], 422);
+            }
+
+            $variables[$key] = $value;
+        }
+
+        try {
+            $response = $this->templateMessageService->send(
+                $template,
+                $this->formatPhoneNumber($contact->whatsapp_id),
+                $variables,
+            );
+        } catch (\RuntimeException $e) {
+            // Configuración de WhatsApp incompleta: el mensaje es seguro de mostrar al operador.
+            return $this->templateSendFailed($chat, $actor, $template, $e->getMessage(), $e->getMessage());
+        } catch (\Throwable $e) {
+            Log::error('Error de conexión (sendTemplate): '.$e->getMessage(), ['chat_id' => $chat->id]);
+
+            return $this->templateSendFailed($chat, $actor, $template, 'Error enviando plantilla a WhatsApp', $e->getMessage());
+        }
+
+        if ($response->failed()) {
+            Log::error('API Error (sendTemplate): '.$response->body(), ['chat_id' => $chat->id]);
+
+            return $this->templateSendFailed(
+                $chat,
+                $actor,
+                $template,
+                'Error enviando plantilla a WhatsApp',
+                (string) ($response->json('error.message') ?? $response->body()),
+            );
+        }
+
+        $message = Message::create([
+            'chat_id' => $chat->id,
+            'sender' => 'user',
+            'sender_subtype' => 'operator',
+            'operator_name' => $actor?->name,
+            'bot_node_type' => null,
+            'interactive_options' => null,
+            'message_type' => 'template',
+            'body' => $template->render($variables),
+            'template_name' => $template->name,
+            'template_language' => $template->language,
+            'status' => 'sent',
+            'whatsapp_message_id' => $response->json('messages.0.id'),
+        ]);
+
+        $this->auditService->recordMessageAction(
+            'template_sent',
+            'Envio plantilla de WhatsApp',
+            $chat,
+            $actor,
+            $message,
+            [
+                'meta' => [
+                    'template' => $template->name,
+                    'language' => $template->language,
+                    'message_id' => $message->id,
+                ],
+            ],
+        );
+
+        $this->publishOutgoingMessage($chat, $message);
+
+        return response()->json([
+            'ok' => true,
+            'message' => [
+                'id' => $message->id,
+                'chat_id' => $message->chat_id,
+                'sender' => $message->sender,
+                'sender_subtype' => $message->sender_subtype,
+                'operator_name' => $message->operator_name,
+                'body' => $message->body,
+                'message_type' => $message->message_type,
+                'status' => $message->status,
+                'timestamp' => $message->created_at->toIso8601String(),
+            ],
+        ]);
+    }
+
+    private function templateSendFailed(Chat $chat, ?User $actor, WhatsAppTemplate $template, string $userMessage, string $detail)
+    {
+        $this->auditService->recordMessageAction(
+            'template_send_failed',
+            'Fallo al enviar plantilla de WhatsApp al chat',
+            $chat,
+            $actor,
+            null,
+            [
+                'meta' => [
+                    'template' => $template->name,
+                    'language' => $template->language,
+                    'error' => Str::limit($detail, 500),
+                ],
+            ],
+        );
+
+        return response()->json(['error' => $userMessage], 500);
+    }
+
+    /**
+     * Publica por MQTT un mensaje saliente del operador para que el chat abierto y la barra lateral se actualicen.
+     */
+    private function publishOutgoingMessage(Chat $chat, Message $message): void
+    {
+        $contact = $chat->contact;
+
+        try {
+            $mqtt = new MqttClient($this->mqttHost(), 1883, 'laravel_send_template_'.uniqid());
+            $mqtt->connect($this->mqttConnectionSettings());
+
+            $mqtt->publish('sidebar/chat', json_encode([
+                'chat_id' => $chat->id,
+                'name' => $contact?->name ?? 'Desconocido',
+                'avatar' => $contact?->profile_pic,
+                'lastMessage' => $message->body,
+                'timestamp' => $message->created_at->toIso8601String(),
+            ]), 0);
+
+            $mqtt->publish("chat/{$chat->id}", json_encode([
+                'chat_id' => $chat->id,
+                'message_id' => $message->id,
+                'sender' => $message->sender,
+                'sender_subtype' => $message->sender_subtype,
+                'operator_name' => $message->operator_name,
+                'bot_node_type' => $message->bot_node_type,
+                'interactive_options' => $message->interactive_options,
+                'body' => $message->body,
+                'message_type' => $message->message_type,
+                'media_url' => null,
+                'media_name' => null,
+                'status' => $message->status,
+                'timestamp' => $message->created_at?->toIso8601String(),
+            ]), 0);
+
+            $mqtt->disconnect();
+        } catch (\Throwable $e) {
+            Log::error('MQTT Error (sendTemplate): '.$e->getMessage());
+        }
     }
 
     private function formatPhoneNumber($number)

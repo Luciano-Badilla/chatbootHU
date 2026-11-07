@@ -987,6 +987,7 @@ export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore =
           )}
           canAdminister={Boolean(props?.auth?.permissions?.can_administer_chats)}
           canViewAudit={Boolean(props?.auth?.permissions?.can_view_chat_audit)}
+          canSendTemplate={Boolean(props?.auth?.permissions?.can_manage_campaigns)}
           canFinishAttention={canFinishAttention}
           canTakeChat={canTakeChat}
           currentUserId={authUser?.id ?? null}

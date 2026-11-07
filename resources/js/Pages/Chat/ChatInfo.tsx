@@ -3,12 +3,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react"
 import { Gallery, Item } from "react-photoswipe-gallery"
 import "photoswipe/dist/photoswipe.css"
-import { AudioLines, Code, Contact, Database, Zap, User, Image as ImageIcon, FileText, Video, Bot, Clock3, MessageSquare, PowerOff, Power, Loader2, RotateCcw, ChevronDown, ChevronRight, ExternalLink, MapPin, X, Users, History, CheckCircle2 } from "lucide-react"
+import { AudioLines, Code, Contact, Database, Zap, User, Image as ImageIcon, FileText, Video, Bot, Clock3, MessageSquare, PowerOff, Power, Loader2, RotateCcw, ChevronDown, ChevronRight, ExternalLink, MapPin, X, Users, History, CheckCircle2, Send } from "lucide-react"
 import { Avatar } from "shadcn/components/ui/avatar"
 import { Badge } from "shadcn/components/ui/badge"
 import { Button } from "shadcn/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "shadcn/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "shadcn/components/ui/dialog"
+import { Input } from "shadcn/components/ui/input"
 import mqtt from "mqtt"
 import { mqttWebSocketUrl } from "../../lib/mqtt"
 import { formatDistanceToNow, format, parseISO } from "date-fns"
@@ -23,6 +24,7 @@ interface ChatInfoProps {
   canAdminister?: boolean
   canReassign?: boolean
   canViewAudit?: boolean
+  canSendTemplate?: boolean
   canFinishAttention?: boolean
   canTakeChat?: boolean
   currentUserId?: number | null
@@ -80,6 +82,14 @@ type PendingAdminAction = {
   body: Record<string, unknown>
   requiresReason: boolean
   onSuccess: (payload: any) => void
+}
+
+type WhatsAppTemplateOption = {
+  id: number
+  name: string
+  language: string
+  body: string
+  variable_keys: string[]
 }
 
 const API_BASE = (import.meta.env.VITE_APP_URL || "").replace(/\/$/, "")
@@ -204,6 +214,7 @@ export default function ChatInfo({
   canAdminister = false,
   canReassign = false,
   canViewAudit = false,
+  canSendTemplate = false,
   canFinishAttention = false,
   canTakeChat = false,
   currentUserId = null,
@@ -214,6 +225,8 @@ export default function ChatInfo({
   onChatUpdated,
 }: ChatInfoProps) {
   const canUseBotControls = canToggleBot && chat?.status !== "closed"
+  // Plantillas: solo en chats de WhatsApp (nunca webchat) y solo si el operador puede escribir en el chat.
+  const canSendTemplateToChat = canSendTemplate && !readOnly && (chat?.channel ?? "whatsapp") === "whatsapp"
   const [contactAvatarFailed, setContactAvatarFailed] = useState(false)
 
   // ---------------------------
@@ -384,6 +397,15 @@ export default function ChatInfo({
   const [reassignmentReason, setReassignmentReason] = useState("")
   const [lastReassignmentReason, setLastReassignmentReason] = useState<string | null>(null)
   const [finishAttentionOpen, setFinishAttentionOpen] = useState(false)
+  const [templateDialogOpen, setTemplateDialogOpen] = useState(false)
+  const [whatsappTemplates, setWhatsappTemplates] = useState<WhatsAppTemplateOption[]>([])
+  const [templatesLoading, setTemplatesLoading] = useState(false)
+  const [selectedTemplateId, setSelectedTemplateId] = useState("")
+  const [templateVariables, setTemplateVariables] = useState<Record<string, string>>({})
+  const [templateError, setTemplateError] = useState<string | null>(null)
+  const [sendingTemplate, setSendingTemplate] = useState(false)
+  const [templateSentMessage, setTemplateSentMessage] = useState<string | null>(null)
+  const selectedTemplate = whatsappTemplates.find((template) => String(template.id) === selectedTemplateId) ?? null
   const [auditLogs, setAuditLogs] = useState<Array<{ id: number; event: string; description: string; created_at?: string; causer_name?: string | null; properties?: any }>>([])
   const [auditOpen, setAuditOpen] = useState(false)
   const [auditLoading, setAuditLoading] = useState(false)
@@ -404,6 +426,11 @@ export default function ChatInfo({
     setAuditOpen(false)
     setAuditLogs([])
     setAuditSearch("")
+    setTemplateDialogOpen(false)
+    setSelectedTemplateId("")
+    setTemplateVariables({})
+    setTemplateError(null)
+    setTemplateSentMessage(null)
     knownMessageIdsRef.current = new Set()
   }, [chat?.id])
 
@@ -1222,6 +1249,72 @@ export default function ChatInfo({
     }
   }
 
+  // ---------------------------
+  // Plantillas de WhatsApp (envío manual a este chat)
+  // ---------------------------
+  const renderTemplatePreview = (template: WhatsAppTemplateOption, values: Record<string, string>) =>
+    template.body.replace(/\{\{\s*(\d+)\s*\}\}/g, (placeholder, position: string) => {
+      const key = template.variable_keys[Number(position) - 1]
+      const value = key ? (values[key] ?? "").trim() : ""
+      return value !== "" ? value : placeholder
+    })
+
+  const openTemplateDialog = async () => {
+    if (!chat?.id || !canSendTemplateToChat) return
+
+    setTemplateDialogOpen(true)
+    setSelectedTemplateId("")
+    setTemplateVariables({})
+    setTemplateError(null)
+    setTemplateSentMessage(null)
+    setTemplatesLoading(true)
+
+    try {
+      const response = await fetch(`${API_BASE}/api/campaign-templates`, { headers: { Accept: "application/json" } })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.message || "No se pudieron cargar las plantillas.")
+      setWhatsappTemplates(Array.isArray(payload.templates) ? payload.templates : [])
+    } catch (error) {
+      setTemplateError(error instanceof Error ? error.message : "No se pudieron cargar las plantillas.")
+    } finally {
+      setTemplatesLoading(false)
+    }
+  }
+
+  const sendTemplateToChat = async () => {
+    if (!chat?.id || !selectedTemplate || sendingTemplate) return
+
+    const variables: Record<string, string> = {}
+    for (const key of selectedTemplate.variable_keys) {
+      const value = (templateVariables[key] ?? "").trim()
+      if (!value) {
+        setTemplateError("Completá todas las variables antes de enviar.")
+        return
+      }
+      variables[key] = value
+    }
+
+    setSendingTemplate(true)
+    setTemplateError(null)
+
+    try {
+      const response = await fetch(`${API_BASE}/api/message/send-template`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ chat_id: chat.id, whatsapp_template_id: selectedTemplate.id, variables }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || payload.message || "No se pudo enviar la plantilla.")
+
+      setTemplateDialogOpen(false)
+      setTemplateSentMessage(`Plantilla «${selectedTemplate.name}» enviada.`)
+    } catch (error) {
+      setTemplateError(error instanceof Error ? error.message : "No se pudo enviar la plantilla.")
+    } finally {
+      setSendingTemplate(false)
+    }
+  }
+
   const filteredAuditLogs = auditLogs.filter((entry) => {
     const query = auditSearch.trim().toLowerCase()
     if (!query) return true
@@ -1392,6 +1485,68 @@ export default function ChatInfo({
         </DialogContent>
       </Dialog>
 
+      <Dialog open={templateDialogOpen} onOpenChange={(open) => { if (!sendingTemplate) setTemplateDialogOpen(open) }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-[#013765]">Enviar plantilla de WhatsApp</DialogTitle>
+            <DialogDescription>Se enviará solo a este chat. Completá las variables a mano.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {templatesLoading ? (
+              <div className="flex items-center gap-2 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Cargando plantillas...</div>
+            ) : whatsappTemplates.length === 0 ? (
+              <p className="text-sm text-slate-600">No hay plantillas aprobadas disponibles. Podés sincronizarlas desde Campañas.</p>
+            ) : (
+              <Select value={selectedTemplateId} onValueChange={(value) => { setSelectedTemplateId(value); setTemplateVariables({}); setTemplateError(null) }} disabled={sendingTemplate}>
+                <SelectTrigger><SelectValue placeholder="Seleccioná una plantilla" /></SelectTrigger>
+                <SelectContent>
+                  {whatsappTemplates.map((template) => (
+                    <SelectItem key={template.id} value={String(template.id)}>{template.name} · {template.language}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            {selectedTemplate ? (
+              <>
+                {selectedTemplate.variable_keys.map((key, index) => (
+                  <div key={key} className="space-y-1">
+                    <label htmlFor={`template-variable-${index}`} className="text-xs font-medium text-slate-700">
+                      {`Variable {{${index + 1}}}`}
+                      {key !== `variable_${index + 1}` ? <span className="ml-1 font-normal text-slate-400">({key})</span> : null}
+                    </label>
+                    <Input
+                      id={`template-variable-${index}`}
+                      value={templateVariables[key] ?? ""}
+                      onChange={(event) => setTemplateVariables((prev) => ({ ...prev, [key]: event.target.value }))}
+                      maxLength={1000}
+                      disabled={sendingTemplate}
+                      placeholder="Escribí el valor"
+                    />
+                  </div>
+                ))}
+                <div className="rounded-lg bg-slate-50 px-3 py-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Vista previa</p>
+                  <p className="mt-1 break-words text-sm text-slate-800">{renderTemplatePreview(selectedTemplate, templateVariables)}</p>
+                </div>
+              </>
+            ) : null}
+            {templateError ? <p role="alert" className="text-xs font-medium text-red-600">{templateError}</p> : null}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={sendingTemplate} onClick={() => setTemplateDialogOpen(false)}>Cancelar</Button>
+            <Button
+              type="button"
+              className="bg-[#013765] hover:bg-[#024a8a]"
+              disabled={sendingTemplate || !selectedTemplate || selectedTemplate.variable_keys.some((key) => (templateVariables[key] ?? "").trim() === "")}
+              onClick={sendTemplateToChat}
+            >
+              {sendingTemplate ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {sendingTemplate ? "Enviando…" : "Enviar plantilla"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={auditOpen} onOpenChange={setAuditOpen}>
         <DialogContent className="max-h-[85vh] max-w-2xl overflow-hidden border-slate-300 bg-slate-50 p-0">
           <DialogHeader className="border-b border-[#013765] bg-[#013765] px-6 py-4 text-white">
@@ -1521,7 +1676,7 @@ export default function ChatInfo({
           )}
 
           {/* Acciones */}
-          {(canUseBotControls || canFinishAttention || canTakeChat || (canReassign && chat.status === "open") || (canAdminister && (chat.status === "open" || chat.status === "closed"))) && (
+          {(canUseBotControls || canSendTemplateToChat || canFinishAttention || canTakeChat || (canReassign && chat.status === "open") || (canAdminister && (chat.status === "open" || chat.status === "closed"))) && (
             <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3">
               <h4 className="mb-3 flex items-center gap-2 font-medium text-slate-800">
                 <Zap className="h-4 w-4 text-[#013765]" />
@@ -1556,6 +1711,19 @@ export default function ChatInfo({
                 </div>
               )}
               {botActionMessage ? <p role="alert" className="mt-2 text-xs text-red-600">{botActionMessage}</p> : null}
+              {canSendTemplateToChat && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="mt-2 w-full border-[#013765] bg-[#013765] text-white hover:bg-[#024a8a] hover:text-white"
+                  onClick={openTemplateDialog}
+                >
+                  <Send className="mr-1.5 h-3.5 w-3.5" />
+                  Enviar plantilla
+                </Button>
+              )}
+              {templateSentMessage ? <p role="status" className="mt-2 text-xs font-medium text-emerald-700">{templateSentMessage}</p> : null}
               {canTakeChat && (
                 <Button
                   type="button"
