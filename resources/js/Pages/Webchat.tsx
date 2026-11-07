@@ -331,7 +331,6 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   const [welcomeModalOpen, setWelcomeModalOpen] = useState(false)
   const [isIos, setIsIos] = useState(false)
   const [inAppBrowserLink, setInAppBrowserLink] = useState<{ href: string; openUrl: string } | null>(null)
-  const [inAppGateDismissed, setInAppGateDismissed] = useState(false)
   const [inAppLinkCopied, setInAppLinkCopied] = useState(false)
   const [showIosInstallHelp, setShowIosInstallHelp] = useState(false)
   const [isClosingIosInstallHelp, setIsClosingIosInstallHelp] = useState(false)
@@ -1703,11 +1702,11 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
             <p className="mt-2 text-center text-[10px] leading-4 text-slate-500">Al usar este canal, se aplica nuestra <a className="font-semibold text-[#003f73] underline underline-offset-2" href="/politica-de-privacidad">Política de privacidad</a>.</p>
           </div></form>
         </>}
-        <WebchatModal open={Boolean(inAppBrowserLink) && !inAppGateDismissed} className="p-5" cardClassName="w-full max-w-[420px]">
+        <WebchatModal open={Boolean(inAppBrowserLink)} className="p-5" cardClassName="w-full max-w-[420px]">
           <div role="dialog" aria-modal="true" aria-labelledby="webchat-in-app-title" className="w-full rounded-[28px] border border-white/70 bg-white p-6 text-slate-800 shadow-[0_28px_90px_rgba(0,25,50,0.3)] sm:p-7">
             <span className="grid h-12 w-12 place-items-center rounded-2xl bg-[#e8f0f6] text-[#003f73]"><ArrowUpRight className="h-5 w-5" /></span>
             <h2 id="webchat-in-app-title" className="mt-4 text-xl font-bold tracking-tight text-slate-900">Abrí el chat en tu navegador</h2>
-            <p className="mt-2 text-sm leading-6 text-slate-600">Estás viendo esta página dentro de WhatsApp. Para retomar la conversación más tarde y recibir avisos de respuesta, abrila en Chrome o Safari.</p>
+            <p className="mt-2 text-sm leading-6 text-slate-600">Para continuar la conversación y recibir avisos de respuesta, abrila en Chrome o Safari desde tu teléfono.</p>
             {inAppBrowserLink ? <a href={inAppBrowserLink.openUrl} className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-[#003f73] px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-[#003461]"><ArrowUpRight className="h-4 w-4" />{isIos ? "Abrir en Safari" : "Abrir en el navegador"}</a> : null}
             <div className="mt-4">
               <p className="mb-1.5 text-xs font-semibold text-slate-500">Si no se abre, copiá el enlace y pegalo en tu navegador</p>
@@ -1716,7 +1715,6 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
                 <button type="button" onClick={() => void copyWebchatLink()} className="shrink-0 rounded-xl border border-[#003f73]/20 bg-[#e8f0f6] px-3 py-2 text-xs font-bold text-[#003f73] transition hover:bg-[#dcebf3]">{inAppLinkCopied ? "Copiado" : "Copiar"}</button>
               </div>
             </div>
-            <button type="button" onClick={() => setInAppGateDismissed(true)} className="mt-4 w-full rounded-xl px-4 py-2 text-xs font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-700">Seguir en WhatsApp</button>
           </div>
         </WebchatModal>
       </section>
