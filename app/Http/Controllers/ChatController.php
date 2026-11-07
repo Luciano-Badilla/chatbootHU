@@ -14,6 +14,7 @@ use App\Services\BotInactivityService;
 use App\Services\ChatAssignmentService;
 use App\Support\WhatsAppPhone;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
 use PhpMqtt\Client\MqttClient;
@@ -110,9 +111,9 @@ class ChatController extends Controller
     }
 
     /**
-     * Abre un chat nuevo de WhatsApp para un número (desde la agenda o a mano).
-     * Si el número ya tiene un chat abierto, lo devuelve sin reasignarlo.
-     * Si no, lo crea asignado a quien lo abre, con el bot desactivado.
+     * Abre el chat de WhatsApp de un número (desde la agenda o a mano).
+     * Un contacto tiene un solo chat, igual que en el webhook: si ya existe se usa ese.
+     * Si está archivado se reabre, asignado a quien lo abre. Solo se crea un chat si el contacto nunca tuvo uno.
      */
     public function openWhatsAppChat(Request $request)
     {
@@ -132,39 +133,70 @@ class ChatController extends Controller
         }
 
         $name = trim((string) ($validated['name'] ?? ''));
-        $contacts = Contact::query()->whereIn('whatsapp_id', WhatsAppPhone::variants($phone))->get();
 
-        // Si el número ya tiene un chat abierto de WhatsApp, con cualquier formato, se abre ese.
-        $existing = Chat::query()
-            ->whereIn('contact_id', $contacts->pluck('id'))
-            ->where('status', 'open')
-            ->where(fn ($query) => $query->where('channel', 'whatsapp')->orWhereNull('channel'))
-            ->first();
+        $result = DB::transaction(function () use ($phone, $name, $actor) {
+            // Bloquea los contactos del número: dos aperturas simultáneas no pueden crear dos chats.
+            $contacts = Contact::query()->whereIn('whatsapp_id', WhatsAppPhone::variants($phone))->lockForUpdate()->get();
+            $contact = $contacts->firstWhere('whatsapp_id', $phone)
+                ?? $contacts->first()
+                ?? Contact::query()->create(['whatsapp_id' => $phone, 'name' => $name !== '' ? $name : $phone]);
 
-        if ($existing) {
-            return response()->json(['ok' => true, 'chat_id' => (int) $existing->id, 'reused' => true]);
+            $contactIds = $contacts->pluck('id')->push($contact->id)->unique()->values()->all();
+
+            // Abierto si lo hay; si no, el primero que tuvo el contacto.
+            $chat = Chat::query()
+                ->whereIn('contact_id', $contactIds)
+                ->where(fn ($query) => $query->where('channel', 'whatsapp')->orWhereNull('channel'))
+                ->orderByRaw("CASE WHEN status = 'open' THEN 0 ELSE 1 END")
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->first();
+
+            if ($chat && $chat->status === 'open') {
+                return ['chat' => $chat, 'reused' => true, 'reopened' => false];
+            }
+
+            if ($chat) {
+                // Archivado: se reabre el mismo chat, asignado a quien lo abre, con el bot desactivado.
+                $chat->fill([
+                    'status' => 'open',
+                    'attention_status' => 'assigned',
+                    'operator_id' => $actor?->id,
+                    'last_operator_id' => $actor?->id,
+                    'assigned_at' => now(),
+                    'bot_enabled' => false,
+                    'closed_at' => null,
+                    'closed_by' => null,
+                    'closed_by_user_id' => null,
+                ])->save();
+
+                return ['chat' => $chat, 'reused' => true, 'reopened' => true];
+            }
+
+            $chat = Chat::query()->create([
+                'contact_id' => $contact->id,
+                'channel' => 'whatsapp',
+                'title' => $contact->name ?: $phone,
+                'status' => 'open',
+                'attention_status' => 'assigned',
+                'bot_enabled' => false,
+                'operator_id' => $actor?->id,
+                'last_operator_id' => $actor?->id,
+                'assigned_at' => now(),
+            ]);
+
+            return ['chat' => $chat, 'reused' => false, 'reopened' => false];
+        });
+
+        $chat = $result['chat'];
+
+        if ($result['reused'] && ! $result['reopened']) {
+            return response()->json(['ok' => true, 'chat_id' => (int) $chat->id, 'reused' => true, 'reopened' => false]);
         }
 
-        // Contacto existente con cualquier formato, o uno nuevo con la forma canónica.
-        $contact = $contacts->firstWhere('whatsapp_id', $phone)
-            ?? $contacts->first()
-            ?? Contact::query()->create(['whatsapp_id' => $phone, 'name' => $name !== '' ? $name : $phone]);
-
-        $chat = Chat::query()->create([
-            'contact_id' => $contact->id,
-            'channel' => 'whatsapp',
-            'title' => $contact->name ?: $phone,
-            'status' => 'open',
-            'attention_status' => 'assigned',
-            'bot_enabled' => false,
-            'operator_id' => $actor?->id,
-            'last_operator_id' => $actor?->id,
-            'assigned_at' => now(),
-        ]);
-
         $this->auditService->recordChatAction(
-            'chat_opened',
-            'Abrió un chat nuevo de WhatsApp',
+            $result['reopened'] ? 'chat_reopened' : 'chat_opened',
+            $result['reopened'] ? 'Reabrió el chat existente del contacto' : 'Abrió un chat nuevo de WhatsApp',
             $chat,
             $actor,
             [
@@ -187,7 +219,12 @@ class ChatController extends Controller
         ]);
         $this->publishBotStatus((int) $chat->id, false);
 
-        return response()->json(['ok' => true, 'chat_id' => (int) $chat->id, 'reused' => false]);
+        return response()->json([
+            'ok' => true,
+            'chat_id' => (int) $chat->id,
+            'reused' => $result['reused'],
+            'reopened' => $result['reopened'],
+        ]);
     }
 
     public function operatorsForPanel()

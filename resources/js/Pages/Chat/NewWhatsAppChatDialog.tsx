@@ -119,7 +119,9 @@ export default function NewWhatsAppChatDialog({ open, onOpenChange, onOpened }: 
         throw new Error(String(firstValidationError ?? payload?.message ?? "No se pudo abrir el chat."))
       }
 
-      if (payload.reused) {
+      if (payload.reopened) {
+        toast.message("Ese contacto ya tenía un chat. Lo reabrimos y quedó asignado a vos.")
+      } else if (payload.reused) {
         toast.message("Ese número ya tenía un chat abierto. Se abrió ese chat.")
       }
 
