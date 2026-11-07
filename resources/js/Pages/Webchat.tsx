@@ -43,7 +43,13 @@ const WEBCHAT_WELCOME_SEEN_KEY = "hu.webchat.welcome_seen"
 const publicAssetUrl = (path: string) => path.startsWith("http") ? path : `${import.meta.env.VITE_APP_URL}${path}`
 // WhatsApp abre los enlaces en su navegador interno, que no comparte el almacenamiento
 // ni las notificaciones del navegador del teléfono. Estas URLs piden abrir la misma página afuera.
-const WHATSAPP_IN_APP_BROWSER_PATTERN = /WhatsApp/i
+// Detecta WhatsApp por su User-Agent y, como respaldo, los navegadores embebidos de Android (wv)
+// y de iOS (WKWebView, que no incluye el token "Safari").
+const isInAppBrowser = (userAgent: string, isIos: boolean) => {
+  if (/WhatsApp/i.test(userAgent)) return true
+  if (/Android/i.test(userAgent) && /\bwv\b/.test(userAgent)) return true
+  return isIos && !/Safari/.test(userAgent)
+}
 const externalBrowserUrl = (href: string, isIos: boolean) => {
   const url = new URL(href)
   const target = `${url.host}${url.pathname}${url.search}`
@@ -625,8 +631,11 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
   useEffect(() => {
     const userAgent = navigator.userAgent
     const ios = /iPad|iPhone|iPod/.test(userAgent)
+    // La app instalada en la pantalla de inicio (iOS/Android) ya es un navegador propio: no la bloqueamos.
+    const installedApp = (navigator as Navigator & { standalone?: boolean }).standalone === true
+      || window.matchMedia("(display-mode: standalone)").matches
     setIsIos(ios)
-    setInAppBrowserLink(WHATSAPP_IN_APP_BROWSER_PATTERN.test(userAgent)
+    setInAppBrowserLink(!installedApp && isInAppBrowser(userAgent, ios)
       ? { href: window.location.href, openUrl: externalBrowserUrl(window.location.href, ios) }
       : null)
   }, [])
