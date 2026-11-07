@@ -20,6 +20,7 @@ export type Chat = {
   lastMessage: string
   timestamp: string
   sidebar_timestamp?: string | null
+  last_user_message_at?: string | null
   unread: number
   online: boolean
   avatar?: string | null
@@ -221,6 +222,14 @@ export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore =
     nextOffsetRef.current = 0
     setHasMoreChats(false)
     void requestChatPage(filters, 0, false)
+  }, [requestChatPage])
+
+  // Chat nuevo de WhatsApp: se selecciona y se recarga la lista. El backend incluye el chat seleccionado aunque no cumpla los filtros.
+  const handleChatOpened = useCallback((chatId: number) => {
+    const id = String(chatId)
+    selectedChatIdRef.current = id
+    setSelectedChatId(id)
+    void requestChatPage(filtersRef.current, 0, false)
   }, [requestChatPage])
 
   const loadMoreChats = useCallback(() => {
@@ -696,6 +705,7 @@ export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore =
                   // Para la lista usamos el momento real en que llega al panel.
                   timestamp: new Date().toISOString(),
                   sidebar_timestamp: data.timestamp ?? null,
+                  last_user_message_at: data.last_user_message_at ?? c.last_user_message_at ?? null,
                   avatar: data.avatar ?? c.avatar ?? null,
                   bot_enabled: typeof data.bot_enabled === "boolean" ? data.bot_enabled : c.bot_enabled,
                   operator_id: data.operator_id ?? c.operator_id,
@@ -954,6 +964,8 @@ export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore =
           canViewAll={Boolean(props?.auth?.permissions?.can_view_all_chats)}
           currentOperatorId={authUser?.id ?? null}
           defaultChannelFilter={props?.chatPanel?.defaultChannelFilter ?? "all"}
+          canOpenChats={Boolean(props?.auth?.permissions?.can_manage_campaigns)}
+          onChatOpened={handleChatOpened}
         />
       </div>
 
@@ -967,6 +979,11 @@ export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore =
             selectedChat?.operator_name ?? null
           }
           readOnlyReason={readOnlyReason}
+          canSendCampaign={Boolean(props?.auth?.permissions?.can_manage_campaigns)}
+          canAdminister={Boolean(props?.auth?.permissions?.can_administer_chats)}
+          canFinishAttention={canFinishAttention}
+          onChatUpdated={(update) => setChats((current) => current.map((item) => String(item.id) === String(selectedChat?.id) ? { ...item, ...update } : item))}
+          onFinishAttention={finishSelectedAttention}
         />
       </div>
 

@@ -69,6 +69,7 @@ Route::middleware($sessionAuthenticated)->group(function () {
     Route::get('/chat-panel/operators', [ChatController::class, 'operatorsForPanel'])->middleware('permission:can_view_all_chats');
     Route::get('/chats/snapshot', [ChatController::class, 'snapshot']);
     Route::post('/chats/{chat}/open', [ChatController::class, 'open']);
+    Route::post('/chats/whatsapp', [ChatController::class, 'openWhatsAppChat'])->middleware('permission:can_manage_campaigns');
     Route::post('/message/send', [WhatsAppController::class, 'sendMessage']);
     Route::post('/message/send-media', [WhatsAppController::class, 'sendMedia']);
     Route::post('/message/send-contact', [WhatsAppController::class, 'sendContact']);

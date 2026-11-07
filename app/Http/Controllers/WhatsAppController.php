@@ -525,6 +525,8 @@ class WhatsAppController extends Controller
                 'avatar' => $contact->profile_pic,
                 'lastMessage' => $previewText,
                 'timestamp' => now()->utc()->toIso8601String(),
+                // Solo los mensajes entrantes del contacto traen esta fecha: abre o cierra la ventana de 24 h.
+                'last_user_message_at' => $chat->last_user_message_at?->toIso8601String(),
                 'status' => $chat->status,
                 'attention_status' => $chat->attention_status,
                 'bot_enabled' => (bool) $chat->bot_enabled,

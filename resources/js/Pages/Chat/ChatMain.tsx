@@ -15,6 +15,7 @@ import { cn } from "shadcn/lib/utils"
 import mqtt from "mqtt"
 import { mqttWebSocketUrl } from "../../lib/mqtt"
 import { toast } from "sonner"
+import CampaignIndividualDialog from "./CampaignIndividualDialog"
 import { format, isToday, isYesterday, parseISO } from "date-fns"
 import { es } from "date-fns/locale"
 import nspell from "nspell"
@@ -32,6 +33,11 @@ interface ChatMainProps {
   readOnly?: boolean
   readOnlyOperatorName?: string | null
   readOnlyReason?: "operator" | "bot" | null
+  canSendCampaign?: boolean
+  canAdminister?: boolean
+  canFinishAttention?: boolean
+  onChatUpdated?: (update: Partial<Chat>) => void
+  onFinishAttention?: () => Promise<boolean> | void
 }
 
 type PreviewMedia = {
@@ -341,6 +347,11 @@ export default function ChatMain({
   readOnly = false,
   readOnlyOperatorName = null,
   readOnlyReason = null,
+  canSendCampaign = false,
+  canAdminister = false,
+  canFinishAttention = false,
+  onChatUpdated,
+  onFinishAttention,
 }: ChatMainProps) {
   const [newMessage, setNewMessage] = useState("")
   const [messages, setMessages] = useState<Message[]>([])
@@ -352,6 +363,31 @@ export default function ChatMain({
   const [preview, setPreview] = useState<PreviewMedia | null>(null)
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
   const [highlightBlinkOn, setHighlightBlinkOn] = useState(true)
+  // Ventana de 24 h de WhatsApp: se mide desde el último mensaje del contacto (lista y MQTT).
+  const [lastInboundAt, setLastInboundAt] = useState<string | null>(chat?.last_user_message_at ?? null)
+  const [campaignDialogOpen, setCampaignDialogOpen] = useState(false)
+
+  useEffect(() => {
+    setLastInboundAt(chat?.last_user_message_at ?? null)
+  }, [chat?.id, chat?.last_user_message_at])
+
+  // Reloj de la ventana: un temporizador la cierra a la hora exacta, aunque nadie escriba.
+  const [clockNow, setClockNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!lastInboundAt) return
+    const remaining = new Date(lastInboundAt).getTime() + 24 * 60 * 60 * 1000 - Date.now()
+    if (remaining <= 0) {
+      setClockNow(Date.now())
+      return
+    }
+    const timer = window.setTimeout(() => setClockNow(Date.now()), remaining + 500)
+    return () => window.clearTimeout(timer)
+  }, [lastInboundAt])
+
+  const isWhatsAppChat = (chat?.channel ?? "whatsapp") === "whatsapp"
+  const inboundWindowOpen = lastInboundAt !== null && clockNow - new Date(lastInboundAt).getTime() < 24 * 60 * 60 * 1000
+  // Fuera de la ventana, WhatsApp solo admite plantillas: el campo de mensaje se reemplaza por "Seleccionar campaña".
+  const campaignOnlyComposer = Boolean(chat) && isWhatsAppChat && !readOnly && !inboundWindowOpen
   const [pendingMediaList, setPendingMediaList] = useState<PendingMedia[]>([])
   const [recordingAudio, setRecordingAudio] = useState(false)
   const [recordingSeconds, setRecordingSeconds] = useState(0)
@@ -807,6 +843,7 @@ export default function ChatMain({
           media_name: data.media_name ?? null,
         }
 
+        if (incoming.sender === "contact") setLastInboundAt(incoming.timestamp)
         setMessages((prev) => {
           const pendingStatus = pendingMessageStatusRef.current[String(incoming.id)]
           if (pendingStatus) {
@@ -2980,6 +3017,33 @@ export default function ChatMain({
             ))}
           </div>
         )}
+        {chat && canSendCampaign && isWhatsAppChat ? (
+          <CampaignIndividualDialog
+            open={campaignDialogOpen}
+            onOpenChange={setCampaignDialogOpen}
+            chat={chat}
+            canAdminister={canAdminister}
+            canFinishAttention={canFinishAttention}
+            onChatUpdated={onChatUpdated}
+            onFinishAttention={onFinishAttention}
+          />
+        ) : null}
+        {campaignOnlyComposer ? (
+          canSendCampaign ? (
+            <button
+              type="button"
+              onClick={() => setCampaignDialogOpen(true)}
+              className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#013765] px-4 py-3 text-sm font-bold text-white shadow-md shadow-[#013765]/20 transition hover:bg-[#024a8a]"
+            >
+              <Send className="h-4 w-4" />
+              Seleccionar campaña
+            </button>
+          ) : (
+            <p className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-center text-xs text-slate-500">
+              Fuera de la ventana de 24 horas. Solo se puede responder cuando el contacto escriba.
+            </p>
+          )
+        ) : (
         <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-1 shadow-sm transition focus-within:border-[#013765]/50 focus-within:ring-2 focus-within:ring-[#013765]/10">
           <input
             ref={fileInputRef}
@@ -3245,6 +3309,7 @@ export default function ChatMain({
             </Button>
           )}
         </div>
+        )}
       </div>
 
       {locationModalOpen && (

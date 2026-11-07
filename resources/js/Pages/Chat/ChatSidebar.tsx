@@ -2,7 +2,8 @@
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
 import { motion } from "framer-motion"
-import { Archive, Bot, Check, Clock3, Headset, MessagesSquare, Search, User, Users } from "lucide-react"
+import { Archive, Bot, Check, Clock3, Headset, MessagesSquare, Plus, Search, User, Users } from "lucide-react"
+import { Button } from "shadcn/components/ui/button"
 import { Input } from "shadcn/components/ui/input"
 import { Avatar } from "shadcn/components/ui/avatar"
 import { Badge } from "shadcn/components/ui/badge"
@@ -10,6 +11,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Popover, PopoverContent, PopoverTrigger } from "shadcn/components/ui/popover"
 import { cn } from "shadcn/lib/utils"
 import type { Chat } from "./ChatPanel"
+import NewWhatsAppChatDialog from "./NewWhatsAppChatDialog"
 import { formatDistanceToNow } from "date-fns"
 import { es } from "date-fns/locale"
 
@@ -55,6 +57,8 @@ interface ChatSidebarProps {
   canViewAll?: boolean
   currentOperatorId?: number | null
   defaultChannelFilter?: "all" | "whatsapp" | "webchat"
+  canOpenChats?: boolean
+  onChatOpened?: (chatId: number) => void
 }
 
 interface ChatFilterOperator {
@@ -255,8 +259,11 @@ export default function ChatSidebar({
   canViewAll = false,
   currentOperatorId = null,
   defaultChannelFilter = "all",
+  canOpenChats = false,
+  onChatOpened,
 }: ChatSidebarProps) {
   const [search, setSearch] = useState("")
+  const [newChatOpen, setNewChatOpen] = useState(false)
   const [statusFilters, setStatusFilters] = useState<Array<"bot" | "assigned" | "pending_assignment" | "archived">>(
     () => initialStatusFilters ?? (canViewAll ? [] : ["assigned"]),
   )
@@ -694,9 +701,22 @@ export default function ChatSidebar({
 
   return (
     <div className="flex flex-col h-full">
+      <NewWhatsAppChatDialog open={newChatOpen} onOpenChange={setNewChatOpen} onOpened={(chatId) => onChatOpened?.(chatId)} />
       <div className="p-4 border-b border-gray-300">
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-xl font-semibold text-foreground">Mensajes</h1>
+          {canOpenChats ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-8 gap-1.5 border-[#013765] bg-[#013765] px-2.5 text-white hover:bg-[#024a8a] hover:text-white"
+              onClick={() => setNewChatOpen(true)}
+            >
+              <Plus className="h-4 w-4" />
+              Nuevo chat
+            </Button>
+          ) : null}
         </div>
 
         <div className="relative">

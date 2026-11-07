@@ -5,11 +5,13 @@ namespace App\Http\Controllers;
 use Carbon\Carbon;
 use App\Jobs\SendChatEventWebPushNotification;
 use App\Models\Chat;
+use App\Models\Contact;
 use App\Models\Message;
 use App\Models\SystemSetting;
 use App\Models\User;
 use App\Services\AuditService;
 use App\Services\BotInactivityService;
+use App\Services\CampaignImportService;
 use App\Services\ChatAssignmentService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -105,6 +107,84 @@ class ChatController extends Controller
         );
 
         return response()->json($page);
+    }
+
+    /**
+     * Abre un chat nuevo de WhatsApp para un número (desde la agenda o a mano).
+     * Si el número ya tiene un chat abierto, lo devuelve sin reasignarlo.
+     * Si no, lo crea asignado a quien lo abre, con el bot desactivado.
+     */
+    public function openWhatsAppChat(Request $request, CampaignImportService $campaignImportService)
+    {
+        $validated = $request->validate([
+            'phone' => ['required', 'string', 'max:40'],
+            'name' => ['nullable', 'string', 'max:160'],
+        ]);
+
+        $actor = $request->user();
+        $phone = $campaignImportService->normalizePhone($validated['phone']);
+
+        if (! $campaignImportService->isValidPhone($phone)) {
+            return response()->json([
+                'ok' => false,
+                'message' => 'El teléfono debe incluir código de país y tener entre 10 y 15 dígitos.',
+            ], 422);
+        }
+
+        $name = trim((string) ($validated['name'] ?? ''));
+        $contact = Contact::query()->firstOrCreate(
+            ['whatsapp_id' => $phone],
+            ['name' => $name !== '' ? $name : $phone],
+        );
+
+        $existing = Chat::query()
+            ->where('contact_id', $contact->id)
+            ->where('status', 'open')
+            ->where(fn ($query) => $query->where('channel', 'whatsapp')->orWhereNull('channel'))
+            ->first();
+
+        if ($existing) {
+            return response()->json(['ok' => true, 'chat_id' => (int) $existing->id, 'reused' => true]);
+        }
+
+        $chat = Chat::query()->create([
+            'contact_id' => $contact->id,
+            'channel' => 'whatsapp',
+            'title' => $contact->name ?: $phone,
+            'status' => 'open',
+            'attention_status' => 'assigned',
+            'bot_enabled' => false,
+            'operator_id' => $actor?->id,
+            'last_operator_id' => $actor?->id,
+            'assigned_at' => now(),
+        ]);
+
+        $this->auditService->recordChatAction(
+            'chat_opened',
+            'Abrió un chat nuevo de WhatsApp',
+            $chat,
+            $actor,
+            [
+                'after' => [
+                    'operator_id' => $actor?->id,
+                    'attention_status' => 'assigned',
+                    'bot_enabled' => false,
+                ],
+            ],
+        );
+
+        $this->publishOperatorStatus((int) $chat->id, [
+            'chat_id' => (int) $chat->id,
+            'active' => true,
+            'operator_id' => $actor?->id,
+            'operator_name' => $actor?->name,
+            'status' => 'open',
+            'attention_status' => 'assigned',
+            'bot_enabled' => false,
+        ]);
+        $this->publishBotStatus((int) $chat->id, false);
+
+        return response()->json(['ok' => true, 'chat_id' => (int) $chat->id, 'reused' => false]);
     }
 
     public function operatorsForPanel()
@@ -774,6 +854,7 @@ class ChatController extends Controller
             'timestamp' => $chat->last_message_at
                 ? Carbon::parse($chat->last_message_at)->toIso8601String()
                 : null,
+            'last_user_message_at' => $chat->last_user_message_at?->toIso8601String(),
             'unread' => (int) ($chat->unread_count ?? 0),
             'online' => false,
             'avatar' => $chat->contact?->profile_pic,
