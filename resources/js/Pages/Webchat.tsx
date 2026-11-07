@@ -46,7 +46,8 @@ const publicAssetUrl = (path: string) => path.startsWith("http") ? path : `${imp
 // Detecta WhatsApp por su User-Agent y, como respaldo, los navegadores embebidos de Android (wv)
 // y de iOS (WKWebView, que no incluye el token "Safari").
 const isInAppBrowser = (userAgent: string, isIos: boolean) => {
-  if (/WhatsApp/i.test(userAgent)) return true
+  // WhatsApp en iPhone se identifica con "WAiOS/x.y.z" al final del User-Agent.
+  if (/WhatsApp|WAiOS/i.test(userAgent)) return true
   if (/Android/i.test(userAgent) && /\bwv\b/.test(userAgent)) return true
   return isIos && !/Safari/.test(userAgent)
 }
