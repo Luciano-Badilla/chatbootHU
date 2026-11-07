@@ -51,12 +51,15 @@ const isInAppBrowser = (userAgent: string, isIos: boolean) => {
   if (/Android/i.test(userAgent) && /\bwv\b/.test(userAgent)) return true
   return isIos && !/Safari/.test(userAgent)
 }
+// "ext=1" marca la página que ya se intentó abrir afuera, para no redirigirla de nuevo.
 const externalBrowserUrl = (href: string, isIos: boolean) => {
   const url = new URL(href)
+  url.searchParams.set("ext", "1")
   const target = `${url.host}${url.pathname}${url.search}`
-  return isIos
-    ? `x-safari-https://${target}`
-    : `intent://${target}#Intent;scheme=https;action=android.intent.action.VIEW;end`
+  if (isIos) return `x-safari-https://${target}`
+  // Si Android no puede abrir el intent, la misma página vuelve a cargarse en el navegador interno con ext=1.
+  const fallback = encodeURIComponent(url.href)
+  return `intent://${target}#Intent;scheme=https;action=android.intent.action.VIEW;S.browser_fallback_url=${fallback};end`
 }
 
 function WebchatMessagesLoader() {
@@ -635,10 +638,16 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     // La app instalada en la pantalla de inicio (iOS/Android) ya es un navegador propio: no la bloqueamos.
     const installedApp = (navigator as Navigator & { standalone?: boolean }).standalone === true
       || window.matchMedia("(display-mode: standalone)").matches
-    setIsIos(ios)
-    setInAppBrowserLink(!installedApp && isInAppBrowser(userAgent, ios)
+    const link = !installedApp && isInAppBrowser(userAgent, ios)
       ? { href: window.location.href, openUrl: externalBrowserUrl(window.location.href, ios) }
-      : null)
+      : null
+    setIsIos(ios)
+    setInAppBrowserLink(link)
+    // Redirige sola una vez al navegador del teléfono. Si el sistema o WhatsApp lo bloquea,
+    // la pantalla queda con el botón y el enlace para copiar.
+    if (link && !new URL(window.location.href).searchParams.has("ext")) {
+      window.location.assign(link.openUrl)
+    }
   }, [])
 
   useEffect(() => {
