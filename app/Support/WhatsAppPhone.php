@@ -40,6 +40,24 @@ class WhatsAppPhone
         return preg_match('/^[1-9]\d{7,14}$/', $canonical) === 1;
     }
 
+    /**
+     * Formas en las que Meta puede traer el mismo número argentino: con 549 (celular) o con 54 (sin el 9).
+     * El número se toma tal cual llega, sin agregar código de país.
+     */
+    public static function aliases(string $raw): array
+    {
+        $digits = preg_replace('/\D+/', '', $raw) ?? '';
+        $aliases = [$digits];
+
+        if (str_starts_with($digits, '549')) {
+            $aliases[] = '54'.substr($digits, 3);
+        } elseif (str_starts_with($digits, '54')) {
+            $aliases[] = '549'.substr($digits, 2);
+        }
+
+        return array_values(array_unique(array_filter($aliases)));
+    }
+
     /** Todas las formas con las que puede estar guardado el mismo número argentino. */
     public static function variants(string $canonical): array
     {

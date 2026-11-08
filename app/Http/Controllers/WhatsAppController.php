@@ -21,6 +21,7 @@ use App\Services\CampaignMetricsService;
 use App\Services\ChatAssignmentService;
 use App\Services\WhatsAppTemplateMessageService;
 use App\Support\SpecialtyMatcher;
+use App\Support\WhatsAppPhone;
 use App\Support\EmailHtmlSanitizer;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Request;
@@ -342,7 +343,7 @@ class WhatsAppController extends Controller
         $contactData = $value['contacts'][0] ?? null;
 
         if ($contactData) {
-            $contact = Contact::where('whatsapp_id', $contactData['wa_id'])->first();
+            $contact = $this->findWhatsAppContact((string) $contactData['wa_id']);
 
             if (! $contact) {
                 $contact = Contact::create([
@@ -358,14 +359,12 @@ class WhatsAppController extends Controller
                 $contact->save();
             }
         } else {
-            $contact = Contact::firstOrCreate(
-                ['whatsapp_id' => $from],
-                [
-                    'name' => null,
-                    'profile_pic' => null,
-                    'last_interaction_at' => now(),
-                ]
-            );
+            $contact = $this->findWhatsAppContact((string) $from) ?? Contact::create([
+                'whatsapp_id' => $from,
+                'name' => null,
+                'profile_pic' => null,
+                'last_interaction_at' => now(),
+            ]);
         }
 
         $contact->last_interaction_at = now();
@@ -1742,6 +1741,17 @@ class WhatsAppController extends Controller
         app(CampaignMetricsService::class)->refresh($campaignId);
 
         return $campaignId;
+    }
+
+    /**
+     * Busca el contacto por el número que trae Meta, aunque se haya guardado con otro formato (549 o 54).
+     * Así el paciente que escribe desde su celular cae en el mismo contacto que se creó desde Nuevo chat.
+     */
+    private function findWhatsAppContact(string $waId): ?Contact
+    {
+        $contacts = Contact::query()->whereIn('whatsapp_id', WhatsAppPhone::aliases($waId))->get();
+
+        return $contacts->firstWhere('whatsapp_id', $waId) ?? $contacts->first();
     }
 
     private function formatPhoneNumber($number)
