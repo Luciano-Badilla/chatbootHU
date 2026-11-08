@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\BotNode;
 use App\Models\StorageFile;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -186,21 +187,18 @@ class StorageUsageService
     /**
      * @return array{items: array<int, array<string, mixed>>, meta: array<string, int>}
      */
-    public function files(string $category, string $status, string $search, string $sort, int $page, int $perPage): array
-    {
-        $query = match ($status) {
-            'trashed' => StorageFile::onlyTrashed(),
-            'all' => StorageFile::withTrashed(),
-            default => StorageFile::query(),
-        };
-
-        if ($category !== '') {
-            $query->where('category', $category);
-        }
-
-        if ($search !== '') {
-            $query->where('path', 'like', '%'.$search.'%');
-        }
+    public function files(
+        string $category,
+        string $status,
+        string $search,
+        string $sort,
+        int $page,
+        int $perPage,
+        ?int $chatId = null,
+        ?string $from = null,
+        ?string $to = null,
+    ): array {
+        $query = $this->filteredQuery($category, $status, $search, $chatId, $from, $to);
 
         $query = $sort === 'recent'
             ? $query->orderByDesc('modified_at')->orderByDesc('id')
@@ -221,6 +219,182 @@ class StorageUsageService
                 'total' => $paginator->total(),
             ],
         ];
+    }
+
+    /**
+     * Filtros compartidos por la lista, la selección en lote y los duplicados.
+     * $from y $to son fechas Y-m-d sobre modified_at (ambas inclusive).
+     */
+    public function filteredQuery(
+        string $category,
+        string $status,
+        string $search,
+        ?int $chatId = null,
+        ?string $from = null,
+        ?string $to = null,
+    ): Builder {
+        $query = match ($status) {
+            'trashed' => StorageFile::onlyTrashed(),
+            'all' => StorageFile::withTrashed(),
+            default => StorageFile::query(),
+        };
+
+        if ($category !== '') {
+            $query->where('category', $category);
+        }
+
+        if ($search !== '') {
+            $query->where('path', 'like', '%'.$search.'%');
+        }
+
+        if ($chatId !== null) {
+            $query->where(function ($nested) use ($chatId) {
+                $nested
+                    ->where('path', 'like', "whatsapp/{$chatId}/%")
+                    ->orWhere('path', 'like', "webchat/{$chatId}/%");
+            });
+        }
+
+        if ($from !== null && $from !== '') {
+            $query->where('modified_at', '>=', $from.' 00:00:00');
+        }
+
+        if ($to !== null && $to !== '') {
+            $query->where('modified_at', '<=', $to.' 23:59:59');
+        }
+
+        return $query;
+    }
+
+    /**
+     * Archivos de chats agrupados por chat. La carpeta whatsapp/{id} o webchat/{id}
+     * es el id del chat, así que no hace falta parsear nada más.
+     *
+     * La antigüedad es la del último mensaje del chat (no la del archivo), porque
+     * es la que importa para la guarda de la historia clínica.
+     *
+     * @return array{items: array<int, array<string, mixed>>, meta: array<string, int>}
+     */
+    public function chats(int $inactiveMonths, string $sort, int $page, int $perPage, string $search = ''): array
+    {
+        $groups = [];
+
+        StorageFile::query()
+            ->where('category', self::CATEGORY_CHAT)
+            ->get(['path', 'size_bytes'])
+            ->each(function (StorageFile $file) use (&$groups) {
+                if (preg_match('#^(whatsapp|webchat)/(\d+)/#', $file->path, $matches) !== 1) {
+                    return;
+                }
+
+                $id = (int) $matches[2];
+                $groups[$id] ??= ['channel' => $matches[1], 'files' => 0, 'bytes' => 0];
+                $groups[$id]['files']++;
+                $groups[$id]['bytes'] += (int) $file->size_bytes;
+            });
+
+        $chats = [];
+        $lastActivity = [];
+
+        foreach (array_chunk(array_keys($groups), self::CHUNK_SIZE) as $chunk) {
+            DB::table('chats as c')
+                ->leftJoin('contacts as k', 'k.id', '=', 'c.contact_id')
+                ->whereIn('c.id', $chunk)
+                ->get(['c.id', 'c.channel', 'c.title', 'k.name', 'k.whatsapp_id'])
+                ->each(function ($row) use (&$chats) {
+                    $chats[(int) $row->id] = $row;
+                });
+
+            DB::table('messages')
+                ->whereIn('chat_id', $chunk)
+                ->groupBy('chat_id')
+                ->selectRaw('chat_id, MAX(created_at) as last_at')
+                ->get()
+                ->each(function ($row) use (&$lastActivity) {
+                    $lastActivity[(int) $row->chat_id] = $row->last_at;
+                });
+        }
+
+        $threshold = $inactiveMonths > 0 ? now()->subMonths($inactiveMonths) : null;
+        $rows = [];
+
+        foreach ($groups as $id => $group) {
+            $chat = $chats[$id] ?? null;
+            $last = isset($lastActivity[$id]) ? Carbon::parse($lastActivity[$id]) : null;
+
+            // Con filtro de inactividad, se dejan afuera los chats con actividad reciente.
+            if ($threshold !== null && $last !== null && $last->greaterThanOrEqualTo($threshold)) {
+                continue;
+            }
+
+            if ($search !== '' && ! $this->chatMatches($id, $chat, $search)) {
+                continue;
+            }
+
+            $rows[] = [
+                'chat_id' => $id,
+                'label' => $this->chatLabel($id, $chat),
+                'channel' => $chat->channel ?? $group['channel'],
+                'files' => $group['files'],
+                'bytes' => $group['bytes'],
+                'last_message_at' => $last?->toIso8601String(),
+                'months_inactive' => $last !== null ? (int) $last->diffInMonths(now()) : null,
+                'exists' => $chat !== null,
+            ];
+        }
+
+        usort($rows, $sort === 'oldest'
+            ? fn (array $a, array $b) => ($a['last_message_at'] ?? '0') <=> ($b['last_message_at'] ?? '0')
+            : fn (array $a, array $b) => $b['bytes'] <=> $a['bytes']);
+
+        $total = count($rows);
+
+        return [
+            'items' => array_values(array_slice($rows, ($page - 1) * $perPage, $perPage)),
+            'meta' => [
+                'current_page' => $page,
+                'last_page' => max(1, (int) ceil($total / $perPage)),
+                'per_page' => $perPage,
+                'total' => $total,
+            ],
+        ];
+    }
+
+    // Busca en el id, el nombre del contacto, el teléfono y el título del chat.
+    private function chatMatches(int $id, ?object $chat, string $search): bool
+    {
+        $needle = mb_strtolower($search);
+        $fields = [
+            (string) $id,
+            (string) ($chat->name ?? ''),
+            (string) ($chat->whatsapp_id ?? ''),
+            (string) ($chat->title ?? ''),
+        ];
+
+        foreach ($fields as $field) {
+            if ($field !== '' && str_contains(mb_strtolower($field), $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function chatLabel(int $id, ?object $chat): string
+    {
+        if ($chat === null) {
+            return "Chat eliminado #{$id}";
+        }
+
+        foreach ([$chat->name ?? null, $chat->whatsapp_id ?? null, $chat->title ?? null] as $candidate) {
+            $value = trim((string) $candidate);
+
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return "Chat #{$id}";
     }
 
     /**
@@ -251,7 +425,7 @@ class StorageUsageService
             'deleted_at' => optional($file->deleted_at)->toIso8601String(),
             'references' => $refs,
             'in_use' => $inUse,
-            'can_trash' => ! $trashed && $actionable && ! $inUse,
+            'can_trash' => ! $trashed && $actionable && $refs['bot_nodes'] === 0,
             'can_restore' => $trashed,
             'can_force_delete' => $trashed && $actionable && ! $inUse,
             'blocked_reason' => $this->blockedReason($actionable, $refs),
@@ -405,19 +579,13 @@ class StorageUsageService
             return 'Este tipo de archivo no se gestiona desde este módulo.';
         }
 
-        if ($refs['total'] === 0) {
-            return null;
-        }
-
-        $parts = [];
-        if ($refs['messages'] > 0) {
-            $parts[] = $refs['messages'].' mensaje(s)';
-        }
+        // Un archivo usado en mensajes se puede mandar a papelera: los mensajes quedan con aviso.
+        // Un archivo usado por un nodo del bot no, para no romper el flujo.
         if ($refs['bot_nodes'] > 0) {
-            $parts[] = $refs['bot_nodes'].' nodo(s) del bot';
+            return 'Lo usa '.$refs['bot_nodes'].' nodo(s) del bot. No se puede mandar a papelera.';
         }
 
-        return 'En uso por '.implode(' y ', $parts).'. Se bloquea para no romper el historial ni los flujos.';
+        return null;
     }
 
     /**

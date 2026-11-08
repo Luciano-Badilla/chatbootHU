@@ -12,6 +12,7 @@ import {
   EyeOff,
   ExternalLink,
   Globe2,
+  HardDrive,
   MessageCircle,
   Loader2,
   KeyRound,
@@ -125,7 +126,7 @@ interface SettingsPanelProps {
 
 type FlowSchedule = Record<"monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday", number | null>
 type WebchatSettings = { enabled: boolean; availability_mode: "always" | "schedule"; schedule_start: string; schedule_end: string; bot_available_outside_schedule: boolean; offline_message: string; title: string; subtitle: string; logo_url: string; flow_schedule: FlowSchedule; outside_schedule_flow_id: number | null }
-type SettingsSection = "general" | "integrations" | "bot" | "whatsapp" | "webchat" | "users"
+type SettingsSection = "general" | "integrations" | "bot" | "whatsapp" | "webchat" | "storage" | "users"
 
 const WEEKDAYS: Array<{ key: keyof FlowSchedule; label: string }> = [
   { key: "monday", label: "Lunes" },
@@ -308,6 +309,32 @@ export default function SettingsPanel({
   const [generalSaved, setGeneralSaved] = useState(false)
   const [savingBot, setSavingBot] = useState(false)
   const [botSaved, setBotSaved] = useState(false)
+  // Reglas automáticas de almacenamiento (se guardan en /api/storage/retention).
+  const [storageForm, setStorageForm] = useState({ botDays: "", purgeDays: "" })
+  const [savedStorageForm, setSavedStorageForm] = useState({ botDays: "", purgeDays: "" })
+  const [storageLoaded, setStorageLoaded] = useState(false)
+  const [storageSaved, setStorageSaved] = useState(false)
+  const [savingStorage, setSavingStorage] = useState(false)
+  const hasUnsavedStorageChanges =
+    storageLoaded &&
+    (storageForm.botDays !== savedStorageForm.botDays || storageForm.purgeDays !== savedStorageForm.purgeDays)
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/storage/retention`, { headers: { Accept: "application/json" } })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((payload) => {
+        if (!payload?.settings) return
+
+        const loaded = {
+          botDays: payload.settings.bot_media_unused_days?.toString() ?? "",
+          purgeDays: payload.settings.trash_purge_days?.toString() ?? "",
+        }
+        setStorageForm(loaded)
+        setSavedStorageForm(loaded)
+      })
+      .catch(() => undefined)
+      .finally(() => setStorageLoaded(true))
+  }, [])
   const [savingIntegrations, setSavingIntegrations] = useState(false)
   const [integrationsSaved, setIntegrationsSaved] = useState(false)
   const [timezoneOpen, setTimezoneOpen] = useState(false)
@@ -522,6 +549,56 @@ export default function SettingsPanel({
       })
     } finally {
       setSavingGeneral(false)
+    }
+  }
+
+  const handleSaveStorage = async () => {
+    const parseDays = (value: string) => (value.trim() === "" ? null : Number(value))
+    const botDays = parseDays(storageForm.botDays)
+    const purgeDays = parseDays(storageForm.purgeDays)
+    const validDays = (days: number | null) => days === null || (Number.isInteger(days) && days >= 1 && days <= 3650)
+
+    if (!validDays(botDays) || !validDays(purgeDays)) {
+      toast.error("Los días deben ser un número entero entre 1 y 3650, o quedar vacíos para desactivar la regla.")
+      return
+    }
+
+    setSavingStorage(true)
+    setStorageSaved(false)
+
+    try {
+      const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content")
+
+      const res = await fetch(`${API_BASE}/api/storage/retention`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          ...(csrfToken ? { "X-CSRF-TOKEN": csrfToken } : {}),
+        },
+        body: JSON.stringify({ bot_media_unused_days: botDays, trash_purge_days: purgeDays }),
+      })
+
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null)
+        toast.error("No se pudieron guardar las reglas de almacenamiento", {
+          description: getErrorMessage(payload, "Revisá los días e intentá nuevamente."),
+        })
+        return
+      }
+
+      setSavedStorageForm(storageForm)
+      setStorageSaved(true)
+      toast.success("Reglas de almacenamiento guardadas", {
+        description: "Se aplicarán cada día a las 03:00.",
+      })
+    } catch (err) {
+      console.error("Error de red guardando reglas de almacenamiento:", err)
+      toast.error("Error de red", {
+        description: "No se pudieron guardar las reglas de almacenamiento.",
+      })
+    } finally {
+      setSavingStorage(false)
     }
   }
 
@@ -1112,6 +1189,7 @@ export default function SettingsPanel({
                 ["bot", "Bot", Bot, hasUnsavedBotChanges],
                 ["whatsapp", "WhatsApp", MessageCircle, hasUnsavedWhatsappFlowChanges],
                 ["webchat", "Webchat", Globe2, hasUnsavedWebchatChanges],
+                ["storage", "Almacenamiento", HardDrive, hasUnsavedStorageChanges],
                 ["users", "Usuarios", UsersRound, false],
               ] as const).map(([section, label, Icon, hasChanges]) => (
                 <Button
@@ -1135,6 +1213,12 @@ export default function SettingsPanel({
 
         {activeSettingsSection !== "users" ? (
           <div className="fixed bottom-4 left-1/2 z-40 w-fit max-w-[calc(100vw-2rem)] -translate-x-1/2">
+            {activeSettingsSection === "storage" ? (
+              <div className="flex flex-col items-center gap-1.5 text-center">
+                <Button className="bg-[#013765] text-white hover:bg-[#024a8a]" onClick={handleSaveStorage} disabled={savingStorage || !hasUnsavedStorageChanges}>{savingStorage ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Guardando...</> : "Guardar reglas de almacenamiento"}</Button>
+                <p className="text-xs text-[#013765]/70">{hasUnsavedStorageChanges ? "Hay cambios sin guardar." : storageSaved ? "Configuración guardada." : "Sin cambios pendientes."}</p>
+              </div>
+            ) : null}
             {activeSettingsSection === "general" ? (
               <div className="flex flex-col items-center gap-1.5 text-center">
                 <Button className="bg-[#013765] text-white hover:bg-[#024a8a]" onClick={handleSaveGeneral} disabled={savingGeneral || !hasUnsavedGeneralChanges}>{savingGeneral ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Guardando...</> : "Guardar configuración general"}</Button>
@@ -1373,6 +1457,62 @@ export default function SettingsPanel({
               </SettingsGroup>
             </CardContent>
           </Card>
+        ) : null}
+
+        {activeSettingsSection === "storage" ? (
+        <Card className="border-[#dbe5ef] bg-white">
+          <CardHeader>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <CardTitle className="text-[#013765]">Almacenamiento</CardTitle>
+                <CardDescription className="text-[#013765]/70">
+                  Reglas automáticas para los archivos del disco. Se aplican cada día a las 03:00.
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <SettingsGroup
+              title="Medios del bot sin uso"
+              description="Cuántos días sin uso tiene que tener un medio del bot para pasar a papelera. Dejá vacío para desactivar la regla."
+            >
+              <div className="max-w-xs space-y-1.5">
+                <label htmlFor="storage-bot-days" className="text-sm font-medium text-[#013765]">Días</label>
+                <Input
+                  id="storage-bot-days"
+                  type="number"
+                  min={1}
+                  max={3650}
+                  placeholder="Desactivada"
+                  value={storageForm.botDays}
+                  onChange={(event) => setStorageForm((current) => ({ ...current, botDays: event.target.value }))}
+                />
+              </div>
+            </SettingsGroup>
+
+            <SettingsGroup
+              title="Papelera"
+              description="Cuántos días tiene que estar un archivo en papelera antes de borrarse definitivamente, si sigue sin uso. Lo que se borra no se recupera. Dejá vacío para desactivar la regla."
+            >
+              <div className="max-w-xs space-y-1.5">
+                <label htmlFor="storage-purge-days" className="text-sm font-medium text-[#013765]">Días</label>
+                <Input
+                  id="storage-purge-days"
+                  type="number"
+                  min={1}
+                  max={3650}
+                  placeholder="Desactivada"
+                  value={storageForm.purgeDays}
+                  onChange={(event) => setStorageForm((current) => ({ ...current, purgeDays: event.target.value }))}
+                />
+              </div>
+            </SettingsGroup>
+
+            <p className="text-xs text-[#013765]/65">
+              Los adjuntos de chats no entran en la regla de medios del bot. Las reglas nunca desvinculan mensajes.
+            </p>
+          </CardContent>
+        </Card>
         ) : null}
 
         {activeSettingsSection === "users" ? (

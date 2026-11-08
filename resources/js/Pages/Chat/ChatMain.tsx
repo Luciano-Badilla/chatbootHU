@@ -139,6 +139,7 @@ const mapApiMessage = (message: any): Message => ({
   message_type: message.message_type ?? "text",
   media_url: message.media_url ?? null,
   media_name: message.media_name ?? null,
+  media_removed_at: message.media_removed_at ?? null,
 })
 
 const foldSearchText = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
@@ -2415,6 +2416,27 @@ export default function ChatMain({
     const src = buildMediaSrc(message.media_url || undefined)
     const isSticker = type === "image" && message.body === "[Sticker]"
 
+    // Adjunto desvinculado por almacenamiento: el mensaje conserva su texto y se avisa que el archivo no está.
+    if (message.media_removed_at && !message.media_url && ["image", "video", "audio", "document"].includes(type)) {
+      const kind = type === "image" ? "La imagen" : type === "video" ? "El video" : type === "audio" ? "El audio" : "El documento"
+      const removedOn = new Date(message.media_removed_at).toLocaleDateString("es-AR")
+      const caption = (message.body || "").trim()
+
+      return (
+        <div className="space-y-1">
+          <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2">
+            <p className="text-sm font-medium text-slate-700">Archivo no disponible</p>
+            <p className="text-xs text-slate-500">
+              {kind} se quitó del almacenamiento el {removedOn}.
+            </p>
+          </div>
+          {caption && !caption.startsWith("[") ? (
+            <p className="text-sm leading-relaxed break-words [overflow-wrap:anywhere]">{caption}</p>
+          ) : null}
+        </div>
+      )
+    }
+
     if (message.bot_node_type === "link_button") {
       const title = message.interactive_options?.find((option) => option.kind === "url")?.title?.trim()
 
@@ -2778,11 +2800,13 @@ export default function ChatMain({
               const isSticker =
                 message.message_type === "image" && message.body === "[Sticker]"
 
+              // Un adjunto desvinculado se muestra como aviso de texto, no como tarjeta de medio.
+              const mediaRemoved = Boolean(message.media_removed_at) && !message.media_url
               const isVisualMedia =
-                (message.message_type === "image" && !isSticker) ||
-                message.message_type === "video"
-              const isAudio = message.message_type === "audio"
-              const isDocument = message.message_type === "document"
+                !mediaRemoved &&
+                ((message.message_type === "image" && !isSticker) || message.message_type === "video")
+              const isAudio = !mediaRemoved && message.message_type === "audio"
+              const isDocument = !mediaRemoved && message.message_type === "document"
               const isContactCard = message.message_type === "contacts" || message.bot_node_type === "contact"
               const isLocationCard = message.message_type === "location"
               const isMediaCard = isVisualMedia || isAudio || isDocument || isContactCard || isLocationCard

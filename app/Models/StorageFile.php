@@ -22,10 +22,13 @@ class StorageFile extends Model
         'size_bytes',
         'mime',
         'modified_at',
+        'content_hash',
+        'hashed_modified_at',
     ];
 
     protected $casts = [
         'size_bytes' => 'integer',
         'modified_at' => 'datetime',
+        'hashed_modified_at' => 'datetime',
     ];
 }

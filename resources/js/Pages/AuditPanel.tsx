@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, ChevronDown, FileText, GitBranch, Loader2, Megaphone, MessageSquare, RefreshCcw, ShieldCheck } from "lucide-react"
+import { ArrowLeft, CalendarDays, ChevronDown, FileText, FilterX, GitBranch, HardDrive, Loader2, Megaphone, MessageSquare, RefreshCcw, ShieldCheck } from "lucide-react"
+import type { DateRange } from "react-day-picker"
 import { Badge } from "shadcn/components/ui/badge"
 import { Button } from "shadcn/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "shadcn/components/ui/card"
@@ -8,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "s
 import { cn } from "shadcn/lib/utils"
 import { toast } from "sonner"
 import { AppShell, AppShellBackButton } from "../Components/AppShell"
+import { DateRangePicker, formatNumericDay, isoFromDate } from "../Components/DateRangePicker"
 
 
 interface AuditEntry {
@@ -70,6 +72,7 @@ interface AuditPanelProps {
   messageAuditLogs?: AuditEntry[]
   flowAuditLogs?: AuditEntry[]
   campaignAuditLogs?: AuditEntry[]
+  storageAuditLogs?: AuditEntry[]
   logTail?: {
     path?: string
     updated_at?: string | null
@@ -77,7 +80,7 @@ interface AuditPanelProps {
   }
 }
 
-type AuditScope = "configuration" | "messages" | "flows" | "campaigns" | "logs"
+type AuditScope = "configuration" | "messages" | "flows" | "campaigns" | "storage" | "logs"
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || ""
 const AUDIT_PAGE_SIZE = 10
@@ -192,6 +195,11 @@ const scopeMeta: Record<Exclude<AuditScope, "logs">, { title: string; descriptio
     description: "Creación, ejecución, pausa y sincronización de plantillas de campañas.",
     icon: Megaphone,
   },
+  storage: {
+    title: "Almacenamiento",
+    description: "Envíos a papelera, restauraciones, borrados definitivos y reglas automáticas de archivos.",
+    icon: HardDrive,
+  },
 }
 
 export default function AuditPanel({
@@ -199,6 +207,7 @@ export default function AuditPanel({
   messageAuditLogs = [],
   flowAuditLogs = [],
   campaignAuditLogs = [],
+  storageAuditLogs = [],
   logTail,
 }: AuditPanelProps) {
   const [activeScope, setActiveScope] = useState<AuditScope>("configuration")
@@ -207,6 +216,7 @@ export default function AuditPanel({
     messages: messageAuditLogs,
     flows: flowAuditLogs,
     campaigns: campaignAuditLogs,
+    storage: storageAuditLogs,
   })
   const [logTailState, setLogTailState] = useState(logTail ?? { path: "", updated_at: null, lines: [] })
   const [loadingAudit, setLoadingAudit] = useState(false)
@@ -215,6 +225,10 @@ export default function AuditPanel({
   const [auditSearch, setAuditSearch] = useState("")
   const [auditActorFilter, setAuditActorFilter] = useState("all")
   const [auditPage, setAuditPage] = useState(1)
+  // Rango de fechas: cuando está activo, los eventos se piden al servidor (no solo los cargados).
+  const [auditRange, setAuditRange] = useState<DateRange | undefined>(undefined)
+  const [auditRangeLogs, setAuditRangeLogs] = useState<AuditEntry[] | null>(null)
+  const [loadingRange, setLoadingRange] = useState(false)
   const logsViewportRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -223,9 +237,10 @@ export default function AuditPanel({
       messages: messageAuditLogs,
       flows: flowAuditLogs,
       campaigns: campaignAuditLogs,
+      storage: storageAuditLogs,
     })
     setLogTailState(logTail ?? { path: "", updated_at: null, lines: [] })
-  }, [campaignAuditLogs, configurationAuditLogs, flowAuditLogs, logTail, messageAuditLogs])
+  }, [campaignAuditLogs, configurationAuditLogs, flowAuditLogs, logTail, messageAuditLogs, storageAuditLogs])
 
   useEffect(() => {
     if (activeScope !== "logs") {
@@ -233,6 +248,8 @@ export default function AuditPanel({
       setAuditPage(1)
       setAuditSearch("")
       setAuditActorFilter("all")
+      setAuditRange(undefined)
+      setAuditRangeLogs(null)
     }
   }, [activeScope])
 
@@ -241,7 +258,52 @@ export default function AuditPanel({
     logsViewportRef.current.scrollTop = logsViewportRef.current.scrollHeight
   }, [activeScope, logTailState])
 
-  const activeAuditLogs = activeScope === "logs" ? [] : auditByScope[activeScope]
+  const activeAuditLogs = activeScope === "logs" ? [] : (auditRangeLogs ?? auditByScope[activeScope])
+
+  const loadAuditRange = async (scope: Exclude<AuditScope, "logs">, range: DateRange) => {
+    if (!range.from || !range.to) return
+
+    setLoadingRange(true)
+    try {
+      const params = new URLSearchParams({
+        scope,
+        limit: "100",
+        from: isoFromDate(range.from),
+        to: isoFromDate(range.to),
+      })
+      const res = await fetch(`${API_BASE}/api/audit/logs?${params.toString()}`, {
+        headers: { Accept: "application/json" },
+      })
+
+      if (!res.ok) {
+        toast.error("No se pudo filtrar la auditoria por fecha")
+        return
+      }
+
+      const payload = await res.json()
+      setAuditRangeLogs(payload.logs ?? [])
+    } catch (err) {
+      console.error("Error de red filtrando auditoria por fecha:", err)
+      toast.error("Error de red al filtrar la auditoria")
+    } finally {
+      setLoadingRange(false)
+    }
+  }
+
+  const applyAuditRange = (range: DateRange) => {
+    setAuditRange(range)
+    if (activeScope !== "logs") void loadAuditRange(activeScope, range)
+  }
+
+  const clearAuditRange = () => {
+    setAuditRange(undefined)
+    setAuditRangeLogs(null)
+  }
+
+  const auditRangeLabel =
+    auditRange?.from && auditRange?.to
+      ? `${formatNumericDay(isoFromDate(auditRange.from))} – ${formatNumericDay(isoFromDate(auditRange.to))}`
+      : "Todas las fechas"
 
   const auditActorOptions = useMemo(() => {
     return Array.from(
@@ -322,6 +384,12 @@ export default function AuditPanel({
 
   const handleRefreshAuditLogs = async () => {
     if (activeScope === "logs") return
+
+    // Con un rango activo, actualizar significa volver a pedir ese rango.
+    if (auditRange?.from && auditRange?.to) {
+      await loadAuditRange(activeScope, auditRange)
+      return
+    }
 
     setLoadingAudit(true)
 
@@ -407,6 +475,7 @@ export default function AuditPanel({
                 ["messages", "Mensajes", MessageSquare],
                 ["flows", "Flujos", GitBranch],
                 ["campaigns", "Campañas", Megaphone],
+                ["storage", "Almacenamiento", HardDrive],
                 ["logs", "Logs tecnicos", FileText],
               ] as const).map(([scope, label, Icon]) => (
                 <Button
@@ -454,7 +523,7 @@ export default function AuditPanel({
             </CardHeader>
             <CardContent className="space-y-5">
               <div className="surface-nested overflow-hidden rounded-xl border border-[#cbd8e5] bg-white shadow-sm">
-                <div className="grid grid-cols-1 gap-3 border-b border-[#dbe5ef] bg-slate-50 px-4 py-3 md:grid-cols-[minmax(0,1fr)_180px]">
+                <div className="grid grid-cols-1 gap-3 border-b border-[#dbe5ef] bg-slate-50 px-4 py-3 md:grid-cols-[minmax(0,1fr)_180px_260px]">
                   <Input
                     type="search"
                     name="audit-panel-search"
@@ -477,6 +546,36 @@ export default function AuditPanel({
                       ))}
                     </SelectContent>
                   </Select>
+                  <div className="flex items-center gap-2">
+                    <DateRangePicker
+                      value={auditRange}
+                      align="end"
+                      formatDay={formatNumericDay}
+                      onApply={applyAuditRange}
+                      trigger={
+                        <button
+                          type="button"
+                          disabled={activeScope === "logs"}
+                          className="inline-flex h-9 min-w-0 flex-1 items-center gap-2 rounded-md border border-input bg-white px-3 text-sm text-slate-700 transition-colors hover:bg-[#f4f8fb] disabled:opacity-50"
+                        >
+                          <CalendarDays className="h-4 w-4 shrink-0 text-[#013765]" />
+                          <span className="truncate">{loadingRange ? "Buscando..." : auditRangeLabel}</span>
+                        </button>
+                      }
+                    />
+                    {auditRange ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-9 w-9 shrink-0 px-0"
+                        onClick={clearAuditRange}
+                        title="Quitar fechas"
+                        aria-label="Quitar fechas"
+                      >
+                        <FilterX className="h-4 w-4" />
+                      </Button>
+                    ) : null}
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-[180px_minmax(0,1.6fr)_90px] gap-3 border-b border-[#dbe5ef] bg-[#013765]/[0.03] px-4 py-3 text-xs font-medium text-[#013765]/70">
@@ -621,7 +720,7 @@ export default function AuditPanel({
                   })
                 ) : (
                   <div className="px-4 py-6 text-sm text-slate-500">
-                    {activeScope === "configuration"
+                    {activeScope === "configuration" || activeScope === "storage"
                       ? "No hay eventos de auditoria para los filtros actuales."
                       : "Todavia no hay eventos registrados para esta fuente. La conectaremos en el siguiente paso."}
                   </div>

@@ -2,7 +2,7 @@ import { Fragment, FormEvent, type ReactNode, useCallback, useEffect, useRef, us
 import mqtt from "mqtt"
 import { Gallery, Item } from "react-photoswipe-gallery"
 import "photoswipe/dist/photoswipe.css"
-import { ArrowUp, ArrowUpRight, AudioLines, Bell, BellOff, Camera, Check, ChevronDown, Clock3, Contact, FileText, Headset, ImageIcon, Info, Loader2, MapPin, Menu, MessageCircle, Mic, Phone, Play, Plus, RefreshCw, Search, Send, Share, Square, User, Wrench, X } from "lucide-react"
+import { ArrowUp, ArrowUpRight, AudioLines, Bell, BellOff, Camera, Check, ChevronDown, Clock3, Contact, FileText, FileX, Headset, ImageIcon, Info, Loader2, MapPin, Menu, MessageCircle, Mic, Phone, Play, Plus, RefreshCw, Search, Send, Share, Square, User, Wrench, X } from "lucide-react"
 import { toast } from "sonner"
 import { getWebPushSubscription, isWebPushSubscriptionEnabled, subscribeToWebPush, unsubscribeFromWebPush } from "../lib/webPush"
 import { webchatRateLimitHeaders } from "../lib/webchatRateLimit"
@@ -11,7 +11,7 @@ import StartupCurtain from "../Components/StartupCurtain"
 
 type Option = { id: string; label: string; value?: string | null; url?: string | null; title?: string | null; description?: string; kind?: string; disabled?: boolean; group_id?: string | null }
 type RetryPayload = { message: string; optionId?: string }
-type Message = { id: number | string; sender: "contact" | "user"; sender_subtype?: "contact" | "operator" | "bot"; operator_name?: string | null; body: string | null; created_at?: string; timestamp?: string; message_type?: string | null; media_url?: string | null; media_name?: string | null; interactive_options?: Option[] | null; delivery_status?: "sending" | "failed"; retry_payload?: RetryPayload }
+type Message = { id: number | string; sender: "contact" | "user"; sender_subtype?: "contact" | "operator" | "bot"; operator_name?: string | null; body: string | null; created_at?: string; timestamp?: string; message_type?: string | null; media_url?: string | null; media_name?: string | null; media_removed_at?: string | null; interactive_options?: Option[] | null; delivery_status?: "sending" | "failed"; retry_payload?: RetryPayload }
 type WebchatSettings = { enabled: boolean; available: boolean; operators_available?: boolean; operators_scheduled?: boolean; title: string; subtitle: string; logo_url: string; offline_message: string }
 type PendingMedia = { id: string; file: File; previewUrl: string; type: "image" | "video" }
 type LocationDraft = { latitude: number; longitude: number; name: string; address: string }
@@ -994,6 +994,29 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     const mediaUrl = getMessageMediaUrl(message)
     const body = message.body ?? ""
     const caption = ["[Imagen]", "[Video]", "[Audio]", "[Documento]"].includes(body) ? "" : body
+
+    // Adjunto que ya no está disponible (se quitó del almacenamiento): el mensaje conserva su texto.
+    if (message.media_removed_at && !message.media_url && ["image", "video", "audio", "document"].includes(type)) {
+      const kind = type === "image" ? "Foto" : type === "video" ? "Video" : type === "audio" ? "Audio" : "Documento"
+      const removedOn = new Date(message.media_removed_at).toLocaleDateString("es-AR")
+
+      return (
+        <>
+          <div className="flex items-center gap-3 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-3">
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-white text-slate-400 shadow-sm">
+              <FileX className="h-5 w-5" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold text-slate-700">Archivo no disponible</span>
+              <span className="mt-0.5 block text-xs leading-5 text-slate-500">
+                {kind} que ya no está disponible desde el {removedOn}.
+              </span>
+            </span>
+          </div>
+          {caption ? <p className="px-2 pt-2 whitespace-pre-wrap">{caption}</p> : null}
+        </>
+      )
+    }
 
     if (type === "image" && mediaUrl) {
       const dimensions = mediaDimensions[message.id] ?? { width: 1600, height: 1200 }

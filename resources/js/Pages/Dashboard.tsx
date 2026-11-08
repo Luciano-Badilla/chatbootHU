@@ -1,5 +1,5 @@
 import { router, usePage } from "@inertiajs/react"
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import {
   Activity,
   ArrowDownRight,
@@ -33,14 +33,12 @@ import {
 } from "recharts"
 import type { TooltipContentProps } from "recharts"
 import type { DateRange } from "react-day-picker"
-import { es } from "date-fns/locale"
 
 import { AppShell } from "../Components/AppShell"
 import { Badge } from "shadcn/components/ui/badge"
 import { Button } from "shadcn/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "shadcn/components/ui/card"
-import { Calendar } from "shadcn/components/ui/calendar"
-import { Popover, PopoverContent, PopoverTrigger } from "shadcn/components/ui/popover"
+import { DateRangePicker, dateFromIso, isoFromDate } from "../Components/DateRangePicker"
 
 const APP_URL = import.meta.env.VITE_APP_URL || ""
 
@@ -228,19 +226,6 @@ function formatDate(value: string) {
   return new Intl.DateTimeFormat("es-AR", { day: "numeric", month: "short", year: "numeric" }).format(new Date(year, month - 1, day))
 }
 
-function dateFromIso(value: string) {
-  const [year, month, day] = value.split("-").map(Number)
-  return new Date(year, month - 1, day)
-}
-
-function isoFromDate(value: Date) {
-  const year = value.getFullYear()
-  const month = String(value.getMonth() + 1).padStart(2, "0")
-  const day = String(value.getDate()).padStart(2, "0")
-
-  return `${year}-${month}-${day}`
-}
-
 function formatCompactDate(value: string) {
   const [year, month, day] = value.split("-").map(Number)
   return new Intl.DateTimeFormat("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" }).format(new Date(year, month - 1, day))
@@ -253,30 +238,18 @@ function rangeFromPeriod(period: DashboardPeriod): DateRange | undefined {
 }
 
 function DashboardRangePicker({ period, mobile = false }: { period: DashboardPeriod; mobile?: boolean }) {
-  const [open, setOpen] = useState(false)
-  const [range, setRange] = useState<DateRange | undefined>(() => rangeFromPeriod(period))
-
-  useEffect(() => {
-    setRange(rangeFromPeriod(period))
-  }, [period.is_custom, period.start, period.end])
-
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const selectionLabel = range?.from
-    ? `${formatDate(isoFromDate(range.from))}${range.to ? ` – ${formatDate(isoFromDate(range.to))}` : " – Elegí el fin"}`
-    : "Elegí inicio y fin"
-
   return (
-    <Popover
-      open={open}
-      onOpenChange={(nextOpen) => {
-        if (nextOpen) {
-          setRange(rangeFromPeriod(period))
+    <DateRangePicker
+      value={rangeFromPeriod(period)}
+      resetEnabled={period.is_custom}
+      align={mobile ? "start" : "end"}
+      onApply={(range) => {
+        if (range.from && range.to) {
+          router.get(`${APP_URL}/dashboard`, { from: isoFromDate(range.from), to: isoFromDate(range.to) }, { preserveScroll: true })
         }
-        setOpen(nextOpen)
       }}
-    >
-      <PopoverTrigger asChild>
+      onReset={() => router.get(`${APP_URL}/dashboard`, { period: 7 }, { preserveScroll: true })}
+      trigger={
         <button
           type="button"
           title={period.is_custom ? `${formatDate(period.start)} – ${formatDate(period.end)}` : "Elegir un rango personalizado"}
@@ -289,79 +262,8 @@ function DashboardRangePicker({ period, mobile = false }: { period: DashboardPer
           <span>Rango</span>
           {period.is_custom ? <span className="hidden xl:inline">{formatCompactDate(period.start)}–{formatCompactDate(period.end)}</span> : null}
         </button>
-      </PopoverTrigger>
-      <PopoverContent align={mobile ? "start" : "end"} sideOffset={6} className="z-[10000] w-[min(92vw,300px)] rounded-xl border-slate-200 bg-white p-2 text-slate-900 shadow-lg">
-        <div className="px-2 pt-1 text-xs text-slate-500">{selectionLabel}</div>
-        <Calendar
-          mode="range"
-          selected={range}
-          onSelect={setRange}
-          locale={es}
-          defaultMonth={range?.from ?? today}
-          disabled={{ after: today }}
-          min={0}
-          numberOfMonths={1}
-          showOutsideDays={false}
-          initialFocus
-          className="p-1"
-          classNames={{
-            month: "space-y-2",
-            caption: "relative flex h-8 items-center justify-center",
-            caption_label: "text-xs font-semibold capitalize text-[#013765]",
-            nav: "flex items-center gap-1",
-            nav_button: "inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white p-0 text-slate-500 transition hover:bg-[#f4f8fb] hover:text-[#013765]",
-            nav_button_previous: "absolute left-0",
-            nav_button_next: "absolute right-0",
-            head_cell: "w-8 rounded-md text-[10px] font-medium capitalize text-slate-400",
-            row: "mt-1 flex w-full",
-            day: "h-7 w-8 rounded-md bg-transparent p-0 text-xs font-normal text-slate-700 transition hover:bg-[#eaf2f8]",
-            day_selected: "!bg-[#013765] hover:!bg-[#024a8a] focus:!bg-[#024a8a]",
-            day_range_start: "day-range-start !text-white",
-            day_range_end: "day-range-end !text-white",
-            day_range_middle: "!bg-[#eaf2f8] !text-[#013765] aria-selected:opacity-100",
-            day_outside: "text-slate-300 opacity-50",
-            day_disabled: "!bg-transparent text-slate-300 opacity-50",
-          }}
-        />
-        <div className="flex items-center justify-between gap-2 border-t border-slate-100 px-1 pt-2">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="mr-auto h-8 rounded-lg px-2 text-xs text-slate-500 shadow-none hover:bg-[#f4f8fb] hover:text-[#013765]"
-            disabled={!range?.from && !period.is_custom}
-            onClick={() => setRange(undefined)}
-          >
-            Limpiar
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8 rounded-lg border-slate-200 bg-white text-xs text-[#013765] shadow-none hover:bg-[#f4f8fb] hover:text-[#013765]"
-            onClick={() => setOpen(false)}
-          >
-            Cancelar
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            className="h-8 rounded-lg bg-[#185e9c] text-xs text-white shadow-none hover:bg-[#013765] disabled:bg-slate-100 disabled:text-slate-400"
-            disabled={Boolean(range?.from && !range.to) || (!range?.from && !period.is_custom)}
-            onClick={() => {
-              if (range?.from && range.to) {
-                router.get(`${APP_URL}/dashboard`, { from: isoFromDate(range.from), to: isoFromDate(range.to) }, { preserveScroll: true })
-              } else {
-                router.get(`${APP_URL}/dashboard`, { period: 7 }, { preserveScroll: true })
-              }
-              setOpen(false)
-            }}
-          >
-            {range?.from && range.to ? "Aplicar" : "Restablecer"}
-          </Button>
-        </div>
-      </PopoverContent>
-    </Popover>
+      }
+    />
   )
 }
 

@@ -23,6 +23,7 @@ class AuditController extends Controller
             'messageAuditLogs' => $this->auditLogsForScope('messages'),
             'flowAuditLogs' => $this->auditLogsForScope('flows'),
             'campaignAuditLogs' => $this->auditLogsForScope('campaigns'),
+            'storageAuditLogs' => $this->auditLogsForScope('storage'),
             'logTail' => $this->readApplicationLogTail(),
         ]);
     }
@@ -31,9 +32,13 @@ class AuditController extends Controller
     {
         $scope = (string) $request->query('scope', 'configuration');
         $limit = max(10, min(100, (int) $request->integer('limit', 50)));
+        $range = $request->validate([
+            'from' => ['nullable', 'date_format:Y-m-d'],
+            'to' => ['nullable', 'date_format:Y-m-d'],
+        ]);
 
         return response()->json([
-            'logs' => $this->auditLogsForScope($scope, $limit),
+            'logs' => $this->auditLogsForScope($scope, $limit, $range['from'] ?? null, $range['to'] ?? null),
         ]);
     }
 
@@ -78,7 +83,7 @@ class AuditController extends Controller
         ]);
     }
 
-    protected function auditLogsForScope(string $scope, int $limit = 50): array
+    protected function auditLogsForScope(string $scope, int $limit = 50, ?string $from = null, ?string $to = null): array
     {
         $query = Activity::query()->with('causer')->latest('id');
 
@@ -86,8 +91,18 @@ class AuditController extends Controller
             'messages' => $query->whereIn('log_name', ['messages', 'chat']),
             'flows' => $query->whereIn('log_name', ['flows', 'bot_flows']),
             'campaigns' => $query->where('log_name', 'campaigns'),
-            default => $query->whereIn('log_name', ['settings', 'users', 'security', 'agenda', 'operator_control', 'storage']),
+            'storage' => $query->where('log_name', 'storage'),
+            default => $query->whereIn('log_name', ['settings', 'users', 'security', 'agenda', 'operator_control']),
         };
+
+        // Rango por fecha de registro, inclusive (Y-m-d).
+        if ($from !== null) {
+            $query->where('created_at', '>=', $from.' 00:00:00');
+        }
+
+        if ($to !== null) {
+            $query->where('created_at', '<=', $to.' 23:59:59');
+        }
 
         return $query
             ->limit($limit)

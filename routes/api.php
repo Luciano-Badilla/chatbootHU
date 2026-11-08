@@ -100,9 +100,17 @@ Route::middleware($sessionAuthenticated)->group(function () {
     Route::middleware('permission:can_manage_storage')->prefix('storage')->group(function () {
         Route::get('/summary', [StorageFileController::class, 'summary']);
         Route::get('/files', [StorageFileController::class, 'files']);
+        Route::get('/files/{id}/thumbnail', [StorageFileController::class, 'thumbnail']);
+        Route::get('/chats', [StorageFileController::class, 'chats']);
+        Route::get('/files/trashable-ids', [StorageFileController::class, 'trashableIds']);
+        Route::post('/files/trash', [StorageFileController::class, 'trashBatch']);
+        Route::get('/duplicates', [StorageFileController::class, 'duplicates']);
+        Route::get('/retention', [StorageFileController::class, 'retention']);
+        Route::put('/retention', [StorageFileController::class, 'updateRetention']);
         Route::delete('/files/{storageFile}', [StorageFileController::class, 'destroy']);
         Route::post('/files/{id}/restore', [StorageFileController::class, 'restore']);
         Route::delete('/files/{id}/force', [StorageFileController::class, 'forceDestroy']);
+        Route::post('/trash/empty', [StorageFileController::class, 'emptyTrash']);
     });
 
     Route::middleware('permission:can_manage_campaigns')->group(function () {

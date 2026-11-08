@@ -79,6 +79,8 @@ export type Message = {
   message_type?: "text" | "image" | "video" | "audio" | "document" | "template" | "contacts" | "location"
   media_url?: string | null
   media_name?: string | null
+  // Fecha en que el adjunto se desvinculó por almacenamiento (el mensaje conserva su texto).
+  media_removed_at?: string | null
 }
 
 interface ChatPanelProps {

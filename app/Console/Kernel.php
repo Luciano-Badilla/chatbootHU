@@ -23,6 +23,9 @@ class Kernel extends ConsoleKernel
         $schedule->command('operators:release-disconnected-chats')
             ->everyMinute()
             ->withoutOverlapping();
+        $schedule->command('storage:apply-retention')
+            ->dailyAt('03:00')
+            ->withoutOverlapping();
     }
 
     /**
