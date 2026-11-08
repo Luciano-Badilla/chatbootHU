@@ -6,6 +6,7 @@ namespace App\Http\Controllers;
 use App\Models\BotFlow;
 use App\Models\BotNode;
 use App\Models\Chat;
+use App\Models\SystemSetting;
 use App\Services\AuditService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
@@ -71,8 +72,11 @@ class BotFlowController extends Controller
 
     public function apiIndex()
     {
+        $holidayFlowId = SystemSetting::query()->where('key', 'webchat.holiday_flow_id')->value('value');
+
         return response()->json([
             'flows' => BotFlow::orderBy('id')->get(),
+            'holiday_flow_id' => filled($holidayFlowId) ? (int) $holidayFlowId : null,
         ]);
     }
 

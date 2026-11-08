@@ -30,6 +30,7 @@ class AuditService
         'autogestion.token' => 'Token de autogestion',
         'autogestion.timeout' => 'Timeout de autogestion',
         'default_flow_id' => 'Flujo por defecto',
+        'holiday_flow_id' => 'Flujo de feriados',
         'default_flow_name' => 'Nombre del flujo por defecto',
         'inactivity_timeout_minutes' => 'Tiempo de inactividad',
         'inactivity_timeout_message' => 'Mensaje de inactividad',

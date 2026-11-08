@@ -3,6 +3,7 @@ import { useRef, type ReactNode } from "react"
 import {
   Bot,
   ArrowRight,
+  CalendarDays,
   Check,
   CheckCircle2,
   ChevronsUpDown,
@@ -47,6 +48,7 @@ import { Textarea } from "shadcn/components/ui/textarea"
 import { toast } from "sonner"
 import { cn } from "shadcn/lib/utils"
 import { AppShell, AppShellBackButton } from "../Components/AppShell"
+import { HolidayCalendarDialog, type Holiday } from "../Components/HolidayCalendarDialog"
 
 interface SettingsPanelProps {
   settings?: {
@@ -125,7 +127,7 @@ interface SettingsPanelProps {
 }
 
 type FlowSchedule = Record<"monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday", number | null>
-type WebchatSettings = { enabled: boolean; availability_mode: "always" | "schedule"; schedule_start: string; schedule_end: string; bot_available_outside_schedule: boolean; offline_message: string; title: string; subtitle: string; logo_url: string; flow_schedule: FlowSchedule; outside_schedule_flow_id: number | null }
+type WebchatSettings = { enabled: boolean; availability_mode: "always" | "schedule"; schedule_start: string; schedule_end: string; bot_available_outside_schedule: boolean; offline_message: string; title: string; subtitle: string; logo_url: string; flow_schedule: FlowSchedule; outside_schedule_flow_id: number | null; holiday_flow_id: number | null }
 type SettingsSection = "general" | "integrations" | "bot" | "whatsapp" | "webchat" | "storage" | "users"
 
 const WEEKDAYS: Array<{ key: keyof FlowSchedule; label: string }> = [
@@ -156,6 +158,12 @@ const TIME_OPTIONS = Array.from({ length: 96 }, (_, index) => {
 function getErrorMessage(payload: any, fallback: string): string {
   const firstError = payload?.errors ? Object.values(payload.errors).flat()[0] : null
   return String(firstError ?? payload?.message ?? fallback)
+}
+async function fetchHolidays(year: number): Promise<Holiday[]> {
+  const res = await fetch(`${API_BASE}/api/settings/holidays?year=${year}`, { headers: { Accept: "application/json" } })
+  if (!res.ok) throw new Error("No se pudieron cargar los feriados.")
+  const payload = await res.json()
+  return payload.holidays ?? []
 }
 
 function SettingsGroup({
@@ -235,6 +243,7 @@ export default function SettingsPanel({
       subtitle: "Hospital Universitario",
       logo_url: "",
       outside_schedule_flow_id: null,
+      holiday_flow_id: null,
       ...current,
       flow_schedule: { ...EMPTY_FLOW_SCHEDULE, ...(current?.flow_schedule ?? {}) },
     }
@@ -300,6 +309,12 @@ export default function SettingsPanel({
   const [savedMaxAssignedChats, setSavedMaxAssignedChats] = useState(initialMaxAssignedChats)
   const [webchat, setWebchat] = useState<WebchatSettings>(initialWebchat)
   const [showDailyWebchatFlows, setShowDailyWebchatFlows] = useState(false)
+  const currentYear = new Date().getFullYear()
+  const [holidayYear, setHolidayYear] = useState(currentYear)
+  const [holidays, setHolidays] = useState<Holiday[]>([])
+  const [holidaysLoading, setHolidaysLoading] = useState(false)
+  const [holidaysBusy, setHolidaysBusy] = useState(false)
+  const [holidaysOpen, setHolidaysOpen] = useState(false)
   const [webchatLogoFile, setWebchatLogoFile] = useState<File | null>(null)
   const [webchatLogoPreview, setWebchatLogoPreview] = useState("")
   const [savedWebchat, setSavedWebchat] = useState(JSON.stringify(initialWebchat))
@@ -335,6 +350,19 @@ export default function SettingsPanel({
       .catch(() => undefined)
       .finally(() => setStorageLoaded(true))
   }, [])
+  useEffect(() => {
+    let active = true
+    setHolidaysLoading(true)
+    fetchHolidays(holidayYear)
+      .then((list) => { if (active) setHolidays(list) })
+      .catch((error) => {
+        if (!active) return
+        setHolidays([])
+        toast.error("No se pudieron cargar los feriados", { description: error instanceof Error ? error.message : undefined })
+      })
+      .finally(() => { if (active) setHolidaysLoading(false) })
+    return () => { active = false }
+  }, [holidayYear])
   const [savingIntegrations, setSavingIntegrations] = useState(false)
   const [integrationsSaved, setIntegrationsSaved] = useState(false)
   const [timezoneOpen, setTimezoneOpen] = useState(false)
@@ -1073,6 +1101,60 @@ export default function SettingsPanel({
     } catch { toast.error("Error de red", { description: "No se pudo guardar la configuración de Webchat." }) } finally { setSavingWebchat(false) }
   }
 
+  const holidayRequest = async (path: string, method: "POST" | "DELETE", body?: unknown) => {
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content")
+    const res = await fetch(`${API_BASE}${path}`, {
+      method,
+      headers: { Accept: "application/json", "Content-Type": "application/json", ...(csrfToken ? { "X-CSRF-TOKEN": csrfToken } : {}) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+    const payload = await res.json().catch(() => null)
+    if (!res.ok) throw new Error(getErrorMessage(payload, "Revisá los datos e intentá nuevamente."))
+    return payload
+  }
+
+  const handleAddHoliday = async (date: string, name: string): Promise<boolean> => {
+    setHolidaysBusy(true)
+    try {
+      const payload = await holidayRequest("/api/settings/holidays", "POST", { date, name })
+      const added: Holiday = payload.holiday
+      setHolidays((current) => [...current.filter((item) => item.id !== added.id), added].sort((a, b) => a.date.localeCompare(b.date)))
+      toast.success("Feriado agregado")
+      return true
+    } catch (error) {
+      toast.error("No se pudo agregar el feriado", { description: error instanceof Error ? error.message : undefined })
+      return false
+    } finally {
+      setHolidaysBusy(false)
+    }
+  }
+
+  const handleRemoveHoliday = async (holiday: Holiday) => {
+    setHolidaysBusy(true)
+    try {
+      await holidayRequest(`/api/settings/holidays/${holiday.id}`, "DELETE")
+      setHolidays((current) => current.filter((item) => item.id !== holiday.id))
+      toast.success("Feriado quitado", { description: `${holiday.name} dejó de usar el flujo de feriados.` })
+    } catch (error) {
+      toast.error("No se pudo quitar el feriado", { description: error instanceof Error ? error.message : undefined })
+    } finally {
+      setHolidaysBusy(false)
+    }
+  }
+
+  const handleImportHolidays = async () => {
+    setHolidaysBusy(true)
+    try {
+      const payload = await holidayRequest("/api/settings/holidays/import", "POST", { year: holidayYear })
+      setHolidays(await fetchHolidays(holidayYear))
+      toast.success(`Feriados de ${holidayYear} cargados`, { description: `${payload.created} nuevos, ${payload.removed} quitados por el calendario.` })
+    } catch (error) {
+      toast.error("No se pudo cargar el calendario", { description: error instanceof Error ? error.message : undefined })
+    } finally {
+      setHolidaysBusy(false)
+    }
+  }
+
   const handleExportConfig = async () => {
     setExportingConfig(true)
 
@@ -1331,7 +1413,7 @@ export default function SettingsPanel({
                   <div className="space-y-1.5 md:col-span-2"><label className="text-sm font-medium text-[#013765]">Mensaje fuera de horario o deshabilitado</label><Textarea className="w-1/2" rows={2} value={webchat.offline_message} onChange={(e) => setWebchat((v) => ({ ...v, offline_message: e.target.value }))} /></div>
                 </div>
               </section>
-              <SettingsGroup title="Flujos por día" description="Asigná flujos para días hábiles, fines de semana y, opcionalmente, fuera del horario de operadores.">
+              <SettingsGroup title="Flujos por día" description="Asigná flujos para días hábiles, fines de semana, feriados y, opcionalmente, fuera del horario de operadores.">
                 <div className="grid gap-4 lg:grid-cols-2">
                   {FLOW_DAY_GROUPS.map(({ key, label, daysLabel, days }) => {
                     const selectedIds = new Set(days.map((day) => webchat.flow_schedule[day]))
@@ -1407,6 +1489,35 @@ export default function SettingsPanel({
                     </Select>
                   </div>
                 ) : null}
+                <div className="mt-4 rounded-2xl border border-[#dbe5ef] bg-[#f8fafc] p-4 sm:p-5">
+                  <div className="mb-3">
+                    <h3 className="text-sm font-semibold text-[#013765]">Feriados</h3>
+                    <p className="mt-0.5 text-xs text-[#013765]/60">En los días marcados como feriado (ver abajo) se usa este flujo. Si no seleccionás uno, se usa el flujo del día.</p>
+                  </div>
+                  <Select
+                    value={webchat.holiday_flow_id ? String(webchat.holiday_flow_id) : "day-schedule"}
+                    onValueChange={(value) => setWebchat((current) => ({
+                      ...current,
+                      holiday_flow_id: value === "day-schedule" ? null : Number(value),
+                    }))}
+                  >
+                    <SelectTrigger className="h-[72px] border-dashed border-[#013765]/25 bg-[#013765]/[0.03] px-3 hover:border-[#013765]/45 hover:bg-[#013765]/[0.06]">
+                      <div className="flex min-w-0 items-center gap-3 text-left">
+                        <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-white text-[#013765] shadow-sm"><CalendarDays className="h-5 w-5" /></span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-[#013765]">{webchat.holiday_flow_id ? botFlows.find((flow) => flow.id === webchat.holiday_flow_id)?.name ?? "Flujo de feriados" : "Usar flujo asignado al día"}</span>
+                          <span className="mt-0.5 block truncate text-xs text-[#013765]/65">Hacé clic para cambiarlo</span>
+                        </span>
+                      </div>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="day-schedule">Usar flujo asignado al día</SelectItem>
+                      {botFlows.filter((flow) => flow.channels?.includes("webchat")).map((flow) => (
+                        <SelectItem key={flow.id} value={String(flow.id)}>{flow.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
                 <button type="button" onClick={() => setShowDailyWebchatFlows((value) => !value)} className="mt-4 text-sm font-medium text-[#013765] underline decoration-[#013765]/30 underline-offset-4 transition hover:decoration-[#013765]">
                   {showDailyWebchatFlows ? "Ocultar configuración por día" : hasCustomWebchatFlowSchedule ? "Ver configuración personalizada por día" : "Personalizar por día"}
                 </button>
@@ -1444,6 +1555,35 @@ export default function SettingsPanel({
                 {!isWebchatFlowScheduleComplete ? (
                   <p className="mt-2 text-xs text-amber-700">Seleccioná un flujo para cada día antes de guardar.</p>
                 ) : null}
+              </SettingsGroup>
+              <SettingsGroup
+                title="Calendario de feriados"
+                description="Si hoy es feriado, el bot usa el flujo de feriados. La lista sale de un calendario público de Argentina; podés agregar o quitar días a mano. Los cambios se guardan al instante."
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#dbe5ef] bg-[#f8fafc] p-4">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white text-[#013765] shadow-sm"><CalendarDays className="h-5 w-5" /></span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-[#013765]">{holidaysLoading ? "Cargando feriados..." : `${holidays.length} feriados en ${holidayYear}`}</p>
+                      <p className="text-xs text-[#013765]/65">Abrí el calendario para revisarlos, agregar o quitar días.</p>
+                    </div>
+                  </div>
+                  <Button type="button" variant="outline" className="gap-2 border-[#cbd8e5] text-[#013765] hover:bg-[#013765]/[0.06]" onClick={() => setHolidaysOpen(true)}>
+                    <CalendarDays className="h-4 w-4" /> Abrir calendario
+                  </Button>
+                </div>
+                <HolidayCalendarDialog
+                  open={holidaysOpen}
+                  onOpenChange={setHolidaysOpen}
+                  year={holidayYear}
+                  onYearChange={setHolidayYear}
+                  holidays={holidays}
+                  loading={holidaysLoading}
+                  busy={holidaysBusy}
+                  onAdd={handleAddHoliday}
+                  onRemove={handleRemoveHoliday}
+                  onImport={handleImportHolidays}
+                />
               </SettingsGroup>
               <SettingsGroup title="Experiencia pública" description="Textos que ve la persona antes y durante la conversación.">
                 <div className="grid gap-4 md:grid-cols-2">

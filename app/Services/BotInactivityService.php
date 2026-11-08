@@ -20,7 +20,7 @@ class BotInactivityService
     public function __construct(
         private readonly AuditService $auditService,
         private readonly ChatAssignmentService $chatAssignmentService,
-        private readonly WebchatAvailabilityService $webchatAvailabilityService,
+        private readonly WebchatFlowResolver $webchatFlowResolver,
     ) {}
 
     public function processExpiredChat(Chat $chat, ?BotFlow $flow = null): bool
@@ -344,28 +344,10 @@ class BotInactivityService
                 return null;
             }
         } elseif ($channel === 'webchat') {
-            $settings = SystemSetting::query()->whereIn('key', [
-                'webchat.flow_schedule',
-                'webchat.default_flow_id',
-                'webchat.outside_schedule_flow_id',
-                'webchat.availability_mode',
-                'webchat.schedule_start',
-                'webchat.schedule_end',
-                'general.timezone',
-            ])->pluck('value', 'key');
-            $schedule = json_decode((string) ($settings['webchat.flow_schedule'] ?? ''), true);
-            $timezone = ($settings['general.timezone'] ?? null) ?: config('app.timezone');
-            $day = strtolower(now($timezone)->format('l'));
-            $outsideScheduleFlowId = ($settings['webchat.availability_mode'] ?? 'always') === 'schedule'
-                && ! $this->webchatAvailabilityService->isWithinSchedule([
-                    'schedule_start' => $settings['webchat.schedule_start'] ?? '08:00',
-                    'schedule_end' => $settings['webchat.schedule_end'] ?? '20:00',
-                ])
-                    ? ($settings['webchat.outside_schedule_flow_id'] ?? null)
-                    : null;
-            $configuredFlowId = $outsideScheduleFlowId ?: (is_array($schedule)
-                ? ($schedule[$day] ?? null)
-                : ($settings['webchat.default_flow_id'] ?? null));
+            $webchatFlow = $this->webchatFlowResolver->resolve($this->webchatFlowResolver->loadSettings());
+            if ($webchatFlow) {
+                return $webchatFlow;
+            }
         }
 
         if ($configuredFlowId) {

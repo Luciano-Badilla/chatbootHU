@@ -1861,6 +1861,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
   botMessageDefaults = props?.botMessageDefaults ?? {}
   const isReadOnly = Boolean(readOnly || !props?.auth?.permissions?.can_manage_flows)
   const [flows, setFlows] = useState<BotFlow[]>([])
+  const [holidayFlowId, setHolidayFlowId] = useState<number | null>(null)
   const [selectedFlowId, setSelectedFlowId] = useState<number | null>(null)
 
   const [nodes, setNodes] = useState<BotNode[]>([])
@@ -2168,6 +2169,7 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
         const data = await res.json()
         const list: BotFlow[] = data.flows ?? data
         setFlows(list)
+        setHolidayFlowId(typeof data.holiday_flow_id === "number" ? data.holiday_flow_id : null)
 
         if (!selectedFlowId && list.length > 0) {
           const def = list.find((f) => f.is_default)
@@ -7102,6 +7104,12 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
                         {flow.is_default ? (
                           <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full">
                             Por defecto
+                          </span>
+                        ) : null}
+
+                        {flow.id === holidayFlowId ? (
+                          <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full" title="Se usa en los días feriados del Webchat">
+                            Feriados
                           </span>
                         ) : null}
 

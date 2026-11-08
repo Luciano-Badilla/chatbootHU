@@ -10,6 +10,7 @@ use App\Models\SystemSetting;
 use App\Models\WebchatReferral;
 use App\Models\WebPushSubscription;
 use App\Services\WebchatAvailabilityService;
+use App\Services\WebchatFlowResolver;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Log;
@@ -20,8 +21,10 @@ use PhpMqtt\Client\MqttClient;
 
 class WebchatController extends Controller
 {
-    public function __construct(private readonly WebchatAvailabilityService $availabilityService)
-    {
+    public function __construct(
+        private readonly WebchatAvailabilityService $availabilityService,
+        private readonly WebchatFlowResolver $flowResolver,
+    ) {
     }
 
     public function index()
@@ -458,6 +461,7 @@ class WebchatController extends Controller
             'schedule_start' => $stored['webchat.schedule_start'] ?? '08:00', 'schedule_end' => $stored['webchat.schedule_end'] ?? '20:00',
             'bot_available_outside_schedule' => ($stored['webchat.bot_available_outside_schedule'] ?? '0') === '1',
             'outside_schedule_flow_id' => filled($stored['webchat.outside_schedule_flow_id'] ?? null) ? (int) $stored['webchat.outside_schedule_flow_id'] : null,
+            'holiday_flow_id' => filled($stored['webchat.holiday_flow_id'] ?? null) ? (int) $stored['webchat.holiday_flow_id'] : null,
             'offline_message' => $stored['webchat.offline_message'] ?? 'En este momento no estamos disponibles. Volvé a intentarlo dentro del horario de atención.',
             'title' => $stored['webchat.title'] ?? 'Asistente virtual', 'subtitle' => $stored['webchat.subtitle'] ?? 'Hospital Universitario',
             'logo_url' => $stored['webchat.logo_url'] ?? '',
@@ -467,23 +471,12 @@ class WebchatController extends Controller
 
     private function webchatFlow(array $settings): ?BotFlow
     {
-        $flows = BotFlow::query()
+        return $this->flowResolver->resolve($settings) ?? BotFlow::query()
             ->where('is_active', true)
             ->whereJsonContains('channels', 'webchat')
             ->orderByDesc('is_default')
-            ->orderBy('id');
-
-        $timezone = SystemSetting::query()->where('key', 'general.timezone')->value('value') ?: config('app.timezone');
-        $day = strtolower(now($timezone)->format('l'));
-        $outsideScheduleFlowId = ($settings['availability_mode'] ?? 'always') === 'schedule'
-            && ! $this->availabilityService->isWithinSchedule($settings)
-                ? ($settings['outside_schedule_flow_id'] ?? null)
-                : null;
-        $flowId = $outsideScheduleFlowId ?: ($settings['flow_schedule'][$day] ?? null);
-
-        return $flowId
-            ? (clone $flows)->whereKey($flowId)->first() ?? $flows->first()
-            : $flows->first();
+            ->orderBy('id')
+            ->first();
     }
 
 }

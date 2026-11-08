@@ -4,6 +4,7 @@ use App\Http\Controllers\AgendaContactController;
 use App\Http\Controllers\AuditController;
 use App\Http\Controllers\BotFlowController;
 use App\Http\Controllers\CampaignController;
+use App\Http\Controllers\HolidayController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\ChatMediaController;
 use App\Http\Controllers\LocationController;
@@ -156,6 +157,10 @@ Route::middleware($sessionAuthenticated)->group(function () {
         Route::post('/settings/bot', [SettingsController::class, 'saveBot']);
         Route::post('/settings/whatsapp-flow', [SettingsController::class, 'saveWhatsAppFlow']);
         Route::post('/settings/webchat', [SettingsController::class, 'saveWebchat']);
+        Route::get('/settings/holidays', [HolidayController::class, 'index']);
+        Route::post('/settings/holidays', [HolidayController::class, 'store']);
+        Route::post('/settings/holidays/import', [HolidayController::class, 'import']);
+        Route::delete('/settings/holidays/{holiday}', [HolidayController::class, 'destroy']);
     });
 
     Route::middleware('permission:can_manage_users')->group(function () {

@@ -55,7 +55,7 @@ class SettingsController extends Controller
                 'webchat.enabled', 'webchat.availability_mode', 'webchat.schedule_start', 'webchat.schedule_end', 'webchat.bot_available_outside_schedule', 'webchat.offline_message',
                 'webchat.title', 'webchat.subtitle',
                 'webchat.logo_url', 'webchat.default_flow_id',
-                'webchat.flow_schedule', 'webchat.outside_schedule_flow_id',
+                'webchat.flow_schedule', 'webchat.outside_schedule_flow_id', 'webchat.holiday_flow_id',
             ])
             ->pluck('value', 'key');
         $storedWhatsappToken = trim((string) ($settings['integrations.whatsapp.token'] ?? ''));
@@ -100,6 +100,10 @@ class SettingsController extends Controller
         $outsideScheduleFlowId = filled($settings['webchat.outside_schedule_flow_id'] ?? null)
             && in_array((int) $settings['webchat.outside_schedule_flow_id'], $eligibleWebchatFlowIds, true)
             ? (int) $settings['webchat.outside_schedule_flow_id']
+            : null;
+        $holidayFlowId = filled($settings['webchat.holiday_flow_id'] ?? null)
+            && in_array((int) $settings['webchat.holiday_flow_id'], $eligibleWebchatFlowIds, true)
+            ? (int) $settings['webchat.holiday_flow_id']
             : null;
         foreach ($webchatFlowSchedule as $day => $flowId) {
             $webchatFlowSchedule[$day] = $flowId && in_array((int) $flowId, $eligibleWebchatFlowIds, true)
@@ -165,6 +169,7 @@ class SettingsController extends Controller
                     'logo_url' => $settings['webchat.logo_url'] ?? '',
                     'flow_schedule' => $webchatFlowSchedule,
                     'outside_schedule_flow_id' => $outsideScheduleFlowId,
+                    'holiday_flow_id' => $holidayFlowId,
                 ],
                 'whatsapp' => ['default_flow_id' => $whatsappDefaultFlowId],
             ],
@@ -756,6 +761,7 @@ class SettingsController extends Controller
             'logo' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp,svg', 'max:2048'],
             'flow_schedule' => ['required', 'array'],
             'outside_schedule_flow_id' => ['nullable', 'integer', 'exists:bot_flows,id'],
+            'holiday_flow_id' => ['nullable', 'integer', 'exists:bot_flows,id'],
             ...$flowScheduleRules,
         ]);
         // Multipart forms deliver booleans as "0" / "1" strings. Normalize the
@@ -765,6 +771,9 @@ class SettingsController extends Controller
         $data['bot_available_outside_schedule'] = $request->boolean('bot_available_outside_schedule');
         $data['outside_schedule_flow_id'] = filled($data['outside_schedule_flow_id'] ?? null)
             ? (int) $data['outside_schedule_flow_id']
+            : null;
+        $data['holiday_flow_id'] = filled($data['holiday_flow_id'] ?? null)
+            ? (int) $data['holiday_flow_id']
             : null;
         unset($data['logo']);
 
@@ -779,6 +788,7 @@ class SettingsController extends Controller
         }
         $flowIds = collect($data['flow_schedule'])
             ->push($data['outside_schedule_flow_id'] ?? null)
+            ->push($data['holiday_flow_id'] ?? null)
             ->filter()
             ->unique()
             ->values();

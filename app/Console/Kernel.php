@@ -26,6 +26,10 @@ class Kernel extends ConsoleKernel
         $schedule->command('storage:apply-retention')
             ->dailyAt('03:00')
             ->withoutOverlapping();
+
+        $schedule->command('holidays:sync')
+            ->dailyAt('03:30')
+            ->withoutOverlapping();
     }
 
     /**

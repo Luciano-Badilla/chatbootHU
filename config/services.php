@@ -56,4 +56,11 @@ return [
         'timeout' => env('TURNOS_CONFIGURATION_TIMEOUT', 15),
     ],
 
+    // Calendario público de feriados (Nager.Date, sin API key). Carga los feriados nacionales del país.
+    'holidays' => [
+        'base_url' => env('HOLIDAYS_API_BASE_URL', 'https://date.nager.at/api/v3'),
+        'country_code' => env('HOLIDAYS_COUNTRY_CODE', 'AR'),
+        'timeout' => env('HOLIDAYS_API_TIMEOUT', 10),
+    ],
+
 ];
