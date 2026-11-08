@@ -5,6 +5,7 @@ import {
   Contact,
   GitBranch,
   Globe2,
+  HardDrive,
   LayoutDashboard,
   LogOut,
   Megaphone,
@@ -48,6 +49,7 @@ const navigationItems: Array<{ label: string; href: string; icon: LucideIcon; pe
   { label: "Flujos", href: `${APP_URL}/bot/flows`, icon: GitBranch, permission: "can_view_flows" },
   { label: "Configuracion", href: `${APP_URL}/settings-panel`, icon: Settings, permission: "can_manage_settings" },
   { label: "Auditoria", href: `${APP_URL}/audit-panel`, icon: ShieldCheck, permission: "can_view_audit" },
+  { label: "Almacenamiento", href: `${APP_URL}/storage-panel`, icon: HardDrive, permission: "can_manage_storage" },
 ]
 
 export function AppSidebar({ currentPath = "/dashboard", onNavigate }: { currentPath?: string; onNavigate?: (href: string) => void }) {

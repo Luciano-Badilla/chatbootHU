@@ -10,6 +10,7 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\QuickReplyController;
 use App\Http\Controllers\OperatorControlController;
 use App\Http\Controllers\SettingsController;
+use App\Http\Controllers\StorageFileController;
 use App\Http\Controllers\WebchatController;
 use App\Models\Chat;
 use App\Models\Message;
@@ -53,6 +54,7 @@ Route::middleware(['auth', 'active'])->group(function () {
     Route::get('/bot/flows', [BotFlowController::class, 'index'])->middleware('permission:can_view_flows');
     Route::get('/settings-panel', [SettingsController::class, 'index'])->middleware('permission:can_manage_settings');
     Route::get('/audit-panel', [AuditController::class, 'index'])->middleware('permission:can_view_audit');
+    Route::get('/storage-panel', [StorageFileController::class, 'index'])->middleware('permission:can_manage_storage');
     Route::put('/settings-panel/general', [SettingsController::class, 'saveGeneral'])->middleware('permission:can_manage_settings');
     Route::post('/settings-panel/general', [SettingsController::class, 'saveGeneral'])->middleware('permission:can_manage_settings');
 

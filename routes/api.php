@@ -10,6 +10,7 @@ use App\Http\Controllers\LocationController;
 use App\Http\Controllers\OperatorControlController;
 use App\Http\Controllers\QuickReplyController;
 use App\Http\Controllers\SettingsController;
+use App\Http\Controllers\StorageFileController;
 use App\Http\Controllers\WhatsAppController;
 use App\Http\Controllers\WhatsAppTemplateController;
 use App\Http\Controllers\WebPushSubscriptionController;
@@ -95,6 +96,14 @@ Route::middleware($sessionAuthenticated)->group(function () {
     Route::post('/quick-replies', [QuickReplyController::class, 'store']);
     Route::put('/quick-replies/{quickReply}', [QuickReplyController::class, 'update']);
     Route::delete('/quick-replies/{quickReply}', [QuickReplyController::class, 'destroy']);
+
+    Route::middleware('permission:can_manage_storage')->prefix('storage')->group(function () {
+        Route::get('/summary', [StorageFileController::class, 'summary']);
+        Route::get('/files', [StorageFileController::class, 'files']);
+        Route::delete('/files/{storageFile}', [StorageFileController::class, 'destroy']);
+        Route::post('/files/{id}/restore', [StorageFileController::class, 'restore']);
+        Route::delete('/files/{id}/force', [StorageFileController::class, 'forceDestroy']);
+    });
 
     Route::middleware('permission:can_manage_campaigns')->group(function () {
         Route::get('/campaigns', [CampaignController::class, 'apiIndex']);

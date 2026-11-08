@@ -110,6 +110,7 @@ class User extends Authenticatable
         return match ($this->roleName()) {
             'admin' => [
                 'can_manage_settings' => true,
+                'can_manage_storage' => true,
                 'can_manage_integrations' => true,
                 'can_manage_flows' => true,
                 'can_view_audit' => true,
@@ -124,6 +125,7 @@ class User extends Authenticatable
             ],
             'supervisor' => [
                 'can_manage_settings' => false,
+                'can_manage_storage' => false,
                 'can_manage_integrations' => false,
                 'can_manage_flows' => false,
                 'can_view_audit' => true,
@@ -138,6 +140,7 @@ class User extends Authenticatable
             ],
             default => [
                 'can_manage_settings' => false,
+                'can_manage_storage' => false,
                 'can_manage_integrations' => false,
                 'can_manage_flows' => false,
                 'can_view_audit' => false,
