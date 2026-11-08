@@ -160,8 +160,22 @@ export function AppSidebar({ currentPath = "/dashboard", onNavigate }: { current
 
       <SidebarFooter className="bg-[#013765]">
         <div
+          role="button"
+          tabIndex={0}
+          title="Mi perfil"
+          onClick={() => {
+            navigateTo(`${APP_URL}/profile`)
+            setOpenMobile(false)
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault()
+              navigateTo(`${APP_URL}/profile`)
+              setOpenMobile(false)
+            }
+          }}
           className={cn(
-            "rounded-xl border border-white/10 bg-white/10 p-3 text-white shadow-sm backdrop-blur-sm",
+            "cursor-pointer rounded-xl border border-white/10 bg-white/10 p-3 text-white shadow-sm backdrop-blur-sm transition-colors hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40",
             compact && "px-2.5 py-3",
           )}
         >
