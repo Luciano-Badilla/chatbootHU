@@ -4,7 +4,7 @@ import { createPortal } from "react-dom"
 import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { usePage } from "@inertiajs/react"
 import { toast } from "sonner"
-import { Plus, RefreshCcw, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp, ArrowLeft, PanelLeft, Settings2, X, ArrowDown, InfoIcon, FileText, AudioLines, ImageIcon, Video, Contact, MapPin, ShieldAlert, MessageCircle, Globe2, Check, Mail, Bold, Italic, Underline, List, ListOrdered, Link2, type LucideIcon } from "lucide-react"
+import { ChevronDown, Plus, RefreshCcw, Zap, Loader2, Trash2, RotateCcw, CircleDot, CircleHelp, ArrowLeft, PanelLeft, Settings2, X, ArrowDown, InfoIcon, FileText, AudioLines, ImageIcon, Video, Contact, MapPin, ShieldAlert, MessageCircle, Globe2, Check, Mail, Bold, Italic, Underline, List, ListOrdered, Link2, type LucideIcon } from "lucide-react"
 import {
   applyNodeChanges,
   ReactFlow,
@@ -1926,6 +1926,11 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
   // Estado local editable del nodo
   const [editNode, setEditNode] = useState<BotNode | null>(null)
+  // Catálogo de especialidades para el selector de exclusión del nodo de búsqueda.
+  const [specialtyCatalog, setSpecialtyCatalog] = useState<Array<{ id: string; name: string }>>([])
+  const [specialtyCatalogState, setSpecialtyCatalogState] = useState<"idle" | "loading" | "error">("idle")
+  const [excludedSpecialtiesOpen, setExcludedSpecialtiesOpen] = useState(false)
+  const editNodeType = editNode?.type
   const lastSavedNodeSnapshotRef = useRef("")
   const messageTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const mediaFileInputRef = useRef<HTMLInputElement | null>(null)
@@ -2157,6 +2162,27 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
 
 
   // Cargar flows al inicio
+  useEffect(() => {
+    if (editNodeType !== "specialty_search" || specialtyCatalog.length > 0 || specialtyCatalogState === "loading") return
+    let cancelled = false
+    setSpecialtyCatalogState("loading")
+    fetch(`${API_BASE}/api/bot/specialties`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(await res.text())
+        const data = await res.json()
+        if (!cancelled) {
+          setSpecialtyCatalog(Array.isArray(data.specialties) ? data.specialties : [])
+          setSpecialtyCatalogState("idle")
+        }
+      })
+      .catch((error) => {
+        console.error("Error al cargar especialidades", error)
+        if (!cancelled) setSpecialtyCatalogState("error")
+      })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editNodeType])
+
   useEffect(() => {
     const loadFlows = async () => {
       try {
@@ -5804,6 +5830,67 @@ export default function BotFlowBuilder({ readOnly = false }: { readOnly?: boolea
               <Input type="number" min={1} max={365} value={settings.days} onChange={(e) => update("days", Math.max(1, Math.min(365, Number(e.target.value) || 28)))} className="h-8 text-xs" />
             </div>
           ) : null}
+          {t === "specialty_search" ? (() => {
+            const excluded: Array<{ id: string; name: string }> = Array.isArray(settings.excluded_specialties) ? settings.excluded_specialties : []
+            const excludedIds = new Set(excluded.map((item) => String(item.id)))
+            const setExcluded = (next: Array<{ id: string; name: string }>) =>
+              setEditNode((prev) => prev ? { ...prev, settings: { ...settings, excluded_specialties: next } } : prev)
+            return (
+              <div>
+                <label className="mb-1 block text-xs text-muted-foreground">Especialidades excluidas (el bot no las muestra)</label>
+                <Popover open={excludedSpecialtiesOpen} onOpenChange={setExcludedSpecialtiesOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-8 w-full justify-between rounded-md border-slate-300 px-3 text-left text-xs font-normal shadow-sm hover:border-slate-400"
+                    >
+                      <span className="truncate">
+                        {excluded.length > 0
+                          ? `${excluded.length} especialidad${excluded.length === 1 ? "" : "es"} excluida${excluded.length === 1 ? "" : "s"}`
+                          : "Selecciona las especialidades a excluir"}
+                      </span>
+                      <ArrowDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-60" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="z-[10000] w-[var(--radix-popover-trigger-width)] rounded-md border-slate-300 p-0" align="start">
+                    <Command>
+                      <CommandInput name="excluded-specialty-search" autoComplete="off" placeholder="Buscar especialidad..." className="h-9 px-2" />
+                      <CommandList className="max-h-64">
+                        <CommandEmpty>
+                          {specialtyCatalogState === "loading" ? "Cargando especialidades..." : specialtyCatalogState === "error" ? "No se pudo cargar el listado." : "No se encontraron especialidades."}
+                        </CommandEmpty>
+                        <CommandGroup>
+                          {specialtyCatalog.map((item) => (
+                            <CommandItem
+                              key={item.id}
+                              value={item.name}
+                              onSelect={() => setExcluded(excludedIds.has(item.id) ? excluded.filter((entry) => String(entry.id) !== item.id) : [...excluded, item])}
+                            >
+                              <Check className={cn("mr-2 h-4 w-4", excludedIds.has(item.id) ? "opacity-100" : "opacity-0")} />
+                              <span className="truncate text-xs">{item.name}</span>
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+                {excluded.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {excluded.map((item) => (
+                      <span key={item.id} className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
+                        {item.name}
+                        <button type="button" aria-label={`Quitar ${item.name}`} onClick={() => setExcluded(excluded.filter((entry) => String(entry.id) !== String(item.id)))} className="rounded-full text-slate-400 transition-colors hover:text-slate-700">
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            )
+          })() : null}
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="mb-1 block text-xs text-muted-foreground">Texto del boton</label>

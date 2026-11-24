@@ -4207,8 +4207,10 @@ class WhatsAppController extends Controller
                                 'profesional_agenda_dias' => (int) ($item['agenda_days'] ?? $settings['days'] ?? 28),
                             ],
                         ];
+                $excludedSpecialtyIds = $this->excludedSpecialtyIds($settings);
                     }
                 }
+                    && ! in_array((string) ($item['id'] ?? ''), $excludedSpecialtyIds, true)
             } else {
                 if (! $this->isAlephooEndpointEnabled('/turnos/{profesional}/{especialidad}/{dias}')) {
                     throw new \RuntimeException('El endpoint de turnos disponibles no esta habilitado.');
@@ -6200,3 +6202,48 @@ class WhatsAppController extends Controller
         return false;
     }
 }
+    /** IDs de especialidades que el nodo no debe ofrecer (configuradas en el editor de flujos). */
+    private function excludedSpecialtyIds(array $settings): array
+    {
+        $excluded = is_array($settings['excluded_specialties'] ?? null) ? $settings['excluded_specialties'] : [];
+
+        return array_values(array_filter(array_map(
+            fn ($entry) => trim((string) (is_array($entry) ? ($entry['id'] ?? '') : $entry)),
+            $excluded
+        ), fn ($id) => $id !== ''));
+    }
+
+    /** Catálogo de especialidades (id y nombre) para el selector de exclusión del editor de flujos. */
+    public function specialtiesCatalog()
+    {
+        $baseUrl = $this->alephooApiRootUrl();
+        $apiKey = $this->alephooApiKey();
+
+        if ($baseUrl === '' || $apiKey === '') {
+            return response()->json(['message' => 'La integracion con Alephoo no esta configurada.'], 503);
+        }
+
+        try {
+            $response = Http::timeout($this->alephooTimeout())
+                ->acceptJson()
+                ->withHeaders(['X-API-KEY' => $apiKey])
+                ->get($baseUrl.'/especialidades');
+        } catch (\Throwable $e) {
+            Log::error('Error cargando catalogo de especialidades: '.$e->getMessage());
+
+            return response()->json(['message' => 'No se pudo consultar el catalogo de especialidades.'], 502);
+        }
+
+        if (! $response->successful() || ! is_array($response->json())) {
+            return response()->json(['message' => 'No se pudo consultar el catalogo de especialidades.'], 502);
+        }
+
+        $specialties = collect($response->json())
+            ->filter(fn ($item) => is_array($item) && trim((string) ($item['id'] ?? '')) !== '' && trim((string) ($item['nombre'] ?? '')) !== '')
+            ->map(fn ($item) => ['id' => (string) $item['id'], 'name' => trim((string) $item['nombre'])])
+            ->sortBy('name', SORT_NATURAL | SORT_FLAG_CASE)
+            ->values();
+
+        return response()->json(['specialties' => $specialties]);
+    }
+

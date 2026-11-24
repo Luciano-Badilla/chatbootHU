@@ -176,6 +176,7 @@ Route::middleware($sessionAuthenticated)->group(function () {
         Route::get('/bot/flows', [BotFlowController::class, 'apiIndex']);
         Route::get('/bot/trash', [BotFlowController::class, 'trash']);
         Route::get('/bot/flows/{flow}/nodes', [BotFlowController::class, 'nodes']);
+        Route::get('/bot/specialties', [WhatsAppController::class, 'specialtiesCatalog']);
     });
 
     Route::middleware('permission:can_manage_flows')->group(function () {
