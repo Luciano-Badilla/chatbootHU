@@ -227,6 +227,7 @@ class WhatsAppController extends Controller
         $mime = null;
 
         $interactiveReplyId = null;
+        $requestsOperator = false;
 
         // --------------------------------
         // 2.bis) Mensajes interactivos (botones / listas)
@@ -256,6 +257,15 @@ class WhatsAppController extends Controller
                     $body = $messageData['text']['body'] ?? null;
                 }
                 $messageType = 'text';
+                break;
+
+            case 'button':
+                // Botón de respuesta rápida de una plantilla: llega como type=button, no interactive.
+                $buttonText = trim((string) ($messageData['button']['text'] ?? ''));
+                $buttonPayload = trim((string) ($messageData['button']['payload'] ?? ''));
+                $body = $buttonText !== '' ? $buttonText : ($buttonPayload !== '' ? $buttonPayload : '[Botón]');
+                $messageType = 'text';
+                $requestsOperator = $this->isOperatorRequestButton($buttonPayload, $buttonText);
                 break;
 
             case 'image':
@@ -557,6 +567,13 @@ class WhatsAppController extends Controller
         // 10) Bot por DB (flows / nodes)
         // --------------------------------
         try {
+            if ($requestsOperator) {
+                // "Nuevo turno" de una plantilla: se envía el enlace al Webchat y el bot no responde.
+                $this->sendReprogramWebchatLink($chat);
+
+                return response('EVENT_RECEIVED', 200);
+            }
+
             $nextNode = $this->handleBotFromDb($chat, $message, $interactiveReplyId);
 
             if ($nextNode) {
@@ -584,6 +601,42 @@ class WhatsAppController extends Controller
         }
 
         return response('EVENT_RECEIVED', 200);
+    }
+
+    /** Botones de plantilla que piden hablar con un operador en lugar de iniciar el bot. */
+    private function isOperatorRequestButton(string $payload, string $text): bool
+    {
+        $normalize = fn (string $value) => Str::of(Str::ascii($value))->lower()->squish()->toString();
+
+        foreach ([$payload, $text] as $candidate) {
+            if ($candidate !== '' && $normalize($candidate) === 'nuevo turno') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * "Nuevo turno" llegó como respuesta rápida de una plantilla: en lugar de derivar el chat
+     * en WhatsApp, se responde con un botón que abre el Webchat ya marcado como reprogramación.
+     */
+    private function sendReprogramWebchatLink(Chat $chat): void
+    {
+        $node = new BotNode([
+            'type' => 'link_button',
+            'body' => 'Para reprogramar tu turno, ingresá a nuestro chat web: un operador te va a atender ahí. Tocá el siguiente botón.',
+            'settings' => [
+                'button_text' => 'Abrir chat web',
+                'url' => rtrim((string) config('app.url'), '/').'/webchat?reprogramar=1',
+            ],
+        ]);
+
+        try {
+            $this->sendBotLinkButtonNode($chat, $node);
+        } catch (\Throwable $e) {
+            Log::error('No se pudo enviar el enlace de reprogramacion al Webchat: '.$e->getMessage(), ['chat_id' => $chat->id]);
+        }
     }
 
     /**
@@ -687,6 +740,95 @@ class WhatsAppController extends Controller
 
         $this->sendBotNode($chat, $node);
         $this->runAutoAdvance($chat, $flow, $node);
+    }
+
+    /**
+     * Deriva un chat de Webchat a un operador cuando el paciente llega desde el botón
+     * "Nuevo turno" de una plantilla. Lo deja pendiente de asignación con la etiqueta
+     * "reprogramacion". Si el chat ya tiene operador asignado solo se etiqueta.
+     */
+    public function routeWebchatReprogramToOperator(Chat $chat): Chat
+    {
+        $chat->refresh();
+
+        if ($chat->status === 'closed') {
+            $chat->status = 'open';
+            $chat->closed_at = null;
+            $chat->closed_by = null;
+            $chat->closed_by_user_id = null;
+            $chat->operator_id = null;
+            $chat->assigned_at = null;
+            $chat->attention_status = 'bot';
+        }
+
+        $alreadyAssigned = $chat->attention_status === 'assigned';
+        $chat->tag = 'reprogramacion';
+
+        if (! $alreadyAssigned) {
+            $this->clearPendingInput($chat);
+
+            // ensureChatUsesDefaultFlow puede volver a activar el bot, por eso va antes de apagarlo.
+            $flow = $this->ensureChatUsesDefaultFlow($chat) ?? $this->getDefaultFlow('webchat');
+            if ($flow && $flow->start_node_id) {
+                $chat->bot_node_id = $flow->start_node_id;
+            }
+
+            $chat->bot_enabled = false;
+            $chat->attention_status = 'pending_assignment';
+
+            $state = $this->getState($chat);
+            unset($state['assignment_routing'], $state['specialty_search_context']);
+            $state['handoff'] = [
+                'node_id' => null,
+                'source' => 'webchat_reprogramar',
+                'at' => now()->toIso8601String(),
+            ];
+            $this->setState($chat, $state);
+        }
+
+        $chat->save();
+
+        if (! $alreadyAssigned) {
+            $this->sendWhatsAppText(
+                $chat,
+                'Te estamos conectando con un operador para reprogramar tu turno. En unos instantes te atenderán por este mismo chat.',
+                'user',
+                'bot',
+                'handoff'
+            );
+            $chat = $this->chatAssignmentService->assignPending($chat);
+        }
+
+        $this->auditService->recordChatAction(
+            'webchat_reprogram_handoff',
+            'El paciente pidió reprogramar su turno desde la plantilla: se derivó a atención manual',
+            $chat,
+            null,
+            ['after' => ['tag' => $chat->tag, 'attention_status' => $chat->attention_status, 'operator_id' => $chat->operator_id]],
+        );
+
+        try {
+            $mqtt = new MqttClient($this->mqttHost(), 1883, 'laravel_status_reprog_'.uniqid());
+            $mqtt->connect($this->mqttConnectionSettings());
+            $mqtt->publish("status_bot/chat/{$chat->id}", json_encode([
+                'chat_id' => $chat->id,
+                'status' => $chat->bot_enabled ? 'enabled' : 'disabled',
+            ]), 0);
+            $mqtt->publish("operator/chat/{$chat->id}", json_encode([
+                'chat_id' => (int) $chat->id,
+                'active' => (bool) $chat->operator_id,
+                'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null,
+                'operator_name' => $chat->operator?->name,
+                'attention_status' => $chat->attention_status,
+                'status' => $chat->status,
+                'bot_enabled' => (bool) $chat->bot_enabled,
+            ]), 0);
+            $mqtt->disconnect();
+        } catch (\Throwable $e) {
+            Log::error('MQTT Error (webchat reprogram): '.$e->getMessage());
+        }
+
+        return $chat->refresh();
     }
 
     /**
@@ -2031,6 +2173,7 @@ class WhatsAppController extends Controller
                 'operator_id' => $chat->operator_id ? (int) $chat->operator_id : null,
                 'operator_name' => $chat->operator?->name,
                 'status' => $chat->status,
+                'tag' => $chat->tag,
                 'attention_status' => $chat->attention_status,
                 'assigned_at' => $chat->assigned_at?->toIso8601String(),
                 'closed_at' => $chat->closed_at?->toIso8601String(),
@@ -4064,8 +4207,10 @@ class WhatsAppController extends Controller
                 $this->setState($chat, $state);
                 $items = $allSpecialties;
                 $allowedSpecialtyIds = array_map('strval', $turnosConfiguration['specialties']);
+                $excludedSpecialtyIds = $this->excludedSpecialtyIds($settings);
                 $items = array_values(array_filter($items, fn ($item) => is_array($item)
                     && in_array((string) ($item['id'] ?? ''), $allowedSpecialtyIds, true)
+                    && ! in_array((string) ($item['id'] ?? ''), $excludedSpecialtyIds, true)
                     && $this->matchesSpecialtySearch($query, $item)
                 ));
                 usort($items, fn ($a, $b) => strcasecmp((string) ($a['nombre'] ?? ''), (string) ($b['nombre'] ?? '')));
@@ -4207,10 +4352,8 @@ class WhatsAppController extends Controller
                                 'profesional_agenda_dias' => (int) ($item['agenda_days'] ?? $settings['days'] ?? 28),
                             ],
                         ];
-                $excludedSpecialtyIds = $this->excludedSpecialtyIds($settings);
                     }
                 }
-                    && ! in_array((string) ($item['id'] ?? ''), $excludedSpecialtyIds, true)
             } else {
                 if (! $this->isAlephooEndpointEnabled('/turnos/{profesional}/{especialidad}/{dias}')) {
                     throw new \RuntimeException('El endpoint de turnos disponibles no esta habilitado.');
@@ -6079,6 +6222,51 @@ class WhatsAppController extends Controller
         return str_ends_with($baseUrl, '/personas') ? substr($baseUrl, 0, -9) : $baseUrl;
     }
 
+    /** IDs de especialidades que el nodo no debe ofrecer (configuradas en el editor de flujos). */
+    private function excludedSpecialtyIds(array $settings): array
+    {
+        $excluded = is_array($settings['excluded_specialties'] ?? null) ? $settings['excluded_specialties'] : [];
+
+        return array_values(array_filter(array_map(
+            fn ($entry) => trim((string) (is_array($entry) ? ($entry['id'] ?? '') : $entry)),
+            $excluded
+        ), fn ($id) => $id !== ''));
+    }
+
+    /** Catálogo de especialidades (id y nombre) para el selector de exclusión del editor de flujos. */
+    public function specialtiesCatalog()
+    {
+        $baseUrl = $this->alephooApiRootUrl();
+        $apiKey = $this->alephooApiKey();
+
+        if ($baseUrl === '' || $apiKey === '') {
+            return response()->json(['message' => 'La integracion con Alephoo no esta configurada.'], 503);
+        }
+
+        try {
+            $response = Http::timeout($this->alephooTimeout())
+                ->acceptJson()
+                ->withHeaders(['X-API-KEY' => $apiKey])
+                ->get($baseUrl.'/especialidades');
+        } catch (\Throwable $e) {
+            Log::error('Error cargando catalogo de especialidades: '.$e->getMessage());
+
+            return response()->json(['message' => 'No se pudo consultar el catalogo de especialidades.'], 502);
+        }
+
+        if (! $response->successful() || ! is_array($response->json())) {
+            return response()->json(['message' => 'No se pudo consultar el catalogo de especialidades.'], 502);
+        }
+
+        $specialties = collect($response->json())
+            ->filter(fn ($item) => is_array($item) && trim((string) ($item['id'] ?? '')) !== '' && trim((string) ($item['nombre'] ?? '')) !== '')
+            ->map(fn ($item) => ['id' => (string) $item['id'], 'name' => trim((string) $item['nombre'])])
+            ->sortBy('name', SORT_NATURAL | SORT_FLAG_CASE)
+            ->values();
+
+        return response()->json(['specialties' => $specialties]);
+    }
+
     private function matchesSpecialtySearch(string $query, array $item): bool
     {
         $specialtyName = trim((string) ($item['nombre'] ?? ''));
@@ -6202,48 +6390,3 @@ class WhatsAppController extends Controller
         return false;
     }
 }
-    /** IDs de especialidades que el nodo no debe ofrecer (configuradas en el editor de flujos). */
-    private function excludedSpecialtyIds(array $settings): array
-    {
-        $excluded = is_array($settings['excluded_specialties'] ?? null) ? $settings['excluded_specialties'] : [];
-
-        return array_values(array_filter(array_map(
-            fn ($entry) => trim((string) (is_array($entry) ? ($entry['id'] ?? '') : $entry)),
-            $excluded
-        ), fn ($id) => $id !== ''));
-    }
-
-    /** Catálogo de especialidades (id y nombre) para el selector de exclusión del editor de flujos. */
-    public function specialtiesCatalog()
-    {
-        $baseUrl = $this->alephooApiRootUrl();
-        $apiKey = $this->alephooApiKey();
-
-        if ($baseUrl === '' || $apiKey === '') {
-            return response()->json(['message' => 'La integracion con Alephoo no esta configurada.'], 503);
-        }
-
-        try {
-            $response = Http::timeout($this->alephooTimeout())
-                ->acceptJson()
-                ->withHeaders(['X-API-KEY' => $apiKey])
-                ->get($baseUrl.'/especialidades');
-        } catch (\Throwable $e) {
-            Log::error('Error cargando catalogo de especialidades: '.$e->getMessage());
-
-            return response()->json(['message' => 'No se pudo consultar el catalogo de especialidades.'], 502);
-        }
-
-        if (! $response->successful() || ! is_array($response->json())) {
-            return response()->json(['message' => 'No se pudo consultar el catalogo de especialidades.'], 502);
-        }
-
-        $specialties = collect($response->json())
-            ->filter(fn ($item) => is_array($item) && trim((string) ($item['id'] ?? '')) !== '' && trim((string) ($item['nombre'] ?? '')) !== '')
-            ->map(fn ($item) => ['id' => (string) $item['id'], 'name' => trim((string) $item['nombre'])])
-            ->sortBy('name', SORT_NATURAL | SORT_FLAG_CASE)
-            ->values();
-
-        return response()->json(['specialties' => $specialties]);
-    }
-

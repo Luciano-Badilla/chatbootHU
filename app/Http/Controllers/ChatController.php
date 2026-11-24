@@ -908,6 +908,7 @@ class ChatController extends Controller
             'search_message_id' => $searchMessageId ? (int) $searchMessageId : null,
             'search_match' => $searchMatch,
             'status' => $chat->status,
+            'tag' => $chat->tag,
             'attention_status' => $chat->attention_status,
             'assigned_at' => $chat->assigned_at?->toIso8601String(),
             'closed_at' => $chat->closed_at?->toIso8601String(),

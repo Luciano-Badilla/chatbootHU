@@ -1683,6 +1683,12 @@ export default function ChatInfo({
             </h4>
             <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs text-slate-700">
               <span className="text-slate-500">Atención</span><span className="font-medium">{attentionStatusLabel(chat.attention_status)}</span>
+              {chat.tag === "reprogramacion" && (
+                <>
+                  <span className="text-slate-500">Etiqueta</span>
+                  <span><span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">Reprogramación</span></span>
+                </>
+              )}
               <span className="text-slate-500">Operador</span><span className="truncate font-medium">{chat.operator_name ?? "Sin asignar"}</span>
               <span className="text-slate-500">Asignado desde</span><span className="font-medium">{formatDateSafe(chat.assigned_at)}</span>
               <span className="text-slate-500">Cierre</span><span className="font-medium">{formatDateSafe(chat.closed_at)}</span>

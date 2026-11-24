@@ -124,6 +124,7 @@ class WebchatController extends Controller
         }
         $data = $request->validate([
             'name' => ['required', 'string', 'max:200'],
+            'reprogram' => ['sometimes', 'boolean'],
         ]);
 
         $flow = $this->webchatFlow($settings);
@@ -155,13 +156,45 @@ class WebchatController extends Controller
             'bot_state' => [],
             'last_user_message_at' => now(),
         ]);
-        app(WhatsAppController::class)->startWebchatConversation($chat, $flow);
+        // "Nuevo turno" desde la plantilla: si hay operadores disponibles se deriva directo;
+        // si no, entra como un chat normal con el bot.
+        if (($data['reprogram'] ?? false) && $this->operatorsReachable($settings)) {
+            app(WhatsAppController::class)->routeWebchatReprogramToOperator($chat);
+        } else {
+            app(WhatsAppController::class)->startWebchatConversation($chat, $flow);
+        }
         $chat->refresh();
 
         return response()->json([
             'resume_token' => $token,
             'chat' => $this->payload($chat),
         ], 201);
+    }
+
+    /** Reprogramación para un paciente que ya tiene sesión: reutiliza su chat, no crea otro. */
+    public function reprogram(Request $request)
+    {
+        $data = $request->validate([
+            'resume_token' => ['required', 'string', 'max:80'],
+        ]);
+        $chat = $this->requireChat($request, $data['resume_token']);
+        $settings = $this->settings();
+
+        $alreadyDerived = $chat->tag === 'reprogramacion'
+            && $chat->status === 'open'
+            && ! $chat->bot_enabled;
+
+        if (! $alreadyDerived && $this->operatorsReachable($settings)) {
+            $chat = app(WhatsAppController::class)->routeWebchatReprogramToOperator($chat);
+        }
+
+        return response()->json(['ok' => true, 'chat' => $this->payload($chat)]);
+    }
+
+    private function operatorsReachable(array $settings): bool
+    {
+        return $this->availabilityService->areOperatorsAvailable($settings)
+            && $this->availabilityService->hasAvailableOperators();
     }
 
     public function restart(Request $request)

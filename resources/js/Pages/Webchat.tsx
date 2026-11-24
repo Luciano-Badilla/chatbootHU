@@ -424,6 +424,20 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     }
   }
 
+  // Link del botón "Nuevo turno" de la plantilla: /webchat?reprogramar=1
+  const reprogramRequestedRef = useRef(new URLSearchParams(window.location.search).get("reprogramar") === "1")
+  const clearReprogramRequest = () => {
+    if (!reprogramRequestedRef.current) return
+    reprogramRequestedRef.current = false
+    try {
+      const url = new URL(window.location.href)
+      url.searchParams.delete("reprogramar")
+      window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`)
+    } catch {
+      // Si no se puede limpiar la URL, el servidor ignora la repetición.
+    }
+  }
+
   useEffect(() => {
     const referralToken = new URLSearchParams(window.location.search).get("wa_ref")
     if (!referralToken || !/^[A-Za-z0-9]{32}$/.test(referralToken)) return
@@ -723,6 +737,19 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
 
     try {
       await loadSession(saved)
+      if (reprogramRequestedRef.current) {
+        // Ya tiene sesión: se reutiliza su chat y solo se lo deriva a un operador.
+        clearReprogramRequest()
+        try {
+          const data = await api("reprogram", { resume_token: saved })
+          syncChatAssignee(data.chat)
+          setMessages(data.chat.messages ?? [])
+          acknowledgeIncomingMessages(data.chat.messages ?? [], saved)
+          scrollToNewMessageRef.current = true
+        } catch {
+          // Si no se puede derivar, la conversación sigue como un chat normal.
+        }
+      }
     } catch (exception) {
       setSessionLoadFailed(true)
       setSessionLoadError(exception instanceof WebchatApiError && exception.status === 429
@@ -1097,7 +1124,8 @@ export default function Webchat({ webchat }: { webchat: WebchatSettings }) {
     setError("")
     setSending(true)
     try {
-      const data = await api("start", { name })
+      const data = await api("start", { name, reprogram: reprogramRequestedRef.current })
+      clearReprogramRequest()
       localStorage.setItem(SESSION_KEY, data.resume_token)
       syncChatAssignee(data.chat)
       setToken(data.resume_token)

@@ -32,6 +32,7 @@ export type Chat = {
   last_operator_name?: string | null
   status?: "open" | "closed" | string
   attention_status?: "bot" | "pending_assignment" | "assigned" | "archived" | string
+  tag?: string | null
   assigned_at?: string | null
   closed_at?: string | null
   closed_by?: "bot" | "operator" | string | null
@@ -654,6 +655,7 @@ export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore =
                     operator_name: active ? (data.operator_name ?? null) : null,
                     status: data.status ?? c.status,
                     attention_status: data.attention_status ?? c.attention_status,
+                  tag: Object.prototype.hasOwnProperty.call(data, "tag") ? data.tag : c.tag,
                     bot_enabled: typeof data.bot_enabled === "boolean" ? data.bot_enabled : c.bot_enabled,
                     assigned_at: Object.prototype.hasOwnProperty.call(data, "assigned_at") ? data.assigned_at : c.assigned_at,
                     closed_at: Object.prototype.hasOwnProperty.call(data, "closed_at") ? data.closed_at : c.closed_at,
@@ -755,6 +757,7 @@ export function ChatPanel({ chats: initialChats, initialCounts, initialHasMore =
                 last_operator_name: data.last_operator_name ?? null,
                 status: data.status ?? "open",
                 attention_status: data.attention_status ?? "bot",
+                tag: data.tag ?? null,
                 assigned_at: data.assigned_at ?? null,
                 closed_at: data.closed_at ?? null,
                 closed_by: data.closed_by ?? null,

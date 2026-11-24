@@ -18,6 +18,7 @@ class Chat extends Model
         'bot_flow_id',
         'bot_node_id',
         'title',
+        'tag',
         'status',
         'attention_status',
         'bot_enabled',

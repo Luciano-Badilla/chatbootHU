@@ -156,7 +156,12 @@ function InboxChats({
             </span>
             <span className="min-w-0 flex-1">
               <span className="flex items-center justify-between gap-2">
-                <span className={cn("truncate text-sm font-semibold group-hover:text-white", selected ? "text-[#013765]" : "text-slate-800")}>{chat.name}</span>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className={cn("truncate text-sm font-semibold group-hover:text-white", selected ? "text-[#013765]" : "text-slate-800")}>{chat.name}</span>
+                  {chat.tag === "reprogramacion" && (
+                    <span className="shrink-0 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">Reprogramación</span>
+                  )}
+                </span>
                 <span className="shrink-0 text-xs text-slate-500 group-hover:text-slate-200">{formatTimestamp(chat.timestamp)}</span>
               </span>
               <span className="mt-0.5 flex items-center gap-2">

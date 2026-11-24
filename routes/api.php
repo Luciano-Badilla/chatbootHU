@@ -38,6 +38,7 @@ Route::post('/webchat/status', [WebchatController::class, 'status']);
 Route::post('/webchat/referral-entry', [WebchatController::class, 'referralEntry'])->middleware('throttle:webchat-presence');
 Route::post('/webchat/presence', [WebchatController::class, 'presence'])->middleware('throttle:webchat-presence');
 Route::post('/webchat/start', [WebchatController::class, 'start']);
+Route::post('/webchat/reprogram', [WebchatController::class, 'reprogram'])->middleware('throttle:webchat-presence');
 Route::post('/webchat/restart', [WebchatController::class, 'restart']);
 Route::post('/webchat/messages', [WebchatController::class, 'messages']);
 Route::post('/webchat/send', [WebchatController::class, 'send']);
@@ -175,8 +176,8 @@ Route::middleware($sessionAuthenticated)->group(function () {
     Route::middleware('permission:can_view_flows')->group(function () {
         Route::get('/bot/flows', [BotFlowController::class, 'apiIndex']);
         Route::get('/bot/trash', [BotFlowController::class, 'trash']);
-        Route::get('/bot/flows/{flow}/nodes', [BotFlowController::class, 'nodes']);
         Route::get('/bot/specialties', [WhatsAppController::class, 'specialtiesCatalog']);
+        Route::get('/bot/flows/{flow}/nodes', [BotFlowController::class, 'nodes']);
     });
 
     Route::middleware('permission:can_manage_flows')->group(function () {
