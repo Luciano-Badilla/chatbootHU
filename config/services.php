@@ -43,6 +43,8 @@ return [
         'password' => env('ALEPHOO_V3_PASSWORD'),
         'timeout' => env('ALEPHOO_V3_TIMEOUT', 30),
         'timezone' => env('ALEPHOO_V3_TIMEZONE', 'America/Argentina/Buenos_Aires'),
+        // Institución cuyos turnos se muestran en el bot (1 = Hospital Universitario). Vacío = sin filtrar.
+        'institution_id' => env('ALEPHOO_V3_INSTITUTION_ID', '1'),
     ],
 
     'alephoo_cancel' => [

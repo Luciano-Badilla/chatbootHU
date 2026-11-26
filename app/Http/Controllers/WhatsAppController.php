@@ -3806,6 +3806,12 @@ class WhatsAppController extends Controller
                         $query['filter[especialidades]'] = $specialty;
                     }
 
+                    // Solo los turnos del Hospital (no de otras instituciones como Damsu).
+                    $institutionId = $this->appointmentInstitutionId();
+                    if ($institutionId !== null) {
+                        $query['filter[instituciones]'] = $institutionId;
+                    }
+
                     $response = Http::timeout($timeout)
                         ->accept('application/vnd.api+json')
                         ->withBasicAuth($username, $password)
@@ -3823,7 +3829,8 @@ class WhatsAppController extends Controller
                         $appointments = $this->normalizeActiveAppointments(
                             is_array($response->json()) ? $response->json() : [],
                             $now,
-                            ! array_key_exists('exclude_elapsed_today', $settings) || ! empty($settings['exclude_elapsed_today'])
+                            ! array_key_exists('exclude_elapsed_today', $settings) || ! empty($settings['exclude_elapsed_today']),
+                            $institutionId
                         );
 
                         if ($appointments !== []) {
@@ -5045,7 +5052,15 @@ class WhatsAppController extends Controller
         ];
     }
 
-    private function normalizeActiveAppointments(array $payload, \DateTimeImmutable $now, bool $excludeElapsedToday): array
+    /** ID de la institución (Hospital) a la que se limitan los turnos, o null para no filtrar. */
+    private function appointmentInstitutionId(): ?string
+    {
+        $id = preg_replace('/\D+/u', '', (string) config('services.alephoo_v3.institution_id', ''));
+
+        return $id !== '' ? $id : null;
+    }
+
+    private function normalizeActiveAppointments(array $payload, \DateTimeImmutable $now, bool $excludeElapsedToday, ?string $institutionId = null): array
     {
         $included = [];
         foreach (($payload['included'] ?? []) as $resource) {
@@ -5088,6 +5103,11 @@ class WhatsAppController extends Controller
             $agendaRef = $relationships['agenda']['data'] ?? null;
             $agenda = $this->includedResource($included, $agendaRef);
             $agendaRelationships = is_array($agenda['relationships'] ?? null) ? $agenda['relationships'] : [];
+            // Respaldo local: si la API devolviera turnos de otra institución, se descartan.
+            $appointmentInstitutionId = $agendaRelationships['institucion']['data']['id'] ?? null;
+            if ($institutionId !== null && $appointmentInstitutionId !== null && (string) $appointmentInstitutionId !== $institutionId) {
+                continue;
+            }
             $specialtyRef = $agendaRelationships['especialidad']['data'] ?? null;
             $specialty = $this->includedResource($included, $specialtyRef);
             $professionalRef = $agendaRelationships['profesional']['data'] ?? null;
